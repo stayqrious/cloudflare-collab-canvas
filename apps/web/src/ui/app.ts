@@ -7094,9 +7094,9 @@ export function renderLanding(root: HTMLElement, api: ApiClient): void {
       </header>
       <section class="landing-copy">
         <div class="landing-hero-mark" aria-hidden="true">${BRAND_MARK_HTML}</div>
-        <span class="eyebrow">A shared canvas for classrooms</span>
+        <span class="eyebrow">Teacher-controlled AI for live classrooms</span>
         <h1>Learn together,<br /><em>with AI.</em></h1>
-        <p>Turn lessons, problems, and group thinking into a live visual workspace. Sketch, explain, organise, and invite AI to help without losing the human conversation.</p>
+        <p>Bring your own ChatGPT or Claude browser agent into the shared board. Let it watch the whole working set or a selected region, tailor support to each learner, and act with the teacher's classroom permissions.</p>
       </section>
       <form class="create-card" data-create-form>
         <div><span class="card-step">Start a learning board</span><h2>What will you explore?</h2></div>
@@ -7104,7 +7104,7 @@ export function renderLanding(root: HTMLElement, api: ApiClient): void {
         <button class="primary-button" type="submit">Open a fresh canvas <span aria-hidden="true">→</span></button>
         <small>No account required · automatic saving · WebMCP-ready</small>
       </form>
-      <footer><span>Built for educators, learners & study groups</span><span>People and AI, thinking on one canvas</span></footer>
+      <footer><span>One teacher-controlled agent</span><span>Different support for every learner</span></footer>
     </main>
   `;
   const form = query(root, "[data-create-form]", HTMLFormElement);

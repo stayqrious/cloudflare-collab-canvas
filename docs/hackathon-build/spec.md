@@ -15,6 +15,45 @@ One-line pitch:
 
 > SpaceScale lets a class and an AI think together on one visual canvas, while every agent action inherits the permissions of the participant who invited it.
 
+## Domain skills over a stable WebMCP substrate
+
+The implementation separates domain reasoning from shared execution:
+
+1. **Canvas substrate:** realtime objects, comments, sections, organisation
+   templates, selection, undo, attribution, snapshots, and participant roles.
+2. **WebMCP contract:** bounded reads, selected visual inspection, saved-step
+   watches, structured inserts, server acknowledgement, and permission
+   enforcement.
+3. **Packaged skill:** prompts, decision rules, response shape, and the sequence
+   in which the agent calls site tools.
+4. **Optional external connector:** a separate MCP connection for live systems
+   such as Linear, available to the same agent session and governed by that
+   system's own authorization.
+
+The current package is education-specific, but the collaboration substrate is
+not limited to education. A domain conversion keeps layers 1 and 2 and replaces
+the skill and board template:
+
+| Skill package | Template/sections | Agent workflow |
+| --- | --- | --- |
+| `check-maths-steps` | Learner work regions, explanation resources, extension work | Watch saved steps, inspect diagrams, identify the first mistake, and ask a probing or scaffolding question without revealing the answer. |
+| `marketing-brainstorm` | Brief, evidence, campaign angles, critique, experiments, owners | Watch contributions, cluster themes, challenge assumptions, preserve dissent, and create source-linked experiments. |
+| `linear-planning` + Linear MCP | Backlog or status sections, assignee sections, blocked work | List issues, normalize them into visual cards, collaborate on ownership, and write confirmed assignments back through Linear. |
+
+SpaceScale already stores templates as ordinary board-item batches and can share
+organisation templates across Spaces. The skill therefore controls how the
+agent interprets a watch and which structured writer it uses; the template
+controls the starting layout. Neither changes the authorization boundary.
+Skills normalize reasoning and orchestration, while the WebMCP schemas and
+Worker continue to normalize and enforce every insert.
+
+For Linear, the board is the planning surface rather than an accidental second
+source of truth. Moving an issue card can represent a proposal; the skill must
+ask for confirmation before calling a Linear mutation tool. The skill and the
+SpaceScale page tools must also be available to the same agent session. The
+repository currently ships the education implementation; the marketing and
+Linear rows describe compatible extension packages, not bundled features.
+
 ## Why this is a strong WebMCP use case
 
 - The agent and the class act on the same live canvas and signed-in session.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Check Maths Steps"
+  short_description: "Probe mistakes without revealing solutions"
+  default_prompt: "Use $check-maths-steps to watch this maths solution and scaffold the first mistake without giving away the answer."

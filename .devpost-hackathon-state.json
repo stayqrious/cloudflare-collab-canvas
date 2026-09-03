@@ -14,12 +14,16 @@
   },
   "project": {
     "name": "SpaceScale",
-    "summary": "A shared visual classroom where WebMCP agents work with handwriting, video, and live ideas under the exact permissions of the people who invite them.",
-    "ai_usage": "The visiting WebMCP agent connects and challenges selected class ideas, interprets selected handwriting, follows bounded saved problem steps, and creates source-linked shared learning structures without a separate SpaceScale model backend.",
-    "codex_usage": "Codex supported product scoping, WebMCP tool and permission architecture, implementation, automated tests, debugging, review, demo preparation, and submission documentation."
+    "summary": "A teacher-controlled WebMCP agent that watches the whole classroom board or a selected region, then adapts feedback, challenges, and learning resources for each student in the shared space.",
+    "ai_usage": "The teacher-controlled browser agent combines class notes from its conversation with the teacher-chosen live board scope. It watches selected saved steps, inspects handwriting and diagrams, gives different interventions to different learners, recommends video support, and maps debate assumptions and disagreements. The same collaboration substrate can be paired with packaged local skills and templates for other domains, such as marketing brainstorming or Linear issue planning. Every write uses the ordinary classroom permissions of the authorizing participant.",
+    "codex_usage": "Codex supported product scoping, the teacher-scoped watch and board-side AI interaction design, WebMCP tool and permission architecture, implementation, automated tests, debugging, review, demo preparation, and submission documentation."
   },
   "current_stage": "prepare-submission",
-  "completed_stages": ["start-hackathon", "review", "prepare-submission"],
+  "completed_stages": [
+    "start-hackathon",
+    "review",
+    "prepare-submission"
+  ],
   "rules_acknowledged": true,
   "learning": {
     "status": "not-started",

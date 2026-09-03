@@ -1,55 +1,88 @@
 # SpaceScale
 
-**A WebMCP-enabled visual classroom where AI can understand handwriting,
-challenge a mistaken diagram, and add actionable feedback to the same live
-canvas where students are working.**
+**A teacher-controlled MCP agent inside a live classroom: it can watch the
+whole working board or focus on a selected region, adapt support to each
+learner, and never outrank the teacher who invited it.**
 
 [Live demo](https://webmcp.spacescale.net/) ·
 [Devpost submission draft](devpost-submission.md) ·
 [3-minute demo runbook](docs/hackathon-build/demo-runbook.md) ·
 [Implementation spec](docs/hackathon-build/spec.md) ·
-[MIT license and authorship](LICENSE)
+[MIT license and authorship](LICENSE) ·
+[Competitive analysis](docs/hackathon-build/webmcp-competitor-analysis.md) ·
+[105-project demo-screen gallery](docs/hackathon-build/webmcp-competitor-gallery.md)
 
-SpaceScale turns classroom AI from a text reply into visible collaboration.
-Students and teachers draw, write, organize, embed videos, react, and vote
-together. A compatible AI host discovers fifteen WebMCP tools from the open
-board, inspects selected handwriting and spatial work, catches reasoning errors,
-and adds source-linked feedback that everyone can discuss, revise, and undo.
+ChatGPT, Claude, and MCP already work well for individual tasks and multi-step
+automation. The missing layer is controlled participation in a live,
+multi-user space: one teacher should be able to bring their own agent into the
+room without turning it into a privileged server bot.
+
+SpaceScale gives the teacher's compatible browser agent a visible seat in the
+classroom. The teacher can select all relevant work on the board or draw a
+selection around one region, then start a bounded live watch over those saved
+steps. As student work changes, the agent can give a struggling learner a
+concrete correction, offer an early finisher a tougher follow-up, recommend an
+explanation video, or help a debate expose its assumptions, agreements, and
+real disagreements.
+
+Students and teachers draw, write, organize, embed videos, react, and vote on
+one shared canvas. Work can arrive from the canvas itself or from a tablet or
+smart-paper workflow such as a Huion Note. A compatible host discovers sixteen
+WebMCP tools from the page; every AI contribution returns to the shared board
+where the class can see it, discuss it, revise it, and undo it.
 
 ![AI feedback correcting a mistaken hand-drawn quadratic](docs/submission-assets/ai-feedback-correction.png)
 
-## Why WebMCP matters here
+## Competitive landscape
 
-The useful context is not hidden in a backend API. It is the live state already
-under a participant's hand: their current canvas selection, a spatial sketch,
-the latest saved reasoning step, or an aggregate class vote. WebMCP lets the
-visiting agent use that exact page context without DOM automation, a browser
-extension, or a separate MCP server.
+A public cross-source scan found 105 other project identities connected to the challenge. The [analysis](docs/hackathon-build/webmcp-competitor-analysis.md) and [complete demo-screen gallery](docs/hackathon-build/webmcp-competitor-gallery.md) document the deduplication method, evidence limits, closest alternatives, and the visual proof used for positioning. The official Devpost gallery was not public at the snapshot time, so 105 is a discovery lower bound, not an official submission total.
 
-The result is collaborative rather than conversational-only:
+SpaceScale is positioned around the combination the reviewed projects did not state together: a teacher-scoped live classroom watch, differentiated support for multiple learners, realtime visual collaboration, handwriting and sketch understanding, shared lesson video, and participant-inherited permissions.
 
-- **Visual collaboration:** AI contributions become ordinary, source-linked
-  canvas objects that appear to every participant in real time.
-- **Handwriting and sketch support:** the agent can inspect selected saved strokes
-  and spatial context, identify a possible reasoning error, and return a
-  source-linked feedback prompt the whole class can act on.
-- **Video support:** participants can place public YouTube and Vimeo material on
-  the shared canvas, then discuss it beside notes, drawings, formulas, comments,
-  and AI-generated structures.
-- **Live learning loops:** the agent can watch only explicitly selected saved
-  problem steps for up to 15 minutes, or help a class move from ideas to a
-  visible inquiry map, aggregate vote, and dissent-preserving decision.
-- **Participant-scoped permissions:** a WebMCP write enters the same
+## Why a teacher-controlled browser agent matters
+
+The useful context is not hidden in a backend API. It is the live board already
+under the class's hands: an entire working set, a selected region, a spatial
+sketch, the latest saved reasoning step, or an aggregate class vote. The
+teacher's agent can combine that page context with the lesson plan, class notes,
+rubric, and instructions already in its conversation. WebMCP lets it participate
+without DOM automation, a browser extension, a separate MCP server, or a
+SpaceScale model backend.
+
+The teacher chooses the scope. Select all relevant saved work to watch the
+working board, or marquee-select a region to focus on one learner or group. The
+current watcher follows up to 30 selected, server-acknowledged text-bearing
+items for 15 minutes, and the visual inspection tool handles selected
+handwriting, sketches, arrows, and spatial reasoning.
+
+The result is a live teaching assistant rather than another private chat:
+
+- **Whole-class or focused watch:** the agent follows the teacher-chosen board
+  scope and reacts as saved problem steps change.
+- **Differentiated support:** it can challenge an early finisher, give a stuck
+  learner a smaller next step, check work without grading, or suggest an
+  explanation video and place the confirmed lesson beside the work.
+- **Paper-to-canvas learning:** handwriting from a stylus, tablet, or smart
+  notebook can join the central canvas, where the agent can inspect the visual
+  evidence alongside formulas, notes, and comments.
+- **Debate support without false consensus:** the agent can turn contributions
+  into an inquiry map, make assumptions explicit, identify exact points of
+  agreement and disagreement, read an aggregate vote, and preserve minority
+  concerns in a staged class decision.
+- **Visible collaboration:** AI comments and source-linked canvas objects appear
+  to every participant in real time and remain open to discussion and undo.
+- **Teacher-bound authority:** a WebMCP write enters the same
   `commitAndWait` path as the authorizing participant's own edit. The agent gets
   no service account and no elevated identity.
 
-## Permission inheritance
+## Teacher control and permission inheritance
 
-SpaceScale does not give the agent a parallel authorization system. WebMCP tools
-run in the signed-in browser session and use its actor ID, role, durable outbox,
-WebSocket commit protocol, and server acknowledgement. Client checks give fast
-feedback; the Cloudflare Worker revalidates roles, ownership, section locks,
-versions, and the complete atomic batch before saving it.
+SpaceScale does not give the agent a parallel authorization system. The teacher
+chooses the browser session, the board scope, the watch duration, and the
+intervention. WebMCP tools then use that participant's actor ID, role, durable
+outbox, WebSocket commit protocol, and server acknowledgement. Client checks
+give fast feedback; the Cloudflare Worker revalidates roles, ownership, section
+locks, versions, and the complete atomic batch before saving it.
 
 | Authorizing participant | Effective WebMCP write access |
 | --- | --- |
@@ -69,7 +102,7 @@ SpaceScale started from the open-source
 foundation. During the challenge period, it was extended into a classroom
 collaboration product with:
 
-- fifteen discoverable WebMCP tools and 27 schema-enforced learning modes;
+- sixteen discoverable WebMCP tools and 27 schema-enforced learning modes;
 - selected-only typed, visual, explanatory, inspiration, vote, and bounded
   saved-step read surfaces;
 - permission-aware, source-linked, acknowledged, realtime, atomic, and undoable
@@ -78,6 +111,8 @@ collaboration product with:
 - shared YouTube/Vimeo cards, MathJax learning content, comments, grouping,
   sections, templates, and live participant roles;
 - inquiry-map and class-decision previews that make participant approval visible;
+- the repo-local `check-maths-steps` example skill for Socratic feedback over
+  watched maths solutions;
 - contract, unit, edge, and Chromium coverage for the permission and WebMCP
   boundaries.
 
@@ -87,19 +122,22 @@ The complete technical delta and safety constraints are documented in the
 ## Try the judge path
 
 1. Open the [public demo](https://webmcp.spacescale.net/) in ChatGPT's in-app
-   browser or another compatible WebMCP host and create a Space.
+   browser or another compatible WebMCP host and create a Space. Keep a second
+   participant session open.
 2. Write `x² + 7x + 10 = 0`, deliberately sketch the wrong intercepts `-3` and
    `-1`, and add a sticky with that student claim.
-3. Select the visual work and ask the agent to inspect the graph. Then select
-   the claim sticky and ask: “Add a counterexample that checks `x = -4` and asks
-   the student to correct the plot.”
-4. Confirm the WebMCP-generated feedback card shows `y = -2` at `x = -4`, links
-   back to the student's claim, appears for collaborators, and disappears with
-   one undo.
-5. Open the board as a viewer and repeat the write request to verify that the
-   agent cannot exceed that participant's permissions.
-6. Use **Video** to add a public YouTube or Vimeo link and show that it remains a
-   normal shared, selectable, persistent canvas object.
+3. Select the entire working set—or marquee-select just this learner's
+   region—and ask the agent to start `watch_selected_problem_steps`.
+4. While **AI watching** is visible, choose **AI → Check my work** on the
+   mistaken claim. Ask the agent to check `x = -4` and respond beside the step.
+5. Confirm the AI-marked response computes `y = -2`, asks the student to plot
+   `(-4, -2)`, appears for collaborators, and remains attached to the relevant
+   work. Show undo on any generated canvas card.
+6. Show differentiated support: request a tougher example for an early finisher,
+   or choose **Explain with a video** and place a confirmed public YouTube/Vimeo
+   lesson beside the work.
+7. Open the board as a viewer and repeat a write request. The agent cannot exceed
+   that participant's classroom permissions.
 
 For the recording-ready sequence, exact prompts, recovery prompts, and timing,
 see the [demo runbook](docs/hackathon-build/demo-runbook.md).
@@ -111,6 +149,38 @@ board validates, sequences, persists, and broadcasts each durable action through
 the shared reducer. SQLite is authoritative; private R2 objects hold image
 assets, immutable recovery checkpoints, and named snapshots. The app still
 works as a collaborative canvas when `document.modelContext` is unavailable.
+
+### Skills change the workflow; WebMCP keeps the collaboration layer
+
+SpaceScale separates the durable collaboration substrate from the agent's
+domain playbook. The canvas owns realtime collaboration, sections, reusable
+organisation templates, selection, watches, comments, attribution, undo, and
+permission enforcement. A packaged local Codex skill supplies the prompts,
+decision rules, and tool sequence for a particular kind of work.
+
+That means the education workflow can be replaced without rebuilding the
+multi-user product:
+
+- The repo-local [`check-maths-steps`](.agents/skills/check-maths-steps/SKILL.md) skill uses a learner-work template, watches saved steps,
+  inspects diagrams, and chooses between a correction, harder question,
+  example, explanation, or video.
+- A `marketing-brainstorm` skill can use an organisation template with
+  sections for the brief, evidence, campaign angles, critiques, experiments,
+  and owners. It can watch the board, cluster contributions, challenge
+  assumptions, and turn selected ideas into source-linked next actions.
+- A `linear-planning` skill can compose SpaceScale's site tools with a Linear
+  MCP connector available to the same agent session. It can list issues,
+  represent them as cards inside status or assignee sections, and help the team
+  discuss ownership visually. Confirmed assignments can be written back
+  through Linear; moving a board card alone does not silently change the
+  external issue.
+
+The website already stores templates as ordinary board-item batches, including
+organisation templates shared across Spaces. A new domain package can therefore
+ship a skill plus its matching template and connector declaration while reusing
+the realtime, watch, permission, and persistence layers. Skills normalize the
+reasoning workflow; WebMCP schemas and the Worker normalize and enforce every
+collaborative insert.
 
 ## Product capabilities
 
