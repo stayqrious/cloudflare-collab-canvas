@@ -12,4 +12,5 @@ apps/web/dist/
 playwright-report/
 test-results/
 .wrangler/
+.generated/
 *.tsbuildinfo

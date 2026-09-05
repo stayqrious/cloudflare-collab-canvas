@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiClient, takeEmbedLaunch } from "./api";
+import { ApiClient, parseBoardComment, takeEmbedLaunch } from "./api";
 
 type CapturedRequest = { path: string; init: RequestInit };
 
@@ -658,5 +658,217 @@ describe("board image assets", () => {
     expect(requests[2]?.path).toBe(`/api/v1/boards/b_1234567890123456789012/assets/${assetId}`);
     expect(new Headers(requests[2]?.init.headers).get("accept")).toBe("image/*");
     expect(requests[2]?.init.credentials).toBe("same-origin");
+  });
+});
+
+describe("comment API responses", () => {
+  it("accepts all three comment states and resolved attribution", () => {
+    const base = {
+      id: `c_${"A".repeat(22)}`,
+      itemId: "018f0000-0000-7000-8000-000000000c01",
+      body: "Review this object",
+      author: { id: `a_${"B".repeat(22)}`, displayName: "Asha" },
+      createdAt: 100,
+      updatedAt: 120,
+    };
+    expect(parseBoardComment({ ...base, state: "open" }).state).toBe("open");
+    expect(parseBoardComment({ ...base, state: "orphaned" }).state).toBe("orphaned");
+    expect(
+      parseBoardComment({
+        ...base,
+        state: "resolved",
+        resolvedBy: { id: `a_${"C".repeat(22)}`, displayName: "Mira" },
+        resolvedAt: 130,
+      }),
+    ).toMatchObject({ state: "resolved", resolvedAt: 130 });
+  });
+
+  it("rejects unsupported states", () => {
+    expect(() =>
+      parseBoardComment({
+        id: `c_${"A".repeat(22)}`,
+        itemId: "018f0000-0000-7000-8000-000000000c01",
+        body: "Review this object",
+        state: "hidden",
+        author: { id: `a_${"B".repeat(22)}`, displayName: "Asha" },
+        createdAt: 100,
+        updatedAt: 120,
+      }),
+    ).toThrow("invalid comment data");
+  });
+
+  it("passes writer metadata through only when the pair is present and valid", () => {
+    const base = {
+      id: `c_${"A".repeat(22)}`,
+      itemId: "018f0000-0000-7000-8000-000000000c01",
+      body: "Review this object",
+      state: "open",
+      author: { id: `a_${"B".repeat(22)}`, displayName: "Asha" },
+      createdAt: 100,
+      updatedAt: 120,
+    };
+    const typed = parseBoardComment(base);
+    expect(typed).not.toHaveProperty("assistedBy");
+    expect(typed).not.toHaveProperty("assistance");
+
+    expect(
+      parseBoardComment({
+        ...base,
+        assistedBy: "ai",
+        assistance: { tool: "comment_on_watched_step", action: "critique" },
+      }),
+    ).toMatchObject({
+      assistedBy: "ai",
+      assistance: { tool: "comment_on_watched_step", action: "critique" },
+    });
+    expect(
+      parseBoardComment({
+        ...base,
+        assistedBy: "ai",
+        assistance: { tool: "comment_on_watched_step" },
+      }).assistance,
+    ).toEqual({ tool: "comment_on_watched_step" });
+
+    expect(() => parseBoardComment({ ...base, assistedBy: "ai" })).toThrow(
+      expect.objectContaining({ code: "INVALID_RESPONSE" }),
+    );
+    expect(() => parseBoardComment({ ...base, assistance: { tool: "x" } })).toThrow(
+      expect.objectContaining({ code: "INVALID_RESPONSE" }),
+    );
+    expect(() =>
+      parseBoardComment({ ...base, assistedBy: "ai", assistance: { tool: "x", action: "grade" } }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_RESPONSE" }));
+    expect(() =>
+      parseBoardComment({ ...base, assistedBy: "human", assistance: { tool: "x" } }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_RESPONSE" }));
+  });
+
+  it("keeps a comment's picture or video, and refuses one the contract does not allow", () => {
+    const base = {
+      id: `c_${"A".repeat(22)}`,
+      itemId: "018f0000-0000-7000-8000-000000000c01",
+      body: "Compare this with your sketch",
+      state: "open",
+      author: { id: `a_${"B".repeat(22)}`, displayName: "Asha" },
+      createdAt: 100,
+      updatedAt: 120,
+    };
+    expect(parseBoardComment(base)).not.toHaveProperty("media");
+    expect(
+      parseBoardComment({
+        ...base,
+        media: {
+          kind: "image",
+          assetId: `asset_${"A".repeat(43)}`,
+          mimeType: "image/png",
+          intrinsicWidth: 800,
+          intrinsicHeight: 600,
+          alt: "A parabola",
+        },
+      }).media,
+    ).toMatchObject({ kind: "image", alt: "A parabola" });
+    expect(
+      parseBoardComment({
+        ...base,
+        media: { kind: "video", provider: "vimeo", url: "https://vimeo.com/123456" },
+      }).media,
+    ).toEqual({ kind: "video", provider: "vimeo", url: "https://vimeo.com/123456" });
+
+    expect(() =>
+      parseBoardComment({ ...base, media: { kind: "video", url: "https://example.com/clip" } }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_RESPONSE" }));
+    expect(() =>
+      parseBoardComment({ ...base, media: { kind: "sound", url: "https://example.com/a.mp3" } }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_RESPONSE" }));
+  });
+
+  it("sends the comment's media only when createComment is given some", async () => {
+    const requests: CapturedRequest[] = [];
+    const comment = {
+      id: `c_${"A".repeat(22)}`,
+      itemId: "018f0000-0000-7000-8000-000000000c01",
+      body: "Watch this before the next step",
+      state: "open",
+      author: { id: `a_${"B".repeat(22)}`, displayName: "Asha" },
+      createdAt: 100,
+      updatedAt: 100,
+    };
+    const media = {
+      kind: "video" as const,
+      provider: "youtube" as const,
+      url: "https://youtu.be/dQw4w9WgXcQ",
+    };
+    const responses: unknown[] = [{ csrfToken: "csrf-token" }, { ...comment, media }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        requests.push({ path: String(input), init });
+        return Response.json(responses.shift());
+      }),
+    );
+
+    const api = new ApiClient();
+    await api.ensureSession();
+    const posted = await api.createComment(
+      "b_1234567890123456789012",
+      comment.itemId,
+      comment.body,
+      undefined,
+      media,
+    );
+
+    expect(requests[1]?.init.body).toBe(
+      JSON.stringify({ itemId: comment.itemId, body: comment.body, media }),
+    );
+    expect(posted.media).toEqual(media);
+  });
+
+  it("sends assistedBy and assistance only when createComment is given assistance", async () => {
+    const requests: CapturedRequest[] = [];
+    const comment = {
+      id: `c_${"A".repeat(22)}`,
+      itemId: "018f0000-0000-7000-8000-000000000c01",
+      body: "Check the second step",
+      state: "open",
+      author: { id: `a_${"B".repeat(22)}`, displayName: "Asha" },
+      createdAt: 100,
+      updatedAt: 100,
+    };
+    const responses: unknown[] = [
+      { csrfToken: "csrf-token" },
+      comment,
+      { ...comment, assistedBy: "ai", assistance: { tool: "comment_on_watched_step" } },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        requests.push({ path: String(input), init });
+        return Response.json(responses.shift());
+      }),
+    );
+
+    const api = new ApiClient();
+    await api.ensureSession();
+    const boardId = "b_1234567890123456789012";
+    await api.createComment(boardId, comment.itemId, comment.body);
+    const assisted = await api.createComment(boardId, comment.itemId, comment.body, {
+      tool: "comment_on_watched_step",
+    });
+
+    expect(requests[1]?.init.body).toBe(
+      JSON.stringify({ itemId: comment.itemId, body: comment.body }),
+    );
+    expect(requests[2]?.init.body).toBe(
+      JSON.stringify({
+        itemId: comment.itemId,
+        body: comment.body,
+        assistedBy: "ai",
+        assistance: { tool: "comment_on_watched_step" },
+      }),
+    );
+    expect(assisted).toMatchObject({
+      assistedBy: "ai",
+      assistance: { tool: "comment_on_watched_step" },
+    });
   });
 });

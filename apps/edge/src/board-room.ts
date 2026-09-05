@@ -5,14 +5,23 @@ import {
   findMoveCopyClosureLimitViolation,
 } from "@collab/board-core";
 import {
+  ASSIST_ACTIONS,
+  ASSISTANCE_TOOL_PATTERN,
+  type AssistAction,
+  type Assistance,
   BOARD_FEATURE_KEYS,
   type BoardFeatures,
   type ClientFrame,
+  type CommentImageMedia,
+  type CommentMedia,
+  CommentMediaError,
   canonicalRequestHashInput,
   DEFAULT_BOARD_FEATURES,
   MAX_BATCH_OPERATIONS,
+  MAX_COMMENT_MEDIA_JSON_LENGTH,
   MAX_SNAPSHOT_BYTES,
   normalizeBoardFeatures,
+  normalizeCommentMedia,
   type BoardItem as ProtocolBoardItem,
   ProtocolValidationError,
   parseClientFrame,
@@ -58,8 +67,10 @@ import {
   requireImageAssetMimeType,
 } from "./image-assets";
 import {
+  assertGroupMembershipOwnership,
   assertItemsOutsideLockedSections,
   assertItemsOwnedByActor,
+  type ItemOwnershipContext,
   prepareOwnedItemOperation,
   sectionRecordIdsForItems,
   sectionRecordIdsForMutation,
@@ -120,6 +131,7 @@ import type {
 import {
   ACTOR_ID_PATTERN,
   BOARD_ID_PATTERN,
+  containsDisallowedControlCharacter,
   fallbackDisplayName,
   OPAQUE_ID_PATTERN,
   optionalTitle,
@@ -127,6 +139,7 @@ import {
   requireDisplayName,
   requireOpaqueId,
   requireSafeInteger,
+  validateUnicodeText,
 } from "./validation";
 import { deliverOrganisationWebhook } from "./webhook-delivery";
 
@@ -137,6 +150,10 @@ const LIMITS = {
   maxStrokePoints: 10_000,
   previewHz: 12,
 } as const;
+const MAX_COMMENTS = 10_000;
+const MAX_COMMENT_CODE_POINTS = 2_000;
+// Keeps `IN (?, ...)` lists well inside SQLite's bound-parameter limit.
+const COMMENT_UPDATE_CHUNK_SIZE = 100;
 const MAX_CONNECTIONS_PER_ACTOR = 5;
 const MAX_REPLAY_ACTIONS = 100;
 const SNAPSHOT_ACTION_INTERVAL = 250;
@@ -182,6 +199,44 @@ const PREVIEW_SHED_TRIGGER_PER_SECOND = 100;
 // from every actor while reserving the event loop for durable commands. The
 // normal five-drawer workload never enters this shedding path.
 const OVERLOADED_PREVIEW_HZ_PER_ACTOR = 1;
+
+type CommentState = "open" | "resolved" | "orphaned";
+
+type CommentRow = {
+  [key: string]: SqlStorageValue;
+  comment_id: string;
+  target_item_id: string;
+  body: string;
+  state: CommentState;
+  created_by: string;
+  created_at_ms: number;
+  resolved_by: string | null;
+  resolved_at_ms: number | null;
+  updated_at_ms: number;
+  assisted_by: string | null;
+  assistance_tool: string | null;
+  assistance_action: string | null;
+  media_kind: string | null;
+  media_json: string | null;
+  author_name: string;
+  resolver_name: string | null;
+};
+
+type BoardComment = {
+  id: string;
+  itemId: string;
+  body: string;
+  state: CommentState;
+  author: { id: string; displayName: string };
+  createdAt: number;
+  updatedAt: number;
+  resolvedBy?: { id: string; displayName: string };
+  resolvedAt?: number;
+  assistedBy?: "ai";
+  assistance?: Assistance;
+  /** The one picture or video this comment carries beside its text, when it carries one. */
+  media?: CommentMedia;
+};
 
 type ActionRow = {
   [key: string]: SqlStorageValue;
@@ -404,6 +459,18 @@ export class BoardRoom extends DurableObject<Env> {
       requireMethod(request, "POST");
       return this.claim(request, actor);
     }
+    if (suffix === "/comments") {
+      if (request.method === "GET") return this.listComments(actor, board);
+      if (request.method === "POST") return this.createComment(request, actor, board);
+      return methodNotAllowed("GET, POST");
+    }
+    const commentMatch = /^\/comments\/(c_[A-Za-z0-9_-]{22})$/u.exec(suffix);
+    if (commentMatch !== null) {
+      const commentId = commentMatch[1];
+      if (commentId === undefined) throw new HttpError(404, "NOT_FOUND", "Comment not found.");
+      if (request.method === "PATCH") return this.resolveComment(request, actor, board, commentId);
+      return methodNotAllowed("PATCH");
+    }
     if (suffix === "/members") {
       requireMethod(request, "GET");
       return this.listMembers(actor, board);
@@ -526,6 +593,198 @@ export class BoardRoom extends DurableObject<Env> {
       return this.upgradeWebSocket(request, actor, board);
     }
     throw new HttpError(404, "NOT_FOUND", "The requested endpoint does not exist.");
+  }
+
+  private listComments(actor: InternalActorContext, capturedBoard: BoardRow): Response {
+    const board = readBoard(this.#sql) ?? capturedBoard;
+    this.requireView(board, actor.actorId);
+    return Response.json(
+      { comments: this.readComments() },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  private async createComment(
+    request: Request,
+    actor: InternalActorContext,
+    capturedBoard: BoardRow,
+  ): Promise<Response> {
+    const body = await readJsonBody(request, 16 * 1_024);
+    assertExactKeys(
+      body,
+      ["itemId", "body", "assistedBy", "assistance", "media"],
+      ["itemId", "body"],
+    );
+    const itemId = requireOpaqueId(body.itemId, "comment target");
+    const text = requireCommentBody(body.body);
+    const assistance = requireCommentAssistance(body);
+    const media = requireCommentMedia(body);
+    const commentId = randomOpaqueId("c_");
+    const now = Date.now();
+    let comment!: BoardComment;
+    this.ctx.storage.transactionSync(() => {
+      const board = readBoard(this.#sql) ?? capturedBoard;
+      const access = this.requireView(board, actor.actorId);
+      if (!canComment(board.drawing_policy, access.role)) {
+        throw new BoardDomainError("FORBIDDEN", "Commenting is not allowed for your role.");
+      }
+      const target = readItem(this.#sql, itemId);
+      if (target === undefined || target.deleted) {
+        throw new HttpError(404, "NOT_FOUND", "The comment target no longer exists.");
+      }
+      // A picture rides on the same private board asset a participant's own upload produces,
+      // so the comment may only name one this board already holds.
+      if (media?.kind === "image") this.requireCommentImageMedia(board, media);
+      const count = this.#sql
+        .exec<{ count: number }>("SELECT COUNT(*) AS count FROM comments")
+        .one().count;
+      if (count >= MAX_COMMENTS) {
+        throw new HttpError(
+          409,
+          "BOARD_LIMIT_REACHED",
+          "This Space has reached its comment limit.",
+        );
+      }
+      this.#sql.exec(
+        `INSERT INTO comments(
+          comment_id, target_item_id, body, state, created_by,
+          created_at_ms, resolved_by, resolved_at_ms, updated_at_ms,
+          assisted_by, assistance_tool, assistance_action, media_kind, media_json
+        ) VALUES (?, ?, ?, 'open', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+        commentId,
+        itemId,
+        text,
+        actor.actorId,
+        now,
+        now,
+        assistance === null ? null : "ai",
+        assistance?.tool ?? null,
+        assistance?.action ?? null,
+        media?.kind ?? null,
+        media === null ? null : JSON.stringify(media),
+      );
+      comment = this.readComment(commentId) as BoardComment;
+    });
+    this.broadcastCommentsRefresh();
+    return Response.json(comment, {
+      status: 201,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  private async resolveComment(
+    request: Request,
+    actor: InternalActorContext,
+    capturedBoard: BoardRow,
+    commentId: string,
+  ): Promise<Response> {
+    const body = await readJsonBody(request, 4 * 1_024);
+    assertExactKeys(body, ["state"], ["state"]);
+    if (body.state !== "resolved") {
+      throw new HttpError(400, "BAD_REQUEST", "A comment can only transition to resolved.");
+    }
+    const now = Date.now();
+    let comment!: BoardComment;
+    let changed = false;
+    this.ctx.storage.transactionSync(() => {
+      const board = readBoard(this.#sql) ?? capturedBoard;
+      const access = this.requireView(board, actor.actorId);
+      const existing = this.readComment(commentId);
+      if (existing === null) throw new HttpError(404, "NOT_FOUND", "Comment not found.");
+      if (existing.author.id !== actor.actorId && access.role !== "owner") {
+        throw new HttpError(
+          403,
+          "FORBIDDEN",
+          "Only the comment author or a board owner can resolve a comment.",
+        );
+      }
+      if (existing.state !== "resolved") {
+        this.#sql.exec(
+          `UPDATE comments
+           SET state = 'resolved', resolved_by = ?, resolved_at_ms = ?, updated_at_ms = ?
+           WHERE comment_id = ? AND state != 'resolved'`,
+          actor.actorId,
+          now,
+          now,
+          commentId,
+        );
+        changed = true;
+      }
+      comment = this.readComment(commentId) as BoardComment;
+    });
+    if (changed) this.broadcastCommentsRefresh();
+    return Response.json(comment, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  private readComments(): BoardComment[] {
+    return this.queryComments("ORDER BY c.created_at_ms ASC, c.comment_id ASC");
+  }
+
+  private readComment(commentId: string): BoardComment | null {
+    return this.queryComments("WHERE c.comment_id = ?", [commentId])[0] ?? null;
+  }
+
+  private queryComments(clause: string, params: SqlStorageValue[] = []): BoardComment[] {
+    return this.#sql
+      .exec<CommentRow>(
+        `SELECT c.comment_id, c.target_item_id, c.body, c.state, c.created_by,
+          c.created_at_ms, c.resolved_by, c.resolved_at_ms, c.updated_at_ms,
+          c.assisted_by, c.assistance_tool, c.assistance_action, c.media_kind, c.media_json,
+          author.display_name AS author_name, resolver.display_name AS resolver_name
+         FROM comments c
+         LEFT JOIN members author ON author.actor_id = c.created_by
+         LEFT JOIN members resolver ON resolver.actor_id = c.resolved_by
+         ${clause}`,
+        ...params,
+      )
+      .toArray()
+      .map(commentFromRow);
+  }
+
+  /** Marks open comments on removed items as orphaned. Returns rows written. */
+  private orphanOpenComments(itemIds: Iterable<string>, updatedAt: number): number {
+    return this.transitionCommentsForItems(itemIds, "open", "orphaned", updatedAt);
+  }
+
+  /** Reopens orphaned comments on items brought back by undo, redo, or restore. */
+  private restoreOrphanedComments(itemIds: Iterable<string>, updatedAt: number): number {
+    return this.transitionCommentsForItems(itemIds, "orphaned", "open", updatedAt);
+  }
+
+  private transitionCommentsForItems(
+    itemIds: Iterable<string>,
+    from: CommentState,
+    to: CommentState,
+    updatedAt: number,
+  ): number {
+    const ids = [...new Set(itemIds)];
+    if (ids.length === 0) return 0;
+    const hasCandidates =
+      this.#sql
+        .exec<{ found: number }>(
+          "SELECT EXISTS(SELECT 1 FROM comments WHERE state = ?) AS found",
+          from,
+        )
+        .one().found === 1;
+    if (!hasCandidates) return 0;
+    let rowsWritten = 0;
+    for (let start = 0; start < ids.length; start += COMMENT_UPDATE_CHUNK_SIZE) {
+      const chunk = ids.slice(start, start + COMMENT_UPDATE_CHUNK_SIZE);
+      rowsWritten += this.#sql.exec(
+        `UPDATE comments
+         SET state = ?, updated_at_ms = ?
+         WHERE state = ? AND target_item_id IN (${chunk.map(() => "?").join(", ")})`,
+        to,
+        updatedAt,
+        from,
+        ...chunk,
+      ).rowsWritten;
+    }
+    return rowsWritten;
+  }
+
+  private broadcastCommentsRefresh(): void {
+    this.broadcastFrame({ v: 1, t: "server.comments.refresh" }, undefined, true);
   }
 
   private async initialize(request: Request, actor: InternalActorContext): Promise<Response> {
@@ -2902,6 +3161,7 @@ export class BoardRoom extends DurableObject<Env> {
     let requiresResync = false;
     let snapshotScheduleRowsWritten = 0;
     let recordedFrames = 0;
+    let commentsChanged = false;
 
     this.ctx.storage.transactionSync(() => {
       const board = this.requireBoard();
@@ -2940,6 +3200,7 @@ export class BoardRoom extends DurableObject<Env> {
       });
       const replacements: BoardItem[] = [];
       const removals: string[] = [];
+      const restorations: string[] = [];
       const authoritativeOperations: Array<Record<string, unknown>> = [];
       let maximumZ = 0;
       let itemRowsWritten = 0;
@@ -2963,11 +3224,14 @@ export class BoardRoom extends DurableObject<Env> {
           itemWriteFromState(item, false, crypto.randomUUID()),
         );
         replacements.push(item);
-        authoritativeOperations.push({
-          kind: current.get(item.id)?.deleted === false ? "item.update" : "item.create",
-          item,
-        });
+        const wasLive = current.get(item.id)?.deleted === false;
+        if (!wasLive) restorations.push(item.id);
+        authoritativeOperations.push({ kind: wasLive ? "item.update" : "item.create", item });
       }
+      const commentRowsWritten =
+        this.orphanOpenComments(removals, acceptedAt) +
+        this.restoreOrphanedComments(restorations, acceptedAt);
+      commentsChanged = commentRowsWritten > 0;
       const attributionRowsWritten = this.replaceCurrentAttribution(
         targetItems,
         snapshotAttribution,
@@ -3041,6 +3305,7 @@ export class BoardRoom extends DurableObject<Env> {
         capacityRowsWritten +
         itemRowsWritten +
         attributionRowsWritten +
+        commentRowsWritten +
         invalidatedHistoryRows +
         receiptRowsWritten +
         boardRowsWritten +
@@ -3072,6 +3337,7 @@ export class BoardRoom extends DurableObject<Env> {
 
     if (action !== undefined) {
       this.#pendingFrameCount = Math.max(0, this.#pendingFrameCount - recordedFrames);
+      if (commentsChanged) this.broadcastCommentsRefresh();
       if (requiresResync)
         this.broadcastResyncRequired("Snapshot restore requires a fresh bootstrap.");
       else this.broadcastAction(action);
@@ -3690,6 +3956,7 @@ export class BoardRoom extends DurableObject<Env> {
     let recordedFrames = 0;
     let sqliteRowsRead = 0;
     let sqliteRowsWritten = 0;
+    let commentsOrphaned = false;
     const transactionStartedAt = performance.now();
     execution.transactionStarted = true;
     this.ctx.storage.transactionSync(() => {
@@ -3724,7 +3991,12 @@ export class BoardRoom extends DurableObject<Env> {
           this.requireCommittedImageAsset(board, item);
         }
       }
-      const topologyRowsRead = this.assertProspectiveMoveCopyClosure(prepared.effects, "after");
+      const topologyRowsRead = this.assertProspectiveMoveCopyClosure(
+        prepared.effects,
+        "after",
+        undefined,
+        { actorId: attachment.actorId, role: access.role },
+      );
       const acceptedAt = Date.now();
       action = {
         v: 1,
@@ -3775,6 +4047,13 @@ export class BoardRoom extends DurableObject<Env> {
       for (const write of prepared.writes.values()) {
         itemRowsWritten += writeItem(this.#sql, write);
       }
+      const commentRowsWritten = this.orphanOpenComments(
+        [...prepared.writes.values()]
+          .filter((write) => write.deleted)
+          .map((write) => write.item.id),
+        acceptedAt,
+      );
+      commentsOrphaned = commentRowsWritten > 0;
       const attributionRowsWritten = this.applyAttributionEffects(attributionEffects, "after");
       const invalidatedHistory = this.#sql.exec(
         "UPDATE history_entries SET state = 'invalidated', last_transition_seq = ? WHERE actor_id = ? AND state = 'undone'",
@@ -3814,6 +4093,7 @@ export class BoardRoom extends DurableObject<Env> {
         (snapshotScheduleRowsWritten > 0 ? 1 : 0) +
         itemRowsWritten +
         attributionRowsWritten +
+        commentRowsWritten +
         invalidatedHistory.rowsWritten +
         historyRowsWritten +
         historyVersion.rowsWritten +
@@ -3855,6 +4135,7 @@ export class BoardRoom extends DurableObject<Env> {
     }
     this.#pendingFrameCount = Math.max(0, this.#pendingFrameCount - recordedFrames);
     this.broadcastAction(action);
+    if (commentsOrphaned) this.broadcastCommentsRefresh();
     this.broadcastHistoryState(attachment.actorId, history);
     if (snapshotScheduleRowsWritten > 0) this.scheduleNextAlarmAfterCommit();
     return {
@@ -3882,6 +4163,7 @@ export class BoardRoom extends DurableObject<Env> {
     let recordedFrames = 0;
     let sqliteRowsRead = 0;
     let sqliteRowsWritten = 0;
+    let commentsChanged = false;
     const transactionStartedAt = performance.now();
     execution.transactionStarted = true;
     this.ctx.storage.transactionSync(() => {
@@ -4091,6 +4373,7 @@ export class BoardRoom extends DurableObject<Env> {
         effects,
         undo ? "before" : "after",
         topologyItems,
+        { actorId: attachment.actorId, role: access.role },
       );
       const snapshotAccounting = this.projectSnapshotAccounting(
         board,
@@ -4129,6 +4412,20 @@ export class BoardRoom extends DurableObject<Env> {
             : { kind: "item.replace", item: write.item },
         );
       }
+      const commentRowsWritten =
+        this.orphanOpenComments(
+          changes.flatMap((change) => (change.kind === "item.remove" ? [change.itemId] : [])),
+          acceptedAt,
+        ) +
+        this.restoreOrphanedComments(
+          changes.flatMap((change) =>
+            change.kind === "item.replace" && currentRecords.get(change.item.id)?.deleted === true
+              ? [change.item.id]
+              : [],
+          ),
+          acceptedAt,
+        );
+      commentsChanged = commentRowsWritten > 0;
       const storedAttributionEffects = originalPayload.attributionEffects;
       const synthesizedAttributionEffects =
         storedAttributionEffects === undefined
@@ -4226,6 +4523,7 @@ export class BoardRoom extends DurableObject<Env> {
         (snapshotScheduleRowsWritten > 0 ? 1 : 0) +
         itemRowsWritten +
         attributionRowsWritten +
+        commentRowsWritten +
         historyRowsWritten +
         historyVersion.rowsWritten +
         boardRowsWritten +
@@ -4263,6 +4561,7 @@ export class BoardRoom extends DurableObject<Env> {
     }
     this.#pendingFrameCount = Math.max(0, this.#pendingFrameCount - recordedFrames);
     this.broadcastAction(action);
+    if (commentsChanged) this.broadcastCommentsRefresh();
     this.broadcastHistoryState(attachment.actorId, history);
     if (snapshotScheduleRowsWritten > 0) this.scheduleNextAlarmAfterCommit();
     return {
@@ -4303,6 +4602,7 @@ export class BoardRoom extends DurableObject<Env> {
     let recordedFrames = 0;
     let sqliteRowsRead = 0;
     let sqliteRowsWritten = 0;
+    let commentsOrphaned = false;
     const transactionStartedAt = performance.now();
     execution.transactionStarted = true;
     this.ctx.storage.transactionSync(() => {
@@ -4352,6 +4652,8 @@ export class BoardRoom extends DurableObject<Env> {
         );
         removals.push(record.item.id);
       }
+      const commentRowsWritten = this.orphanOpenComments(removals, acceptedAt);
+      commentsOrphaned = commentRowsWritten > 0;
       const attributionRowsWritten = this.#sql.exec("DELETE FROM item_attribution").rowsWritten;
       const expanded = {
         kind: "board.clear",
@@ -4423,6 +4725,7 @@ export class BoardRoom extends DurableObject<Env> {
         capacityRowsWritten +
         itemRowsWritten +
         attributionRowsWritten +
+        commentRowsWritten +
         snapshotRowsWritten +
         snapshotAttributionRowsWritten +
         invalidatedHistoryRows +
@@ -4470,6 +4773,7 @@ export class BoardRoom extends DurableObject<Env> {
     } else {
       this.broadcastAction(action);
     }
+    if (commentsOrphaned) this.broadcastCommentsRefresh();
     this.broadcastAllHistoryStates();
     if (snapshotScheduleRowsWritten > 0) this.scheduleNextAlarmAfterCommit();
     return {
@@ -5261,22 +5565,48 @@ export class BoardRoom extends DurableObject<Env> {
     board: BoardRow,
     item: Extract<ProtocolBoardItem, { kind: "image" }>,
   ): void {
-    const assetId = item.geometry.assetId;
-    const row = this.readBoardAsset(assetId);
-    if (
-      row === null ||
-      row.state !== "committed" ||
-      row.asset_id !== assetId ||
-      row.sha256 !== assetId.slice("asset_".length) ||
-      row.r2_key !== `boards/${board.public_id}/assets/${assetId}` ||
-      row.mime_type !== item.geometry.mimeType ||
-      row.intrinsic_width !== item.geometry.intrinsicWidth ||
-      row.intrinsic_height !== item.geometry.intrinsicHeight
-    ) {
+    if (!this.holdsCommittedImageAsset(board, item.geometry)) {
       throw new BoardDomainError(
         "INVALID_FRAME",
         "The image asset is not available on this board.",
       );
+    }
+  }
+
+  /**
+   * Whether this board holds exactly the committed asset a caller names: the same bytes, in
+   * this board's own bucket, at the dimensions and type it claims. Shared by the image cards
+   * the canvas takes and the pictures a comment carries.
+   */
+  private holdsCommittedImageAsset(
+    board: BoardRow,
+    asset: {
+      assetId: string;
+      mimeType: string;
+      intrinsicWidth: number;
+      intrinsicHeight: number;
+    },
+  ): boolean {
+    const row = this.readBoardAsset(asset.assetId);
+    return (
+      row !== null &&
+      row.state === "committed" &&
+      row.asset_id === asset.assetId &&
+      row.sha256 === asset.assetId.slice("asset_".length) &&
+      row.r2_key === `boards/${board.public_id}/assets/${asset.assetId}` &&
+      row.mime_type === asset.mimeType &&
+      row.intrinsic_width === asset.intrinsicWidth &&
+      row.intrinsic_height === asset.intrinsicHeight
+    );
+  }
+
+  /** Refuses a comment picture this Space has switched off or never stored. */
+  private requireCommentImageMedia(board: BoardRow, media: CommentImageMedia): void {
+    if (!featuresForBoard(board).images) {
+      throw new BoardDomainError("FORBIDDEN", "Images are disabled for this Space.");
+    }
+    if (!this.holdsCommittedImageAsset(board, media)) {
+      throw new HttpError(404, "NOT_FOUND", "The comment image is not available on this board.");
     }
   }
 
@@ -5375,10 +5705,14 @@ export class BoardRoom extends DurableObject<Env> {
     effects: readonly ItemEffect[],
     target: "before" | "after",
     knownCurrentItems?: readonly BoardItem[],
+    ownership?: ItemOwnershipContext,
   ): number {
     if (!effects.some(topologyChanged)) return 0;
 
     const currentItems = knownCurrentItems ?? readLiveItems(this.#sql);
+    if (ownership !== undefined) {
+      assertGroupMembershipOwnership(effects, target, currentItems, ownership);
+    }
     const current = new Map(currentItems.map((item) => [item.id, item]));
     const deletedSectionIds = deletedSectionIdsForTarget(effects, target);
 
@@ -6274,6 +6608,174 @@ export class BoardRoom extends DurableObject<Env> {
   }
 }
 
+function requireCommentBody(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new HttpError(400, "BAD_REQUEST", "Comment text is required.");
+  }
+  const normalized = value.replace(/\r\n?/gu, "\n").trim();
+  validateUnicodeText(normalized, "comment");
+  if (
+    normalized.length === 0 ||
+    [...normalized].length > MAX_COMMENT_CODE_POINTS ||
+    containsDisallowedControlCharacter(normalized)
+  ) {
+    throw new HttpError(
+      400,
+      "BAD_REQUEST",
+      `Comments must be 1 to ${MAX_COMMENT_CODE_POINTS} visible characters.`,
+    );
+  }
+  return normalized;
+}
+
+/**
+ * Reads the optional writer metadata from a comment create body. Returns null for a typed
+ * comment; both `assistedBy` and `assistance` must be present together for an assisted one.
+ */
+function requireCommentAssistance(body: Record<string, unknown>): Assistance | null {
+  const hasAssistedBy = Object.hasOwn(body, "assistedBy");
+  const hasAssistance = Object.hasOwn(body, "assistance");
+  if (!hasAssistedBy && !hasAssistance) return null;
+  if (hasAssistedBy !== hasAssistance) {
+    throw new HttpError(400, "BAD_REQUEST", "assistedBy and assistance must be provided together.");
+  }
+  if (body.assistedBy !== "ai") {
+    throw new HttpError(400, "BAD_REQUEST", "assistedBy must be 'ai'.");
+  }
+  const assistance = body.assistance;
+  if (!isRecord(assistance)) {
+    throw new HttpError(400, "BAD_REQUEST", "assistance must be an object.");
+  }
+  assertExactKeys(assistance, ["tool", "action"], ["tool"]);
+  if (typeof assistance.tool !== "string" || !ASSISTANCE_TOOL_PATTERN.test(assistance.tool)) {
+    throw new HttpError(400, "BAD_REQUEST", "assistance.tool must be a valid tool name.");
+  }
+  if (assistance.action === undefined) return { tool: assistance.tool };
+  if (
+    typeof assistance.action !== "string" ||
+    !(ASSIST_ACTIONS as readonly string[]).includes(assistance.action)
+  ) {
+    throw new HttpError(400, "BAD_REQUEST", "assistance.action is not a supported action.");
+  }
+  return { tool: assistance.tool, action: assistance.action as AssistAction };
+}
+
+/**
+ * Reads the optional picture or video a comment carries. The shared normalizer decides the
+ * shape; this adds the text rules the board applies to every participant-authored string and
+ * the stored bound the comment row is written under.
+ */
+function requireCommentMedia(body: Record<string, unknown>): CommentMedia | null {
+  if (!Object.hasOwn(body, "media")) return null;
+  if (body.media === null) {
+    throw new HttpError(400, "BAD_REQUEST", "media must be an object or left out.");
+  }
+  let media: CommentMedia;
+  try {
+    media = normalizeCommentMedia(body.media);
+  } catch (error) {
+    if (error instanceof CommentMediaError) throw new HttpError(400, "BAD_REQUEST", error.message);
+    throw error;
+  }
+  if (media.kind === "image" && media.alt !== undefined) {
+    validateUnicodeText(media.alt, "comment image description");
+    if (containsDisallowedControlCharacter(media.alt)) {
+      throw new HttpError(
+        400,
+        "BAD_REQUEST",
+        "The comment image description contains invalid characters.",
+      );
+    }
+  }
+  if (JSON.stringify(media).length > MAX_COMMENT_MEDIA_JSON_LENGTH) {
+    throw new HttpError(400, "BAD_REQUEST", "The comment media is too large to store.");
+  }
+  return media;
+}
+
+function commentFromRow(row: CommentRow): BoardComment {
+  const resolved = row.state === "resolved";
+  if (
+    (resolved && (row.resolved_by === null || row.resolved_at_ms === null)) ||
+    (!resolved && (row.resolved_by !== null || row.resolved_at_ms !== null))
+  ) {
+    throw new HttpError(500, "INTERNAL_ERROR", "Stored comment data is invalid.");
+  }
+  const media = commentMediaFromRow(row);
+  const assisted = row.assisted_by !== null;
+  if (
+    (assisted && (row.assisted_by !== "ai" || row.assistance_tool === null)) ||
+    (!assisted && (row.assistance_tool !== null || row.assistance_action !== null)) ||
+    (row.assistance_action !== null &&
+      !(ASSIST_ACTIONS as readonly string[]).includes(row.assistance_action))
+  ) {
+    throw new HttpError(500, "INTERNAL_ERROR", "Stored comment data is invalid.");
+  }
+  return {
+    id: row.comment_id,
+    itemId: row.target_item_id,
+    body: row.body,
+    state: row.state,
+    author: {
+      id: row.created_by,
+      displayName: row.author_name || fallbackDisplayName(row.created_by),
+    },
+    createdAt: row.created_at_ms,
+    updatedAt: row.updated_at_ms,
+    ...(resolved && row.resolved_by !== null && row.resolved_at_ms !== null
+      ? {
+          resolvedBy: {
+            id: row.resolved_by,
+            displayName: row.resolver_name || fallbackDisplayName(row.resolved_by),
+          },
+          resolvedAt: row.resolved_at_ms,
+        }
+      : {}),
+    ...(assisted && row.assistance_tool !== null
+      ? {
+          assistedBy: "ai" as const,
+          assistance: {
+            tool: row.assistance_tool,
+            ...(row.assistance_action !== null
+              ? { action: row.assistance_action as AssistAction }
+              : {}),
+          },
+        }
+      : {}),
+    ...(media === null ? {} : { media }),
+  };
+}
+
+/**
+ * Reads the stored picture or video back through the same normalizer that accepted it, so a
+ * row that no longer satisfies the contract is reported as corrupt rather than served.
+ */
+function commentMediaFromRow(row: CommentRow): CommentMedia | null {
+  if (row.media_kind === null && row.media_json === null) return null;
+  if (row.media_kind === null || row.media_json === null) {
+    throw new HttpError(500, "INTERNAL_ERROR", "Stored comment data is invalid.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.media_json);
+  } catch {
+    throw new HttpError(500, "INTERNAL_ERROR", "Stored comment data is invalid.");
+  }
+  let media: CommentMedia;
+  try {
+    media = normalizeCommentMedia(parsed);
+  } catch (error) {
+    if (error instanceof CommentMediaError) {
+      throw new HttpError(500, "INTERNAL_ERROR", "Stored comment data is invalid.");
+    }
+    throw error;
+  }
+  if (media.kind !== row.media_kind) {
+    throw new HttpError(500, "INTERNAL_ERROR", "Stored comment data is invalid.");
+  }
+  return media;
+}
+
 function topologyItem(state: ItemEffect["before"]): BoardItem | undefined {
   return state.exists ? state.item : undefined;
 }
@@ -6726,7 +7228,7 @@ function optionalExternalParticipantId(value: unknown): string | null {
   if (
     [...normalized].length < 1 ||
     [...normalized].length > 320 ||
-    /[\p{Cc}\p{Cs}]/u.test(normalized)
+    containsDisallowedControlCharacter(normalized)
   ) {
     throw new HttpError(400, "BAD_REQUEST", "The organisation participant ID is invalid.");
   }
@@ -7234,4 +7736,12 @@ function canDraw(policy: DrawingPolicy, role: BoardRole): boolean {
   if (policy === "locked" || role === "viewer") return false;
   if (policy === "owner_only") return role === "owner";
   return role === "editor" || role === "owner";
+}
+
+/**
+ * Comments follow the drawing policy's role rules but ignore a lock: a locked
+ * board still accepts comments from participants who could otherwise draw.
+ */
+function canComment(policy: DrawingPolicy, role: BoardRole): boolean {
+  return canDraw(policy === "locked" ? "editors_enabled" : policy, role);
 }

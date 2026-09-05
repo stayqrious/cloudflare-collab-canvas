@@ -1,6 +1,17 @@
+import { parseVideoEmbedReference } from "@collab/geometry";
+
 export type SafeLinkToken =
   | { kind: "text"; text: string }
   | { kind: "link"; text: string; href: string };
+
+export type VideoEmbed = {
+  provider: "youtube" | "vimeo";
+  sourceUrl: string;
+  embedUrl: string;
+  title: string;
+};
+
+export { VIDEO_EMBED_HEIGHT, VIDEO_EMBED_WIDTH } from "@collab/geometry";
 
 const HTTP_URL_CANDIDATE = /https?:\/\/[^\s<>"']+/giu;
 
@@ -86,4 +97,26 @@ export function tokenizeSafeLinks(value: string): SafeLinkToken[] {
 
   appendText(tokens, value.slice(offset));
   return tokens;
+}
+
+/** Converts a complete YouTube or Vimeo URL into a privacy-conscious embed URL. */
+export function videoEmbedFromText(value: string): VideoEmbed | null {
+  const reference = parseVideoEmbedReference(value);
+  if (reference === null) return null;
+  if (reference.provider === "vimeo") {
+    return {
+      provider: "vimeo",
+      sourceUrl: reference.sourceUrl,
+      embedUrl: `https://player.vimeo.com/video/${reference.videoId}${
+        reference.vimeoHash === undefined ? "" : `?h=${encodeURIComponent(reference.vimeoHash)}`
+      }`,
+      title: "Vimeo video",
+    };
+  }
+  return {
+    provider: "youtube",
+    sourceUrl: reference.sourceUrl,
+    embedUrl: `https://www.youtube-nocookie.com/embed/${reference.videoId}`,
+    title: "YouTube video",
+  };
 }

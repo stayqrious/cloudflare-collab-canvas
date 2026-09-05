@@ -1,6 +1,7 @@
 import { findMoveCopyClosureLimitViolation } from "@collab/board-core";
 import { boundsContain, transformPoint } from "@collab/geometry";
 import { MAX_BATCH_OPERATIONS } from "@collab/protocol";
+import { videoEmbedFromText } from "../board/links";
 import type { BoardModel, Bounds, ConnectorAnchor } from "../board/model";
 import { itemBounds, translateMatrix } from "../board/model";
 import type { BoardRenderer } from "../board/renderer";
@@ -44,6 +45,8 @@ import {
 import {
   buildCapturedStructuredResizeOperation,
   type CapturedStructuredResize,
+  MIN_RESIZED_ZONE_HEIGHT,
+  MIN_RESIZED_ZONE_WIDTH,
   resizedStructuredGeometry,
   type StructuredResizeHandle,
   structuredResizeGrabOffset,
@@ -619,6 +622,9 @@ export function buildCapturedTextUpdate(
   assignNewMembership = true,
 ): BatchItemOperation {
   const geometry = { ...edit.geometry, text };
+  if ("embed" in geometry && geometry.embed === "video" && videoEmbedFromText(text) === null) {
+    delete geometry.embed;
+  }
   const update: BatchItemOperation = {
     kind: "item.update",
     itemId: edit.itemId,
@@ -784,11 +790,7 @@ type ZoneCreateOperation = Extract<BatchItemOperation, { kind: "item.create" }> 
   item: Extract<NewBoardItem, { kind: "zone" }>;
 };
 
-export function buildZoneCreateOperation(
-  itemId: string,
-  center: Point,
-  title = "Section",
-): ZoneCreateOperation {
+function zoneCreateOperation(itemId: string, geometry: ZoneGeometry): ZoneCreateOperation {
   return {
     kind: "item.create",
     item: {
@@ -803,15 +805,54 @@ export function buildZoneCreateOperation(
         opacity: 0.18,
       },
       transform: identityMatrix(),
-      geometry: {
-        x: roundBoard(center[0] - DEFAULT_ZONE_WIDTH / 2),
-        y: roundBoard(center[1] - DEFAULT_ZONE_HEIGHT / 2),
-        width: DEFAULT_ZONE_WIDTH,
-        height: DEFAULT_ZONE_HEIGHT,
-        title,
-      },
+      geometry,
     },
   };
+}
+
+export function buildZoneCreateOperation(
+  itemId: string,
+  center: Point,
+  title = "Section",
+): ZoneCreateOperation {
+  return zoneCreateOperation(itemId, defaultZoneGeometry(center, title));
+}
+
+function defaultZoneGeometry(center: Point, title: string): ZoneGeometry {
+  return {
+    x: roundBoard(center[0] - DEFAULT_ZONE_WIDTH / 2),
+    y: roundBoard(center[1] - DEFAULT_ZONE_HEIGHT / 2),
+    width: DEFAULT_ZONE_WIDTH,
+    height: DEFAULT_ZONE_HEIGHT,
+    title,
+  };
+}
+
+// A Section drag covers the rectangle the participant swept out, in either
+// direction. Anything smaller than a resized Section is read as a tap so a
+// stray flick still lands the familiar default-sized Section.
+export function draggedZoneGeometry(start: Point, end: Point, title = "Section"): ZoneGeometry {
+  const width = Math.abs(end[0] - start[0]);
+  const height = Math.abs(end[1] - start[1]);
+  if (width < MIN_RESIZED_ZONE_WIDTH || height < MIN_RESIZED_ZONE_HEIGHT) {
+    return defaultZoneGeometry(start, title);
+  }
+  return {
+    x: roundBoard(Math.min(start[0], end[0])),
+    y: roundBoard(Math.min(start[1], end[1])),
+    width: roundBoard(width),
+    height: roundBoard(height),
+    title,
+  };
+}
+
+export function buildDraggedZoneCreateOperation(
+  itemId: string,
+  start: Point,
+  end: Point,
+  title = "Section",
+): ZoneCreateOperation {
+  return zoneCreateOperation(itemId, draggedZoneGeometry(start, end, title));
 }
 
 export function buildSectionCreateMembershipOperation(
@@ -1077,9 +1118,9 @@ type Gesture =
       kind: "zone";
       pointerId: number;
       pointerType: string;
+      itemId: string;
       start: Point;
       current: Point;
-      operation: ZoneCreateOperation;
     };
 
 type PinchState = {
@@ -1111,6 +1152,7 @@ export class ToolController {
   private readonly selected = new Set<string>();
   private spaceHeld = false;
   private readonly pointers = new Map<number, Point>();
+  private readonly expectedCaptureLosses = new Map<number, Set<object>>();
   private pinch: PinchState | null = null;
   private lastPresenceAt = 0;
   private lastStickyTap: { itemId: string; at: number } | null = null;
@@ -1314,6 +1356,7 @@ export class ToolController {
 
   destroy(): void {
     this.cancelGesture();
+    this.expectedCaptureLosses.clear();
     const { svg } = this.options.renderer;
     svg.removeEventListener("pointerdown", this.onPointerDown);
     svg.removeEventListener("pointermove", this.onPointerMove);
@@ -1589,27 +1632,25 @@ export class ToolController {
     }
 
     if (this.toolValue === "zone") {
-      const operation = buildZoneCreateOperation(createId(), point);
-      if (event.pointerType === "touch") {
-        this.gesture = {
-          kind: "zone",
-          pointerId: event.pointerId,
-          pointerType: event.pointerType,
-          start: point,
-          current: point,
-          operation,
-        };
-        this.options.renderer.showLocalZone(operation.item.geometry, operation.item.style);
-      } else {
-        void this.commitZone(operation);
-      }
+      const gesture: Extract<Gesture, { kind: "zone" }> = {
+        kind: "zone",
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        itemId: createId(),
+        start: point,
+        current: point,
+      };
+      this.gesture = gesture;
+      this.renderZoneGesture(gesture);
       event.preventDefault();
       return;
     }
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
-    this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
+    if (this.pointers.has(event.pointerId)) {
+      this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
+    }
     const now = performance.now();
     if (!document.hidden && now - this.lastPresenceAt >= 200) {
       const point = boardPoint(event, this.options.renderer);
@@ -1775,12 +1816,10 @@ export class ToolController {
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
       for (const sample of events)
         this.collectEraser(boardPoint(sample, this.options.renderer), gesture);
-    } else if (
-      gesture.kind === "sticky" ||
-      gesture.kind === "stamp" ||
-      gesture.kind === "table" ||
-      gesture.kind === "zone"
-    ) {
+    } else if (gesture.kind === "zone") {
+      gesture.current = boardPoint(event, this.options.renderer);
+      this.renderZoneGesture(gesture);
+    } else if (gesture.kind === "sticky" || gesture.kind === "stamp" || gesture.kind === "table") {
       gesture.current = boardPoint(event, this.options.renderer);
     }
     event.preventDefault();
@@ -1790,13 +1829,13 @@ export class ToolController {
     this.pointers.delete(event.pointerId);
     if (this.pinch) {
       if (this.pinch.pointerIds.includes(event.pointerId)) this.pinch = null;
-      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      this.releasePointerCapture(event.pointerId);
       event.preventDefault();
       return;
     }
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) {
-      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      this.releasePointerCapture(event.pointerId);
       return;
     }
     const tapPoint = boardPoint(event, this.options.renderer);
@@ -1844,6 +1883,8 @@ export class ToolController {
       );
     } else if (gesture.kind === "eraser") {
       this.collectEraser(tapPoint, gesture);
+    } else if (gesture.kind === "zone") {
+      gesture.current = tapPoint;
     }
     if (
       gesture.kind === "shape" &&
@@ -1861,13 +1902,13 @@ export class ToolController {
       delete gesture.endAnchor;
       this.gesture = null;
       this.pendingLine = gesture;
-      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      this.releasePointerCapture(event.pointerId);
       this.renderShapeGesture(gesture, true);
       event.preventDefault();
       return;
     }
     this.gesture = null;
-    safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+    this.releasePointerCapture(event.pointerId);
     const adjustedMovePoint =
       gesture.kind === "move"
         ? tapAdjustedMovePoint(
@@ -1883,7 +1924,7 @@ export class ToolController {
       gesture.current = adjustedMovePoint;
     }
     void this.finishGesture(gesture);
-    if (tappedItem?.kind === "sticky") this.handleStickyTap(tappedItem, pointFromItem(tappedItem));
+    if (isTapEditable(tappedItem)) this.handleEditableTap(tappedItem, pointFromItem(tappedItem));
     else this.lastStickyTap = null;
     if (tappedItem?.kind === "table") this.handleTableTap(tappedItem, tapPoint);
     else this.lastTableTap = null;
@@ -1896,13 +1937,51 @@ export class ToolController {
     this.pointers.delete(event.pointerId);
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.pinch = null;
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
-    safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+    this.releasePointerCapture(event.pointerId);
   };
 
   private readonly onLostPointerCapture = (event: PointerEvent): void => {
+    if (this.consumeExpectedCaptureLoss(event.pointerId)) return;
     this.pointers.delete(event.pointerId);
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
   };
+
+  private releasePointerCapture(pointerId: number): void {
+    const { svg } = this.options.renderer;
+    if (!svg.hasPointerCapture(pointerId)) return;
+
+    const token = {};
+    let expected = this.expectedCaptureLosses.get(pointerId);
+    if (!expected) {
+      expected = new Set();
+      this.expectedCaptureLosses.set(pointerId, expected);
+    }
+    expected.add(token);
+
+    window.setTimeout(() => {
+      expected?.delete(token);
+      if (this.expectedCaptureLosses.get(pointerId) === expected && expected?.size === 0) {
+        this.expectedCaptureLosses.delete(pointerId);
+      }
+    }, 1_000);
+
+    try {
+      svg.releasePointerCapture(pointerId);
+    } catch {
+      expected.delete(token);
+      if (expected.size === 0) this.expectedCaptureLosses.delete(pointerId);
+    }
+  }
+
+  private consumeExpectedCaptureLoss(pointerId: number): boolean {
+    const expected = this.expectedCaptureLosses.get(pointerId);
+    if (!expected || expected.size === 0) return false;
+    const token = expected.values().next().value;
+    if (!token) return false;
+    expected.delete(token);
+    if (expected.size === 0) this.expectedCaptureLosses.delete(pointerId);
+    return true;
+  }
 
   private readonly onWheel = (event: WheelEvent): void => {
     event.preventDefault();
@@ -1950,7 +2029,7 @@ export class ToolController {
     if ((event.key === "Enter" || event.key === "F2") && this.selected.size === 1) {
       const [selectedId] = this.selected;
       const item = selectedId === undefined ? undefined : this.options.model.getItem(selectedId);
-      if (item?.kind === "sticky" && this.options.canDraw()) {
+      if (isTapEditable(item) && this.options.canDraw()) {
         event.preventDefault();
         this.lastStickyTap = null;
         this.options.editText(pointFromItem(item), item);
@@ -2128,12 +2207,19 @@ export class ToolController {
       event.preventDefault();
       return;
     }
-
-    const hit = this.options.model.hitTest(
-      point,
-      selectionHitPadding(event.pointerType, this.options.renderer.viewport.zoom),
+    const videoDragTarget = eventTarget?.closest<SVGElement>(
+      "[data-video-drag-frame], [data-video-drag-handle]",
     );
-    if (hit?.kind !== "sticky") this.lastStickyTap = null;
+    const videoItemId = videoDragTarget?.closest<SVGElement>("[data-item-id]")?.dataset.itemId;
+    const videoItem = videoItemId ? this.options.model.getItem(videoItemId) : undefined;
+    const hit =
+      videoItem?.kind === "text" && videoItem.geometry.embed === "video"
+        ? videoItem
+        : this.options.model.hitTest(
+            point,
+            selectionHitPadding(event.pointerType, this.options.renderer.viewport.zoom),
+          );
+    if (!isTapEditable(hit)) this.lastStickyTap = null;
     if (hit?.kind !== "table") this.lastTableTap = null;
     if (hit?.kind !== "zone") this.lastZoneTap = null;
     if (hit) {
@@ -2332,14 +2418,8 @@ export class ToolController {
       return;
     }
     if (gesture.kind === "zone") {
-      const point = tapAdjustedMovePoint(
-        gesture.start,
-        gesture.current,
-        gesture.pointerType,
-        this.options.renderer.viewport.zoom,
-      );
       this.options.renderer.clearLocalPreview();
-      if (point === gesture.start) await this.commitZone(gesture.operation);
+      await this.commitZone(this.zoneGestureOperation(gesture));
       return;
     }
     if (gesture.kind === "pan") return;
@@ -2664,7 +2744,8 @@ export class ToolController {
     this.options.renderer.setSelection(this.selected);
   }
 
-  private handleStickyTap(item: Extract<BoardItem, { kind: "sticky" }>, point: Point): void {
+  /** A second tap on the same note or text within a beat opens it for editing. */
+  private handleEditableTap(item: TapEditableItem, point: Point): void {
     const now = performance.now();
     if (this.lastStickyTap?.itemId === item.id && now - this.lastStickyTap.at <= 450) {
       this.lastStickyTap = null;
@@ -2711,6 +2792,24 @@ export class ToolController {
       return;
     }
     this.options.editZoneTitle(item);
+  }
+
+  private renderZoneGesture(gesture: Extract<Gesture, { kind: "zone" }>): void {
+    const operation = this.zoneGestureOperation(gesture);
+    this.options.renderer.showLocalZone(operation.item.geometry, operation.item.style);
+  }
+
+  private zoneGestureOperation(gesture: Extract<Gesture, { kind: "zone" }>): ZoneCreateOperation {
+    return buildDraggedZoneCreateOperation(
+      gesture.itemId,
+      gesture.start,
+      tapAdjustedMovePoint(
+        gesture.start,
+        gesture.current,
+        gesture.pointerType,
+        this.options.renderer.viewport.zoom,
+      ),
+    );
   }
 
   private async commitZone(operation: ZoneCreateOperation): Promise<void> {
@@ -3103,25 +3202,30 @@ export function buildShapeCreateOperation(
   };
 }
 
-function pointFromItem(item: Extract<BoardItem, { kind: "sticky" }>): Point {
+/** Objects a double tap with the select tool opens for editing: notes and plain text. */
+type TapEditableItem = Extract<BoardItem, { kind: "sticky" | "text" }>;
+
+function isTapEditable(item: BoardItem | undefined): item is TapEditableItem {
+  if (!item) return false;
+  if (item.kind === "sticky") return true;
+  // A video card is a text object carrying an embed; its text is not for editing in place.
+  return item.kind === "text" && item.geometry.embed !== "video";
+}
+
+function pointFromItem(item: TapEditableItem): Point {
   return [item.geometry.x, item.geometry.y];
 }
 
 function isEditingTarget(target: EventTarget | null): boolean {
   return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
+    target instanceof Element &&
+    target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !==
+      null
   );
 }
 
 function isOpenDialogTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest("dialog[open]") !== null;
-}
-
-function safeReleaseCapture(element: Element, pointerId: number): void {
-  if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
 }
 
 /**

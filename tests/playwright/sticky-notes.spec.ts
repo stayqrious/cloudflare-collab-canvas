@@ -73,14 +73,24 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
 
   try {
     await openInvite(collaborator, inviteUrl);
-    const canvas = page.locator("#board-canvas");
+    // Editors may only edit their own work, so the collaborator authors the sticky
+    // and the owner (who may edit anything) updates it below.
+    const canvas = collaborator.locator("#board-canvas");
     await canvas.focus();
-    await page.keyboard.press("n");
-    await expect(page.getByTestId("tool-sticky")).toHaveAttribute("aria-pressed", "true");
+    await collaborator.keyboard.press("n");
+    await expect(collaborator.getByTestId("tool-sticky")).toHaveAttribute("aria-pressed", "true");
+    const stickyStyle = collaborator.getByTestId("style-popover");
+    await expect(stickyStyle).toBeVisible();
+    await expect(stickyStyle.locator("[data-style-opacity-row]")).toBeHidden();
+    await expect(stickyStyle.locator("[data-style-font-row]")).toBeHidden();
+    await collaborator.getByRole("button", { name: "Use coral sticky notes" }).click();
+    await expect(
+      collaborator.getByRole("button", { name: "Use coral sticky notes" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
-    const point = await canvasPoint(page, 0.34, 0.38);
-    await page.mouse.click(point.x, point.y);
-    const createEditor = page.getByTestId("canvas-text-editor");
+    const point = await canvasPoint(collaborator, 0.34, 0.38);
+    await collaborator.mouse.click(point.x, point.y);
+    const createEditor = collaborator.getByTestId("canvas-text-editor");
     await expect(createEditor).toBeVisible();
     await expect(createEditor).toBeFocused();
     await expect(createEditor).toHaveAttribute("data-editor-kind", "sticky");
@@ -98,25 +108,34 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
     await expect(createEditor).toHaveValue(`${coachText}\u000b`);
     await createEditor.fill(coachText);
     await createEditor.press("Control+Enter");
+    await expect(collaborator.getByTestId("tool-select")).toHaveAttribute("aria-pressed", "true");
+    await expect(createEditor).toHaveCount(0);
+    await collaborator.mouse.click(point.x + 230, point.y + 160);
+    await expect(collaborator.getByTestId("canvas-text-editor")).toHaveCount(0);
 
     const ownerSticky = page.locator("#drawing-area .board-item-sticky");
     const collaboratorSticky = collaborator.locator("#drawing-area .board-item-sticky");
     await expect(ownerSticky).toHaveCount(1);
     await expect(collaboratorSticky).toHaveCount(1);
-    await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
-    const stickyId = await ownerSticky.getAttribute("data-item-id");
-    expect(stickyId).toBeTruthy();
-    await expect(collaboratorSticky).toHaveAttribute("data-item-id", stickyId ?? "");
-
-    const collaboratorBounds = await collaboratorSticky.boundingBox();
-    expect(collaboratorBounds).not.toBeNull();
-    if (!collaboratorBounds) throw new Error("The collaborator sticky has no layout bounds.");
-    await collaborator.getByRole("button", { name: /^Select/u }).click();
-    await collaborator.mouse.dblclick(
-      collaboratorBounds.x + collaboratorBounds.width / 2,
-      collaboratorBounds.y + collaboratorBounds.height / 2,
+    await expect(collaboratorSticky.locator(".sticky-background")).toHaveAttribute(
+      "fill",
+      "#ffafa3",
     );
-    const editEditor = collaborator.getByTestId("canvas-text-editor");
+    await expect(ownerSticky.locator(".sticky-background")).toHaveAttribute("fill", "#ffafa3");
+    await expect(collaborator.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+    const stickyId = await collaboratorSticky.getAttribute("data-item-id");
+    expect(stickyId).toBeTruthy();
+    await expect(ownerSticky).toHaveAttribute("data-item-id", stickyId ?? "");
+
+    const ownerBounds = await ownerSticky.boundingBox();
+    expect(ownerBounds).not.toBeNull();
+    if (!ownerBounds) throw new Error("The owner sticky has no layout bounds.");
+    await page.getByRole("button", { name: /^Select/u }).click();
+    await page.mouse.dblclick(
+      ownerBounds.x + ownerBounds.width / 2,
+      ownerBounds.y + ownerBounds.height / 2,
+    );
+    const editEditor = page.getByTestId("canvas-text-editor");
     await expect(editEditor).toBeFocused();
     await expect(editEditor).toHaveAttribute("aria-label", "Edit sticky note");
     await expect(editEditor).toHaveValue(coachText);
@@ -124,10 +143,16 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
       "<script> & student update connects this idea to a deliberately long classroom reflection";
     await editEditor.fill(studentText);
     await editEditor.press("Control+Enter");
-    await expect(collaborator.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+    await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
     await expect
-      .poll(async () => ownerSticky.locator(".sticky-text").textContent())
-      .toBe(await collaboratorSticky.locator(".sticky-text").textContent());
+      .poll(async () => {
+        const [ownerText, collaboratorText] = await Promise.all([
+          ownerSticky.locator(".sticky-text").textContent(),
+          collaboratorSticky.locator(".sticky-text").textContent(),
+        ]);
+        return ownerText === collaboratorText && ownerText?.includes("studentupdateconnects");
+      })
+      .toBe(true);
 
     await page.reload();
     await waitForBoard(page);
@@ -165,7 +190,22 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
       persistedBounds.x + persistedBounds.width / 2,
       persistedBounds.y + persistedBounds.height / 2,
     );
-    await expect(page.getByTestId("selection-actions")).toBeVisible();
+    const selectionActions = page.getByTestId("selection-actions");
+    await expect(selectionActions).toBeVisible();
+    await expect(selectionActions.locator("[data-selection-font-controls]")).toBeHidden();
+    await expect(selectionActions.locator("[data-selection-current-colour]")).toHaveCSS(
+      "background-color",
+      "rgb(255, 175, 163)",
+    );
+    await expect(selectionActions.getByRole("button", { name: "Copy selected items" })).toHaveCount(
+      0,
+    );
+    await expect(
+      selectionActions.getByRole("button", { name: "Delete selected items" }),
+    ).toHaveCount(0);
+    await expect(
+      selectionActions.getByRole("button", { name: "Comment on selected object" }).locator("svg"),
+    ).toHaveCount(1);
     await page.keyboard.press("F2");
     const keyboardEditor = page.getByTestId("canvas-text-editor");
     await expect(keyboardEditor).toBeFocused();
@@ -177,7 +217,7 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
       persistedBounds.x + persistedBounds.width / 2,
       persistedBounds.y + persistedBounds.height / 2,
     );
-    await page.getByRole("button", { name: "Copy selected items" }).click();
+    await page.keyboard.press("Control+d");
     await expect(page.locator("#drawing-area .board-item-sticky")).toHaveCount(2);
     await expect(collaborator.locator("#drawing-area .board-item-sticky")).toHaveCount(2);
 
@@ -188,7 +228,7 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
     await expect(
       collaborator.locator(`#drawing-area [data-item-id="${copiedId}"]`),
     ).toHaveAttribute("transform", movedTransform);
-    await page.getByRole("button", { name: "Delete selected items" }).click();
+    await page.keyboard.press("Delete");
     await expect(page.locator("#drawing-area .board-item-sticky")).toHaveCount(1);
     await expect(collaborator.locator("#drawing-area .board-item-sticky")).toHaveCount(1);
   } finally {
@@ -268,12 +308,14 @@ test("a delayed stale sticky rejection reopens the exact draft", async ({
 
   try {
     await openInvite(collaborator, inviteUrl);
-    await page.getByTestId("tool-sticky").click();
-    const point = await canvasPoint(page, 0.38, 0.4);
-    await page.mouse.click(point.x, point.y);
-    await page.getByTestId("canvas-text-editor").fill("Shared starting idea");
-    await page.getByTestId("canvas-text-editor").press("Control+Enter");
-    await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+    // The collaborator authors the sticky: editors may only edit their own work,
+    // while the owner may edit anything, so both can open it afterwards.
+    await collaborator.getByTestId("tool-sticky").click();
+    const point = await canvasPoint(collaborator, 0.38, 0.4);
+    await collaborator.mouse.click(point.x, point.y);
+    await collaborator.getByTestId("canvas-text-editor").fill("Shared starting idea");
+    await collaborator.getByTestId("canvas-text-editor").press("Control+Enter");
+    await expect(collaborator.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
     const ownerSticky = page.locator("#drawing-area .board-item-sticky");
     const collaboratorSticky = collaborator.locator("#drawing-area .board-item-sticky");

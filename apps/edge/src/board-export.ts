@@ -1,3 +1,4 @@
+import { MAX_CANONICAL_EXPORT_BYTES } from "@collab/protocol";
 import type { BoardItem, ZoneGeometry } from "./types";
 
 export interface SectionExportSummary {
@@ -41,12 +42,17 @@ export function buildSectionExportSummaries(items: Iterable<BoardItem>): Section
 
 /**
  * Adds derived Section metadata after the canonical snapshot has passed its
- * storage-size validation. The snapshot limit intentionally does not apply to
- * this export-only index.
+ * storage-size validation. The index is bounded by
+ * MAX_SECTION_EXPORT_INDEX_BYTES, so consumers accept exports up to
+ * MAX_CANONICAL_EXPORT_BYTES rather than the bare snapshot limit.
  */
 export function appendSectionExportSummaries(
   serializedSnapshot: string,
   sections: readonly SectionExportSummary[],
 ): string {
-  return `${serializedSnapshot.slice(0, -1)},"sections":${JSON.stringify(sections)}}`;
+  const body = `${serializedSnapshot.slice(0, -1)},"sections":${JSON.stringify(sections)}}`;
+  if (new TextEncoder().encode(body).byteLength > MAX_CANONICAL_EXPORT_BYTES) {
+    throw new Error("The canonical export exceeds the supported export size.");
+  }
+  return body;
 }

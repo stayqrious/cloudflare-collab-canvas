@@ -334,6 +334,61 @@ describe("safe SVG serialization", () => {
     );
   });
 
+  it("keeps exported TeX source inside the computed viewBox", () => {
+    const source = "$$\\displaystyle x$$";
+    const text: BoardItem = {
+      id: "018f0000-0000-7000-8000-000000000016",
+      kind: "text",
+      z: 1,
+      version: 1,
+      createdBy: ACTOR,
+      style: {
+        kind: "text",
+        color: "#112233",
+        fontSize: 20,
+        fontFamily: "sans",
+        opacity: 1,
+      },
+      transform: [1, 0, 0, 1, 0, 0],
+      geometry: { x: 100, y: 40, text: source },
+    };
+
+    const result = createSvgExport({ boardId: BOARD, seq: 3, padding: 0, items: [text] });
+
+    expect(result.svg).toContain("$$\\displaystyle x$$");
+    expect(result.viewBox).toEqual({
+      minX: 100,
+      minY: 20,
+      maxX: 100 + Array.from(source).length * 20 * 0.6,
+      maxY: 44,
+    });
+  });
+
+  it("keeps a video fallback URL inside its fixed card bounds", () => {
+    const source = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    const text: BoardItem = {
+      id: "018f0000-0000-7000-8000-000000000017",
+      kind: "text",
+      z: 1,
+      version: 1,
+      createdBy: ACTOR,
+      style: {
+        kind: "text",
+        color: "#112233",
+        fontSize: 28,
+        fontFamily: "sans",
+        opacity: 1,
+      },
+      transform: [1, 0, 0, 1, 0, 0],
+      geometry: { x: 100, y: 40, text: source, embed: "video" },
+    };
+
+    const result = createSvgExport({ boardId: BOARD, seq: 3, padding: 0, items: [text] });
+
+    expect(result.svg).toContain(source);
+    expect(result.viewBox.maxX).toBe(100 + Array.from(source).length * 28 * 0.6);
+  });
+
   it("renders sticky notes with deterministic wrapping, clipping, and escaped text", () => {
     const item = sticky(
       "018f0000-0000-7000-8000-000000000004",

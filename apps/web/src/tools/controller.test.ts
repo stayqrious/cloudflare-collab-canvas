@@ -7,6 +7,7 @@ import {
   buildCapturedMoveOperations,
   buildCapturedTextUpdate,
   buildCardResizeMembershipOperation,
+  buildDraggedZoneCreateOperation,
   buildFullEraserOperation,
   buildImageCreateOperation,
   buildObjectTransformMembershipOperation,
@@ -24,6 +25,7 @@ import {
   type CapturedMoveItem,
   cardResizeGrabOffset,
   defaultImageCardSize,
+  draggedZoneGeometry,
   effectiveMoveItemsWithinBatchLimit,
   expandPartialEraserSectionOperations,
   fitEraserOperationsWithinBatchLimit,
@@ -40,6 +42,7 @@ import {
   toolFromShortcut,
 } from "./controller";
 import { GroupingError } from "./grouping";
+import { MIN_RESIZED_ZONE_HEIGHT, MIN_RESIZED_ZONE_WIDTH } from "./resize";
 
 const ITEM_ID = "018f47a1-7a2b-7c3d-8e4f-123456789abd";
 const SECTION_ID = "018f47a1-7a2b-7c3d-8e4f-123456789abe";
@@ -738,6 +741,30 @@ describe("captured gesture operations", () => {
     });
   });
 
+  it("clears stale video markers while preserving valid replacement embeds", () => {
+    const geometry = {
+      x: 20,
+      y: 30,
+      text: "https://youtu.be/dQw4w9WgXcQ",
+      embed: "video" as const,
+    };
+    const edit = { itemId: ITEM_ID, expectedVersion: 13, geometry };
+    expect(buildCapturedTextUpdate(edit, "Plain text")).toEqual({
+      kind: "item.update",
+      itemId: ITEM_ID,
+      expectedVersion: 13,
+      patch: { geometry: { x: 20, y: 30, text: "Plain text" } },
+    });
+    expect(buildCapturedTextUpdate(edit, "https://vimeo.com/76979871")).toEqual({
+      kind: "item.update",
+      itemId: ITEM_ID,
+      expectedVersion: 13,
+      patch: {
+        geometry: { x: 20, y: 30, text: "https://vimeo.com/76979871", embed: "video" },
+      },
+    });
+  });
+
   it("clears Section membership when edited text grows outside its Section", () => {
     const section = sectionItem(100, 100);
     const item: Extract<BoardItem, { kind: "text" }> = {
@@ -1025,6 +1052,71 @@ describe("captured gesture operations", () => {
         geometry: { x: 140, y: 140, width: 520, height: 320, title: "Section" },
       },
     });
+  });
+
+  it("creates a dragged Section covering the swept bounds in either direction", () => {
+    const forward = buildDraggedZoneCreateOperation(ITEM_ID, [100, 80], [400, 300]);
+    expect(forward.item.geometry).toEqual({
+      x: 100,
+      y: 80,
+      width: 300,
+      height: 220,
+      title: "Section",
+    });
+
+    const backward = buildDraggedZoneCreateOperation(ITEM_ID, [400, 300], [100, 80]);
+    expect(backward.item.geometry).toEqual(forward.item.geometry);
+    expect(forward.item.style).toEqual(buildZoneCreateOperation(ITEM_ID, [0, 0]).item.style);
+  });
+
+  it("rounds dragged Section bounds onto the board grid", () => {
+    expect(
+      buildDraggedZoneCreateOperation(ITEM_ID, [10.126, 20.124], [220.126, 140.124]).item.geometry,
+    ).toEqual({ x: 10.13, y: 20.12, width: 210, height: 120, title: "Section" });
+  });
+
+  it("falls back to a centered default Section when the drag stays under the minimum", () => {
+    const centered = buildZoneCreateOperation(ITEM_ID, [400, 300]).item.geometry;
+    expect(draggedZoneGeometry([400, 300], [400, 300])).toEqual(centered);
+    expect(draggedZoneGeometry([400, 300], [400 + MIN_RESIZED_ZONE_WIDTH - 1, 300 + 400])).toEqual(
+      centered,
+    );
+    expect(draggedZoneGeometry([400, 300], [400 + 400, 300 + MIN_RESIZED_ZONE_HEIGHT - 1])).toEqual(
+      centered,
+    );
+    expect(
+      draggedZoneGeometry(
+        [400, 300],
+        [400 + MIN_RESIZED_ZONE_WIDTH, 300 + MIN_RESIZED_ZONE_HEIGHT],
+      ),
+    ).toEqual({
+      x: 400,
+      y: 300,
+      width: MIN_RESIZED_ZONE_WIDTH,
+      height: MIN_RESIZED_ZONE_HEIGHT,
+      title: "Section",
+    });
+  });
+
+  it("binds items enclosed by a dragged Section", () => {
+    const operation = buildDraggedZoneCreateOperation(SECTION_ID, [0, 0], [400, 300]);
+    const inside = stickyItem("018f47a1-7a2b-7c3d-8e4f-123456789ad1", 20, 20, "teacher-a");
+    const outside = stickyItem("018f47a1-7a2b-7c3d-8e4f-123456789ad2", 900, 900, "teacher-a");
+
+    expect(buildSectionCreateMembershipOperation(operation, [inside, outside], () => true)).toEqual(
+      {
+        kind: "items.batch",
+        operations: [
+          operation,
+          {
+            kind: "item.update",
+            itemId: inside.id,
+            expectedVersion: inside.version,
+            patch: { sectionId: SECTION_ID },
+          },
+        ],
+      },
+    );
   });
 
   it("rejects creating a Section around a foreign saved item", () => {

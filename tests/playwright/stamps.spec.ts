@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   canvasPoint,
+  chooseMoreTool,
   closeAccessDrawer,
   createBoard,
   createInvite,
@@ -89,7 +90,7 @@ test("stamps converge, move, copy, delete, persist, and export", async ({
     await expect(viewer.getByTestId("save-status")).toHaveAttribute("data-state", "readonly");
     await expect(viewer.getByTestId("tool-stamp")).toBeDisabled();
 
-    await page.getByTestId("tool-stamp").click();
+    await chooseMoreTool(page, "tool-stamp");
     await expect(page.getByTestId("tool-stamp")).toHaveAttribute("aria-pressed", "true");
     const styleTrigger = page.getByTestId("style-button");
     const stylePopover = page.getByTestId("style-popover");
@@ -141,7 +142,7 @@ test("stamps converge, move, copy, delete, persist, and export", async ({
     await styleTrigger.click();
     await expect(stylePopover).toBeHidden();
     await expect(styleTrigger).toHaveAttribute("aria-expanded", "false");
-    await page.getByTestId("tool-stamp").click();
+    await chooseMoreTool(page, "tool-stamp");
     await expect(stylePopover).toBeVisible();
     await expect(styleTrigger).toHaveAttribute("aria-expanded", "true");
     await styleTrigger.click();
@@ -160,7 +161,7 @@ test("stamps converge, move, copy, delete, persist, and export", async ({
     const heartId = await ownerHeart.getAttribute("data-item-id");
     expect(heartId).toBeTruthy();
 
-    await editor.getByTestId("tool-stamp").click();
+    await chooseMoreTool(editor, "tool-stamp");
     await editor.getByTestId("stamp-choice-sparkle").click();
     const sparklePoint = await canvasPoint(editor, 0.62, 0.48);
     await editor.mouse.click(sparklePoint.x, sparklePoint.y);
@@ -179,13 +180,13 @@ test("stamps converge, move, copy, delete, persist, and export", async ({
       movedTransform,
     );
 
-    await page.getByRole("button", { name: "Copy selected items" }).click();
+    await page.keyboard.press("Control+d");
     await expect(page.locator("#drawing-area .board-item-stamp")).toHaveCount(3);
     await expect(editor.locator("#drawing-area .board-item-stamp")).toHaveCount(3);
     const copy = page.locator("#drawing-area .board-item-stamp").last();
     const copyId = await copy.getAttribute("data-item-id");
     expect(copyId).toBeTruthy();
-    await page.getByRole("button", { name: "Delete selected items" }).click();
+    await page.keyboard.press("Delete");
     await expect(page.locator("#drawing-area .board-item-stamp")).toHaveCount(2);
     await expect(editor.locator(`#drawing-area [data-item-id="${copyId}"]`)).toHaveCount(0);
 
@@ -219,7 +220,7 @@ test("a touch tap places the selected stamp", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.use.hasTouch, "This scenario requires a touch-capable project.");
 
   await createBoard(page, "Touch stamps");
-  await page.getByTestId("tool-stamp").tap();
+  await chooseMoreTool(page, "tool-stamp");
   await expect(page.getByTestId("style-popover")).toBeVisible();
   await page.getByTestId("stamp-choice-check").tap();
   const point = await canvasPoint(page, 0.58, 0.42);
@@ -263,7 +264,7 @@ test("the stamp palette remains usable in a short landscape classroom frame", as
 
   await page.setViewportSize({ width: 700, height: 240 });
   await createBoard(page, "Landscape stamps");
-  await page.getByTestId("tool-stamp").click();
+  await chooseMoreTool(page, "tool-stamp");
 
   const trigger = page.getByTestId("style-button");
   const popover = page.getByTestId("style-popover");

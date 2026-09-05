@@ -99,25 +99,31 @@ function upload(
 }
 
 describe("private board image assets", () => {
-  it("defaults images off and enforces role, owner policy, and board lock at commit time", async () => {
+  it("defaults images on and enforces the toggle, role, owner policy, and board lock at commit time", async () => {
     const boardId = nextBoardId();
     const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
     await initializeBoard(stub, boardId);
     await addMembers(stub);
 
-    expect((await upload(stub, boardId, ownerId, staticGif())).status).toBe(403);
-    const enabled = await setPolicy(stub, boardId, 1, { imagesEnabled: true });
+    expect((await upload(stub, boardId, ownerId, staticGif())).status).toBe(201);
+    const disabled = await setPolicy(stub, boardId, 1, { imagesEnabled: false });
+    expect(disabled.status).toBe(200);
+    await expect(disabled.json()).resolves.toMatchObject({
+      board: { imagesEnabled: false, aclVersion: 2 },
+    });
+    expect((await upload(stub, boardId, ownerId, staticGif(1))).status).toBe(403);
+    const enabled = await setPolicy(stub, boardId, 2, { imagesEnabled: true });
     expect(enabled.status).toBe(200);
     await expect(enabled.json()).resolves.toMatchObject({
-      board: { imagesEnabled: true, aclVersion: 2 },
+      board: { imagesEnabled: true, aclVersion: 3 },
     });
 
     expect((await upload(stub, boardId, viewerId, staticGif())).status).toBe(403);
     expect((await upload(stub, boardId, editorId, staticGif(1))).status).toBe(201);
-    expect((await setPolicy(stub, boardId, 2, { drawingPolicy: "owner_only" })).status).toBe(200);
+    expect((await setPolicy(stub, boardId, 3, { drawingPolicy: "owner_only" })).status).toBe(200);
     expect((await upload(stub, boardId, editorId, staticGif(2))).status).toBe(403);
     expect((await upload(stub, boardId, ownerId, staticGif(3))).status).toBe(201);
-    expect((await setPolicy(stub, boardId, 3, { drawingPolicy: "locked" })).status).toBe(200);
+    expect((await setPolicy(stub, boardId, 4, { drawingPolicy: "locked" })).status).toBe(200);
     expect((await upload(stub, boardId, ownerId, staticGif(4))).status).toBe(403);
   });
 

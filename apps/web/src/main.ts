@@ -1,4 +1,9 @@
+import "@fontsource-variable/rubik";
 import "./styles.css";
+// MathLive's own styles and fonts, bundled and served from this origin so the content security
+// policy does not have to allow the library to fetch its own.
+import "mathlive/static.css";
+import "mathlive/fonts.css";
 import { ApiClient, ApiError, takeEmbedLaunch, takeFragmentClaim } from "./transport/api";
 import {
   acknowledgeRecoveredOwnership,

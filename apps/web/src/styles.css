@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Rubik Variable", Rubik, ui-sans-serif, system-ui, sans-serif;
   color: #1e1e1e;
   background: #f5f5f5;
   font-synthesis: none;
@@ -19,7 +19,9 @@
   --shadow: 0 18px 50px rgb(30 30 30 / 14%), 0 2px 8px rgb(30 30 30 / 8%);
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -161,10 +163,17 @@ textarea:focus-visible,
   border-radius: 10px 10px 10px 3px;
 }
 
+.board-identity {
+  min-width: 0;
+  width: min(100%, 330px);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .board-title-wrap {
   min-width: 0;
-  justify-self: start;
-  width: min(100%, 360px);
+  flex: 1 1 auto;
 }
 
 .board-title {
@@ -189,8 +198,7 @@ textarea:focus-visible,
   background: #fff;
 }
 
-.topbar-actions,
-.history-controls {
+.topbar-actions {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -243,6 +251,12 @@ textarea:focus-visible,
   line-height: 1;
 }
 
+.access-button-mark {
+  display: none;
+  font-size: 17px;
+  line-height: 1;
+}
+
 .spotlight-toggle-mark {
   width: 9px;
   height: 9px;
@@ -270,51 +284,81 @@ button:disabled {
 }
 
 .save-status {
-  height: 32px;
+  flex: 0 0 auto;
+  min-width: 28px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  padding: 0 9px;
+  padding: 0 5px;
   border-radius: 999px;
-  color: var(--muted);
+  color: #238451;
   font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 3px rgb(47 158 111 / 11%);
+.save-cloud-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  overflow: visible;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
-.save-status[data-state="saving"] .status-dot,
-.save-status[data-state="reconnecting"] .status-dot {
-  background: #d79b2d;
-  box-shadow: 0 0 0 3px rgb(215 155 45 / 12%);
+.save-cloud-check {
+  display: none;
+  stroke-width: 2;
+}
+
+.save-status[data-state="saved"] .save-cloud-check {
+  display: block;
+}
+
+/*
+ * The green cloud with its check already says "saved", so the word beside it is redundant on a
+ * state people read constantly. It stays in the DOM rather than being emptied: the chip is an
+ * aria-live region, and a screen reader still needs to hear that the board saved. Every other
+ * state keeps its visible label, because none of them is self-evident from the icon alone.
+ */
+.save-status[data-state="saved"] [data-save-status-text] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.save-status[data-state="saving"],
+.save-status[data-state="reconnecting"] {
+  color: #ad7416;
+}
+
+.save-status[data-state="saving"] .save-cloud-icon,
+.save-status[data-state="reconnecting"] .save-cloud-icon {
   animation: status-pulse 1.4s ease-in-out infinite;
 }
 
-.save-status[data-state="readonly"] .status-dot {
-  background: #9a9993;
-  box-shadow: none;
+.save-status[data-state="readonly"] {
+  color: #77736b;
 }
 
-.save-status[data-state="recovery"] .status-dot {
-  background: #c55248;
-  box-shadow: 0 0 0 3px rgb(197 82 72 / 12%);
+.save-status[data-state="recovery"],
+.save-status[data-state="reload"] {
+  color: #b43c34;
 }
 
-.save-status[data-state="reload"] .status-dot {
-  background: #c55248;
-  box-shadow: 0 0 0 3px rgb(197 82 72 / 12%);
-}
-
-.save-status[data-state="archived"] .status-dot {
-  background: #9a534c;
-  box-shadow: none;
+.save-status[data-state="archived"] {
+  color: #8d504b;
 }
 
 .archived-banner {
@@ -439,29 +483,77 @@ button:disabled {
   background: var(--canvas);
 }
 
-.tool-rail {
+.tool-rail-shell {
   position: absolute;
   z-index: 30;
   left: 50%;
   bottom: max(14px, env(safe-area-inset-bottom));
   width: max-content;
-  max-width: calc(100% - 172px);
+  max-width: calc(100% - 24px);
   display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  translate: -50% 0;
+}
+
+.tool-rail-shell[data-overflow="true"] {
+  width: calc(100% - 24px);
+}
+
+.tool-rail {
+  min-width: 0;
+  width: max-content;
+  max-width: 100%;
+  display: flex;
+  flex: 0 1 auto;
   flex-direction: row;
   align-items: center;
   gap: 2px;
   padding: 6px;
-  translate: -50% 0;
   overflow-x: auto;
   overflow-y: hidden;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: rgb(255 255 255 / 96%);
+
   box-shadow:
     0 7px 22px rgb(30 30 30 / 16%),
     0 1px 3px rgb(30 30 30 / 8%);
   backdrop-filter: blur(18px);
   scrollbar-width: none;
+}
+.tool-rail-shell[data-overflow="true"] .tool-rail {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.tool-rail-scroll {
+  width: 30px;
+  height: 42px;
+  flex: 0 0 30px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 5px 16px rgb(30 30 30 / 13%);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 23px;
+  line-height: 1;
+}
+
+.tool-rail-scroll:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: #f7f6f2;
+}
+
+.tool-rail-scroll:disabled {
+  cursor: default;
+  opacity: 0.28;
+}
+
+.tool-rail-scroll[hidden] {
+  display: none;
 }
 
 .tool-rail::-webkit-scrollbar {
@@ -568,7 +660,7 @@ button:disabled {
   overflow: hidden;
   color: currentColor;
   font:
-    600 9px / 1.1 Inter,
+    600 9px / 1.1 "Rubik Variable",
     ui-sans-serif,
     system-ui,
     sans-serif;
@@ -628,6 +720,12 @@ button:disabled {
   display: none;
 }
 
+.brush-preset-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
 [data-quick-colours] {
   display: flex;
   align-items: center;
@@ -636,38 +734,36 @@ button:disabled {
 }
 
 .brush-preset {
-  min-width: 66px;
+  width: 36px;
+  min-width: 36px;
   height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 9px;
+  padding: 0;
   border: 0;
   border-radius: 9px;
   background: transparent;
   cursor: pointer;
-  font-size: 10px;
-  font-weight: 650;
 }
 
-.brush-preset::before {
-  content: "";
-  width: 20px;
-  height: var(--brush-preview-width, 3px);
-  border-radius: 999px;
-  background: currentColor;
-  opacity: var(--brush-preview-opacity, 1);
-  transform: rotate(-12deg);
+.brush-preset > svg,
+.brush-preset .tool-glyph,
+.brush-preset .tool-glyph svg {
+  width: 19px;
+  height: 19px;
 }
 
-.brush-preset[data-brush-preset="marker"] {
-  --brush-preview-width: 7px;
+.brush-preset .tool-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.brush-preset[data-brush-preset="highlighter"] {
-  --brush-preview-width: 11px;
-  --brush-preview-opacity: 0.36;
+.brush-preset[data-brush-preset="highlighter"] .brush-highlighter-mark {
+  stroke: #f1c40f;
+  stroke-width: 4;
+  opacity: 0.62;
 }
 
 .brush-preset:hover,
@@ -820,7 +916,7 @@ button:disabled {
   fill: currentColor;
   font-size: 11px;
   font-weight: 650;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: "Rubik Variable", Rubik, ui-sans-serif, system-ui, sans-serif;
 }
 
 .board-item-image .image-card-border {
@@ -1023,7 +1119,7 @@ button:disabled {
 .table-picker h2 {
   margin: 0;
   font:
-    650 25px / 1.15 Georgia,
+    650 25px / 1.15 "Rubik Variable",
     serif;
 }
 
@@ -1155,8 +1251,32 @@ button:disabled {
   color: #b7dfff;
 }
 
-.selection-actions button[data-selection-delete] {
-  color: #ff9c8a;
+.selection-actions .selection-colour-trigger {
+  padding: 0;
+}
+
+.selection-current-colour {
+  width: 19px;
+  height: 19px;
+  display: block;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 28%);
+}
+
+.selection-current-colour.is-mixed {
+  border-width: 1px;
+}
+
+.selection-comment-button svg,
+.selection-icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+[data-selection-section-lock][data-section-locked="true"] .section-lock-icon-closed,
+[data-selection-section-lock][data-section-locked="false"] .section-lock-icon-open {
+  display: none;
 }
 
 .selection-arrange-wrap {
@@ -1268,13 +1388,158 @@ button:disabled {
 }
 
 .zoom-controls {
+  top: 12px;
   right: 12px;
-  bottom: max(12px, env(safe-area-inset-bottom));
+  bottom: auto;
 }
 
 .zoom-controls button[data-zoom-reset] {
   min-width: 52px;
   color: var(--muted);
+}
+
+.board-math-content,
+.sticky-math-content,
+.table-math-content,
+.zone-math-content {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.board-math-content {
+  min-height: 100%;
+  height: auto;
+  overflow: visible;
+  /*
+   * The other three surfaces hide their overflow, which already stops a child's margin escaping.
+   * This one shows it, so without a block formatting context the formula's own top margin collapses
+   * out of the div and pushes it below the box the board drew, and the box clips the glyphs.
+   */
+  display: flow-root;
+}
+
+/*
+ * The `[jax][display="true"]` half of this list is not redundant: MathJax ships
+ * `mjx-container[jax="SVG"][display="true"] { margin: 1em 0 }` for prose documents, which outranks a
+ * bare `mjx-container` selector. On a board that 1em pushed display formulae out of their boxes, so
+ * the board's own spacing has to be stated at matching weight to win.
+ */
+.board-math-content mjx-container,
+.sticky-math-content mjx-container,
+.table-math-content mjx-container,
+.zone-math-content mjx-container,
+.comment-body mjx-container,
+.board-math-content mjx-container[jax][display="true"],
+.sticky-math-content mjx-container[jax][display="true"],
+.table-math-content mjx-container[jax][display="true"],
+.zone-math-content mjx-container[jax][display="true"],
+.comment-body mjx-container[jax][display="true"] {
+  max-width: 100%;
+  margin-block: 0.1em;
+}
+
+.board-math-content mjx-container > svg,
+.sticky-math-content mjx-container > svg,
+.table-math-content mjx-container > svg,
+.zone-math-content mjx-container > svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.video-embed-card {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 30px minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: 12px;
+  background: #111827;
+}
+
+.video-embed-heading {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  overflow: hidden;
+  background: #fff;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-embed-heading:hover {
+  color: var(--blue);
+}
+
+.video-embed-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #111827;
+}
+
+.video-embed-preview {
+  display: grid;
+  place-items: center;
+  color: rgb(255 255 255 / 72%);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.video-embed-border {
+  fill: none;
+  stroke: rgb(30 30 30 / 42%);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.video-embed-drag-frame {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+
+.video-embed-drag-frame:active {
+  cursor: grabbing;
+}
+
+.video-embed-item:hover .video-embed-border {
+  stroke: rgb(61 106 255 / 72%);
+}
+
+.video-embed-drag-handle {
+  cursor: grab;
+}
+
+.video-embed-drag-handle:active {
+  cursor: grabbing;
+}
+
+.video-embed-drag-surface {
+  fill: #fff;
+  stroke: rgb(30 30 30 / 22%);
+  stroke-width: 1;
+}
+
+.video-embed-drag-grip {
+  fill: #686761;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.tool-glyph-video {
+  color: #e5484d;
+  font-size: 19px;
 }
 
 .style-wrap {
@@ -1339,18 +1604,35 @@ button:disabled {
 
 .shape-menu {
   left: 50%;
-  bottom: 78px;
+  /* .style-wrap already sits above the tool rail; anchor to its bottom edge like .style-popover
+     so the shape and tools menus open directly over the rail instead of floating mid-canvas. */
+  bottom: 0;
   width: min(390px, calc(100vw - 32px));
   padding: 8px;
   translate: -50% 0;
 }
 
 .tools-menu {
-  width: min(180px, calc(100vw - 32px));
+  width: min(330px, calc(100vw - 32px));
 }
 
 .shape-menu-grid.tools-menu-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tools-menu-grid .tool-glyph {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.tools-menu-grid .tool-glyph svg {
+  width: 21px;
+  height: 21px;
+}
+
+.tools-menu-grid .tool-label {
+  max-width: 84px;
+  font-size: 9px;
 }
 
 .shape-menu-grid {
@@ -1627,10 +1909,16 @@ button:disabled {
 }
 
 .activities-menu {
-  top: 43px;
-  right: 0;
+  position: fixed;
+  top: auto;
+  right: auto;
+  bottom: max(84px, calc(env(safe-area-inset-bottom) + 84px));
+  left: 50%;
   width: min(320px, calc(100vw - 16px));
+  max-height: calc(100dvh - 112px);
   padding: 8px;
+  overflow-y: auto;
+  translate: -50% 0;
 }
 
 .activities-menu-note {
@@ -1832,7 +2120,7 @@ button:disabled {
 .drawer-heading h2 {
   margin: 0;
   font:
-    650 20px / 1.2 Georgia,
+    650 20px / 1.2 "Rubik Variable",
     serif;
 }
 
@@ -1904,15 +2192,112 @@ button:disabled {
 .live-dot {
   width: 8px;
   height: 8px;
-  margin-left: auto;
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 0 3px rgb(47 158 111 / 11%);
 }
 
-[data-access-body],
+.participant-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.participant-row-actions select {
+  width: 82px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.participant-row-actions select:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 [data-settings-body] {
   padding-bottom: 24px;
+}
+
+[data-access-body] {
+  padding-bottom: 0;
+}
+
+.drawer-action-section {
+  display: grid;
+  gap: 8px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-section-label {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.drawer-section-label:not(:first-child) {
+  margin-top: 7px;
+}
+
+.settings-history-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.drawer-action-button {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.drawer-action-button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: #f7f6f2;
+}
+
+.settings-history-controls .drawer-action-button {
+  justify-content: center;
+}
+
+.drawer-action-arrow {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 19px;
+  font-weight: 400;
+}
+
+.participant-drawer .spotlight-toggle-label,
+.settings-drawer .comments-button-label {
+  display: inline;
+}
+
+.access-export-actions {
+  width: 100%;
+  padding: 0;
 }
 
 .access-section {
@@ -1938,6 +2323,52 @@ button:disabled {
   color: var(--muted);
   font-size: 10px;
   font-weight: 650;
+}
+.settings-permissions-section {
+  padding: 0;
+}
+
+.settings-collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 17px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-collapsible-label {
+  flex: 1;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 730;
+}
+
+.settings-collapsible-count {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.settings-collapsible > summary::after {
+  content: "+";
+  width: 20px;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+  text-align: center;
+}
+
+.settings-collapsible[open] > summary::after {
+  content: "−";
+}
+
+.settings-collapsible-body {
+  padding: 0 20px 18px;
 }
 
 .settings-title-field input {
@@ -2526,9 +2957,9 @@ button:disabled {
 .canvas-text-editor {
   position: fixed;
   z-index: 90;
-  width: min(320px, calc(100vw - 20px));
-  min-height: 48px;
-  padding: 4px 7px;
+  width: min(240px, calc(100vw - 20px));
+  min-height: 32px;
+  padding: 3px 5px;
   resize: both;
   border: 1.5px solid var(--blue);
   border-radius: 7px;
@@ -2546,7 +2977,7 @@ button:disabled {
   border-radius: 12px;
   outline: 3px solid rgb(62 99 221 / 18%);
   outline-offset: 2px;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: "Rubik Variable", Rubik, ui-sans-serif, system-ui, sans-serif;
   line-height: 1.2;
   box-shadow: 0 8px 24px rgb(66 52 25 / 18%);
 }
@@ -2599,7 +3030,7 @@ button:disabled {
 .organisation-template-dialog h2 {
   margin: 0;
   font:
-    650 25px / 1.15 Georgia,
+    650 25px / 1.15 "Rubik Variable",
     serif;
 }
 
@@ -2638,7 +3069,7 @@ button:disabled {
   border-radius: 10px;
   color: var(--ink);
   font:
-    13px / 1.5 Inter,
+    13px / 1.5 "Rubik Variable",
     ui-sans-serif,
     system-ui,
     sans-serif;
@@ -2696,7 +3127,7 @@ button:disabled {
 .claim-dialog h1 {
   margin: 20px 0 8px;
   font:
-    650 27px / 1.1 Georgia,
+    650 27px / 1.1 "Rubik Variable",
     serif;
 }
 
@@ -2760,7 +3191,9 @@ button:disabled {
 .landing {
   position: relative;
   width: 100%;
-  min-height: 100dvh;
+  /* Bounded by #app, which is overflow:hidden, so the landing's own overflow:auto
+     scrolls. A min-height here would instead grow the box past #app and clip it. */
+  height: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
   grid-template-rows: auto 1fr auto;
@@ -2788,13 +3221,36 @@ button:disabled {
   justify-content: space-between;
 }
 
+.landing-wordmark {
+  gap: 12px;
+  font-size: 17px;
+}
+
+.landing-wordmark .brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px 13px 13px 4px;
+}
+
 .landing-badge {
-  padding: 7px 10px;
-  border: 1px solid #d8d3c7;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  border: 1px solid #bad8c2;
   border-radius: 999px;
-  color: var(--muted);
+  color: #275d38;
+  background: rgb(245 255 247 / 72%);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 720;
+}
+
+.landing-webmcp-badge > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #32a85a;
+  box-shadow: 0 0 0 3px rgb(50 168 90 / 13%);
 }
 
 .landing-copy {
@@ -2802,10 +3258,25 @@ button:disabled {
   max-width: 720px;
 }
 
+.landing-hero-mark {
+  width: 82px;
+  height: 82px;
+  margin-bottom: 24px;
+  border-radius: 25px 25px 25px 8px;
+  box-shadow: 0 20px 48px rgb(61 52 37 / 17%);
+}
+
+.landing-hero-mark .brand-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+
 .landing-copy h1 {
   margin: 15px 0 25px;
   font:
-    500 clamp(50px, 7vw, 104px) / 0.92 Georgia,
+    500 clamp(50px, 7vw, 104px) / 0.92 "Rubik Variable",
     "Times New Roman",
     serif;
   letter-spacing: -0.055em;
@@ -2840,7 +3311,7 @@ button:disabled {
 .create-card h2 {
   margin: 0;
   font:
-    560 clamp(24px, 3vw, 34px) / 1.15 Georgia,
+    560 clamp(24px, 3vw, 34px) / 1.15 "Rubik Variable",
     serif;
 }
 
@@ -2894,7 +3365,7 @@ button:disabled {
   margin: 10px 0 0;
   color: var(--ink);
   font:
-    600 clamp(30px, 5vw, 48px) / 1.1 Georgia,
+    600 clamp(30px, 5vw, 48px) / 1.1 "Rubik Variable",
     serif;
 }
 
@@ -2931,8 +3402,10 @@ button:disabled {
     margin-top: 30px;
   }
 
+  /* Matches the two-column curve at 800px so the hero shrinks, never jumps,
+     as the viewport narrows across the breakpoint. */
   .landing-copy h1 {
-    font-size: clamp(48px, 14vw, 80px);
+    font-size: clamp(42px, 7vw, 64px);
   }
 
   .create-card {
@@ -2941,6 +3414,97 @@ button:disabled {
 
   .landing > footer {
     grid-column: 1;
+  }
+}
+
+/* Agent browsers (ChatGPT and similar) and small laptops sit between the desktop
+   two-column layout and the phone layout. At these widths the desktop grid pinned
+   the form to its 320px floor and squeezed the copy column, so give both columns
+   room by trimming the gutters rather than the content. */
+@media (min-width: 801px) and (max-width: 1024px) {
+  .landing {
+    gap: 28px clamp(28px, 4vw, 48px);
+    padding: 20px clamp(20px, 4vw, 44px) 26px;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.78fr);
+  }
+
+  .landing-copy h1 {
+    font-size: clamp(46px, 7vw, 68px);
+  }
+
+  .landing-hero-mark {
+    width: 64px;
+    height: 64px;
+    margin-bottom: 16px;
+  }
+}
+
+/* Short viewports, which agent browsers usually are: compress the hero so the
+   board-name form and its button stay above the fold without scrolling. */
+@media (max-width: 1024px) and (max-height: 760px) {
+  .landing {
+    gap: 22px clamp(24px, 4vw, 44px);
+    padding: 16px clamp(20px, 4vw, 44px) 20px;
+  }
+
+  .landing-copy {
+    margin-top: 8px;
+  }
+
+  .landing-hero-mark {
+    width: 52px;
+    height: 52px;
+    margin-bottom: 12px;
+  }
+
+  .landing-copy h1 {
+    margin: 10px 0 14px;
+    font-size: clamp(34px, 5.4vw, 48px);
+  }
+
+  .landing-copy p {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .create-card {
+    gap: 14px;
+    padding: clamp(18px, 3vw, 26px);
+  }
+}
+
+@media (max-width: 980px) {
+  .topbar {
+    gap: 6px;
+  }
+
+  .wordmark-text,
+  .access-button-label,
+  .wide-label {
+    display: none;
+  }
+
+  .topbar-actions {
+    gap: 3px;
+  }
+
+  .topbar-button,
+  .icon-button {
+    min-width: 34px;
+    padding-inline: 7px;
+  }
+
+  .access-button-mark {
+    display: inline;
+  }
+
+  .comments-button,
+  .people-button {
+    gap: 4px;
+  }
+
+  .board-identity {
+    width: min(100%, 270px, max(72px, calc(50vw - 78px)));
   }
 }
 
@@ -2979,21 +3543,16 @@ button:disabled {
     padding: 0 7px;
   }
 
-  .spotlight-toggle-label {
-    display: none;
-  }
-
-  .activities-button-label {
-    display: none;
-  }
-
   .activities-menu {
     position: fixed;
-    top: 58px;
+    top: auto;
     right: 8px;
-    width: min(340px, calc(100vw - 16px));
-    max-height: calc(100dvh - 66px);
+    bottom: max(70px, calc(env(safe-area-inset-bottom) + 70px));
+    left: 8px;
+    width: auto;
+    max-height: calc(100dvh - 96px);
     overflow-y: auto;
+    translate: none;
   }
 
   .spotlight-follow-banner {
@@ -3001,26 +3560,20 @@ button:disabled {
     width: min(440px, calc(100vw - 16px));
   }
 
-  .history-controls {
-    position: fixed;
-    z-index: 25;
-    right: 12px;
-    bottom: max(174px, calc(env(safe-area-inset-bottom) + 174px));
-    padding: 4px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: rgb(255 255 255 / 94%);
-    box-shadow: 0 5px 18px rgb(35 34 30 / 10%);
-  }
-
-  .history-controls .icon-button {
-    border: 0;
-    background: transparent;
-  }
-
   .save-status {
-    padding-inline: 4px;
-    font-size: 9px;
+    min-width: 24px;
+    gap: 0;
+    padding-inline: 2px;
+  }
+
+  .save-cloud-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* Matches the saved-state rule's specificity so this later, narrower rule still wins. */
+  .save-status[data-state] [data-save-status-text] {
+    display: none;
   }
 
   .people-button {
@@ -3028,21 +3581,20 @@ button:disabled {
   }
 
   .avatar-stack {
-    display: none;
-  }
-
-  .wide-label {
-    display: none;
+    display: inline-flex;
   }
 
   .board-stage {
     display: block;
   }
 
-  .tool-rail {
+  .tool-rail-shell {
     bottom: max(8px, env(safe-area-inset-bottom));
     width: calc(100% - 16px);
     max-width: none;
+  }
+
+  .tool-rail {
     justify-content: flex-start;
     padding-inline: 5px;
   }
@@ -3072,8 +3624,9 @@ button:disabled {
   }
 
   .zoom-controls {
+    top: 8px;
     right: 8px;
-    bottom: max(126px, calc(env(safe-area-inset-bottom) + 126px));
+    bottom: auto;
   }
 
   .zoom-controls button[data-zoom-fit],
@@ -3103,24 +3656,11 @@ button:disabled {
   .selection-actions select {
     min-width: 76px;
   }
-
-  .canvas-wrap:has(.selection-actions:not([hidden])) .zoom-controls {
-    display: none;
-  }
 }
 
 @media (max-width: 400px) {
-  .topbar {
-    grid-template-columns: 32px minmax(42px, 1fr) auto;
-  }
-
   .save-status {
-    max-width: 70px;
-  }
-
-  .save-status [data-save-status-text] {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    padding-inline: 3px;
   }
 
   .topbar-button {
@@ -3170,8 +3710,18 @@ button:disabled {
     width: 100%;
   }
 
-  .landing-badge {
+  .landing-wordmark span {
     display: none;
+  }
+
+  .landing-wordmark .brand-mark {
+    width: 38px;
+    height: 38px;
+  }
+
+  .landing-badge {
+    padding: 7px 9px;
+    font-size: 9px;
   }
 
   .landing-copy h1 {
@@ -3219,7 +3769,7 @@ button:disabled {
   color: var(--viewer-ink);
   background: var(--viewer-canvas);
   font:
-    14px / 1.4 Inter,
+    14px / 1.4 "Rubik Variable",
     ui-sans-serif,
     -apple-system,
     BlinkMacSystemFont,
@@ -3445,10 +3995,10 @@ button:disabled {
     .board-item-table .table-cell-text,
     .board-item-zone .zone-title
   ) {
-  pointer-events: auto !important;
+  pointer-events: auto;
   cursor: text;
-  user-select: text !important;
-  -webkit-user-select: text !important;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .space-viewer__canvas-host .creator-badge,
@@ -3513,30 +4063,27 @@ button:disabled {
     display: none;
   }
 }
+/* The admin host is #app itself, which is overflow:hidden, so it has to do the
+   scrolling. A min-height here would grow it past #app and clip the page instead. */
 [data-organisation-admin="true"] {
   color: #172033;
   background: #f4f6fb;
-  min-height: 100vh;
+  overflow: auto;
 }
 .ssa-admin {
   box-sizing: border-box;
   width: min(1440px, 100%);
-  min-height: 100vh;
+  min-height: 100%;
   margin: 0 auto;
   padding: 32px;
   font:
-    15px / 1.5 Inter,
+    15px / 1.5 "Rubik Variable",
     ui-sans-serif,
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-}
-.ssa-admin *,
-.ssa-admin *::before,
-.ssa-admin *::after {
-  box-sizing: border-box;
 }
 .ssa-header {
   display: flex;
@@ -3823,9 +4370,9 @@ button:disabled {
 .ssa-view-link:hover {
   background: #e8dfff;
 }
-.ssa-muted {
-  color: #8e8798 !important;
-  background: transparent !important;
+.ssa-admin .ssa-muted {
+  color: #8e8798;
+  background: transparent;
 }
 .ssa-empty,
 .ssa-state {
@@ -3888,6 +4435,392 @@ button:disabled {
   }
 }
 
+/* Object comments */
+.comments-button {
+  white-space: nowrap;
+}
+
+.comments-button-mark {
+  width: 15px;
+  height: 12px;
+  display: inline-block;
+  border-radius: 7px 7px 7px 2px;
+  background: #6e56cf;
+  color: transparent;
+}
+
+.comments-count {
+  min-width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #eee9ff;
+  color: #5746af;
+  font-size: 10px;
+  font-weight: 780;
+}
+
+.comment-layer {
+  pointer-events: none;
+}
+
+.comment-marker {
+  pointer-events: auto;
+  cursor: pointer;
+  color: #fff;
+}
+
+.comment-marker circle {
+  fill: #6e56cf;
+  stroke: #fff;
+  stroke-width: 2px;
+  filter: drop-shadow(0 2px 4px rgb(30 25 60 / 24%));
+}
+
+.comment-marker:hover circle,
+.comment-marker:focus-visible circle {
+  fill: #5746af;
+  stroke: #eee9ff;
+}
+
+.comment-marker:focus-visible {
+  outline: none;
+}
+
+.comments-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.comments-filter input {
+  accent-color: #6e56cf;
+}
+
+.comment-composer {
+  margin: 14px 14px 4px;
+  padding: 13px;
+  border: 1px solid #d8d0f4;
+  border-radius: 14px;
+  background: #faf8ff;
+}
+
+.comment-target-label {
+  display: block;
+  margin-bottom: 9px;
+  color: #5746af;
+  font-size: 11px;
+  font-weight: 740;
+}
+
+.comment-composer textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.comment-composer textarea:focus {
+  border-color: #8e7ccf;
+  outline: 3px solid rgb(110 86 207 / 12%);
+}
+
+.comment-composer-actions,
+.comment-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.comment-composer-actions button,
+.comment-card-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.comment-composer-actions .primary-button {
+  border-color: #6e56cf;
+  background: #6e56cf;
+  color: #fff;
+}
+
+.comments-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.comments-empty {
+  margin: 22px 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.comment-card {
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(30 30 30 / 4%);
+}
+
+.comment-card[data-active-target="true"] {
+  border-color: #b8a9e8;
+  box-shadow: 0 0 0 3px rgb(110 86 207 / 8%);
+}
+
+.comment-card[data-state="resolved"] {
+  opacity: 0.68;
+}
+
+.comment-card[data-state="orphaned"] {
+  border-color: #efc8ba;
+  background: #fffaf7;
+}
+
+.comment-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.comment-card-heading > span:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comment-card-heading strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comment-card-heading time {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.comment-state {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #eee9ff;
+  color: #5746af;
+  font-size: 9px;
+  font-weight: 760;
+  text-transform: capitalize;
+}
+
+.comment-card[data-state="orphaned"] .comment-state {
+  background: #ffebe3;
+  color: #ad3b19;
+}
+
+.comment-card[data-state="resolved"] .comment-state {
+  background: #e6f6ed;
+  color: #18794e;
+}
+
+.comment-body {
+  margin: 11px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.comment-card-actions {
+  justify-content: space-between;
+}
+
+.comment-card-actions .comment-resolve {
+  margin-left: auto;
+  border-color: #b7dfca;
+  color: #18794e;
+}
+
+.comment-orphan-label {
+  color: #ad3b19;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.comment-attachment {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 9px 10px;
+  border: 1px solid #d8d0f4;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.comment-attachment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comment-attachment-label {
+  color: #5746af;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.comment-attachment-row button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.comment-attachment-alt input {
+  width: 100%;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.comment-video-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.comment-video-field input {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.comment-video-field button {
+  justify-self: start;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.comment-media {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+}
+
+.comment-media img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f4f2fb;
+  object-fit: contain;
+}
+
+.comment-media figcaption {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.comment-media-error {
+  margin: 0;
+  color: #ad3b19;
+  font-size: 11px;
+}
+
+.comment-media-video-link {
+  overflow: hidden;
+  color: #5746af;
+  font-size: 11px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comment-media-play,
+.comment-media-stop {
+  justify-self: start;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.comment-media-player {
+  display: grid;
+  gap: 7px;
+}
+
+.comment-media-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 10px;
+  background: #111827;
+}
+
+@media (max-width: 650px) {
+  .comments-button {
+    padding-inline: 7px;
+  }
+}
 .board-text-link {
   color: inherit;
   cursor: pointer;
@@ -3895,4 +4828,68 @@ button:disabled {
   text-decoration: underline;
   text-decoration-thickness: 0.08em;
   text-underline-offset: 0.12em;
+}
+
+.assistance-mark {
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgb(32 32 30 / 20%));
+}
+
+.assistance-mark text {
+  pointer-events: none;
+  user-select: none;
+}
+
+.creator-badge-ai text {
+  paint-order: stroke fill;
+}
+
+/* MathLive's field, opened over a text editor when the caret enters a formula. */
+.math-field-panel {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-strong, #d4d4d4);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.math-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.math-field-done {
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong, #d4d4d4);
+  border-radius: 999px;
+  background: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.math-field-done:hover {
+  background: var(--canvas, #f5f5f5);
+}
+
+.math-field-surface math-field {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong, #d4d4d4);
+  border-radius: 8px;
+  font-size: 20px;
+}
+
+.math-field-hint {
+  margin: 0;
+  color: #6f6d66;
+  font-size: 12px;
 }

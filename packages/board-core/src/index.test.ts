@@ -1,4 +1,9 @@
-import type { ImageGeometry, ItemEffect, TextFontFamily } from "@collab/protocol";
+import {
+  type ImageGeometry,
+  type ItemEffect,
+  normalizeBoardItem,
+  type TextFontFamily,
+} from "@collab/protocol";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +17,7 @@ import {
   canonicalSnapshotItemByteLength,
   cloneBoardItem,
   createBoardState,
+  createCanonicalSnapshot,
   findMoveCopyClosureLimitViolation,
   liveItemsInPaintOrder,
   type MoveCopyRelationshipItem,
@@ -1529,6 +1535,77 @@ describe("authoritative replay and snapshots", () => {
       changes: [{ kind: "item.remove", itemId: RECTANGLE_ID, version: 2 }],
     });
     expect(removed.size).toBe(0);
+  });
+
+  it("round-trips assistedBy through canonical snapshots", () => {
+    const state = applyDurableOperation(
+      createBoardState(),
+      { kind: "item.create", item: { ...rectangle(), assistedBy: "ai" } },
+      { seq: 1, actorId: ALICE },
+    ).state;
+    const items = liveItemsInPaintOrder(state);
+    expect(items[0]).toMatchObject({ assistedBy: "ai" });
+    const input = {
+      boardId: "018f0000-0000-7000-8000-0000000000ff",
+      seq: 1,
+      createdAt: 1_785_840_000_000,
+      settings: { title: "Assisted" },
+      items,
+    };
+    const snapshot = createCanonicalSnapshot(input);
+    expect(snapshot.items[0]).toMatchObject({ assistedBy: "ai" });
+    expect(Object.keys(snapshot.items[0] ?? {})).toEqual([
+      "id",
+      "kind",
+      "z",
+      "version",
+      "createdBy",
+      "assistedBy",
+      "style",
+      "transform",
+      "geometry",
+    ]);
+    const serialized = serializeCanonicalSnapshot(input);
+    const parsed = JSON.parse(serialized) as { items: unknown[] };
+    const restored = normalizeBoardItem(parsed.items[0]);
+    expect(restored).toEqual(snapshot.items[0]);
+    expect(restored.assistedBy).toBe("ai");
+    expect(canonicalSnapshotItemByteLength(restored)).toBe(
+      new TextEncoder().encode(JSON.stringify(parsed.items[0])).byteLength,
+    );
+    const { assistedBy: _assistedBy, ...plain } = items[0] as (typeof items)[number];
+    const unassisted = createCanonicalSnapshot({ ...input, items: [plain] });
+    expect(unassisted.items[0]).not.toHaveProperty("assistedBy");
+  });
+
+  it("round-trips the explicit video embed marker through canonical snapshots", () => {
+    const state = applyDurableOperation(
+      createBoardState(),
+      {
+        kind: "item.create",
+        item: {
+          ...text(),
+          geometry: {
+            ...text().geometry,
+            text: "https://vimeo.com/76979871",
+            embed: "video",
+          },
+        },
+      },
+      { seq: 1, actorId: ALICE },
+    ).state;
+    const input = {
+      boardId: "018f0000-0000-7000-8000-0000000000ff",
+      seq: 1,
+      createdAt: 1_785_840_000_000,
+      settings: { title: "Video" },
+      items: liveItemsInPaintOrder(state),
+    };
+    const snapshot = createCanonicalSnapshot(input);
+    expect(snapshot.items[0]).toMatchObject({ geometry: { embed: "video" } });
+    expect(normalizeBoardItem(JSON.parse(serializeCanonicalSnapshot(input)).items[0])).toEqual(
+      snapshot.items[0],
+    );
   });
 
   it("serializes stable top-level/item order and paint order", () => {

@@ -62,16 +62,10 @@ test("named Sections, grouped movement, typography, links, and export relationsh
   await page.mouse.click(stickyBounds.x + 12, stickyBounds.y + 12);
   const selectionActions = page.getByTestId("selection-actions");
   await expect(selectionActions).toBeVisible();
-  await selectionActions.getByLabel("Font family").selectOption("serif");
-  const stickyText = sticky.locator(".sticky-text");
-  await expect(stickyText).toHaveAttribute("font-family", /Georgia/u);
-  await selectionActions.getByRole("button", { name: "Bold" }).click();
-  await expect(stickyText).toHaveAttribute("font-weight", "700");
-  await selectionActions.getByRole("button", { name: "Italic" }).click();
-  await expect(stickyText).toHaveAttribute("font-style", "italic");
-  await selectionActions.getByRole("button", { name: "Underline" }).click();
-  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
-  await expect(stickyText).toHaveAttribute("text-decoration", "underline");
+  await expect(selectionActions.locator("[data-selection-font-controls]")).toBeHidden();
+  await expect(
+    selectionActions.getByRole("button", { name: "Change selected element colour" }),
+  ).toBeVisible();
 
   const sectionTitleBounds = await section.locator(".zone-title").boundingBox();
   if (!sectionTitleBounds) throw new Error("The Section title does not have rendered bounds.");
@@ -81,14 +75,17 @@ test("named Sections, grouped movement, typography, links, and export relationsh
   );
   await expect(page.locator("#selection-layer [data-resize-handle='southeast']")).toBeVisible();
   const sectionTitle = section.locator(".zone-title");
+  // Section titles are bold by default, so the first press turns bold off.
   const sectionBold = selectionActions.getByRole("button", { name: "Bold" });
-  await sectionBold.click();
   await expect(sectionBold).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
   await sectionBold.click();
   await expect(sectionBold).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
   await expect(sectionTitle).toHaveAttribute("font-weight", "normal");
+  await sectionBold.click();
+  await expect(sectionBold).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+  await expect(sectionTitle).toHaveAttribute("font-weight", "700");
 
   const sectionBefore = await section.getAttribute("transform");
   const stickyBefore = await sticky.getAttribute("transform");
@@ -101,7 +98,7 @@ test("named Sections, grouped movement, typography, links, and export relationsh
   await expect.poll(() => sticky.getAttribute("transform")).not.toBe(stickyBefore);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
-  await page.getByRole("button", { name: "Copy selected items" }).click();
+  await page.keyboard.press("Control+d");
   await expect(page.locator("#drawing-area .board-item-zone")).toHaveCount(2);
   await expect(page.locator("#drawing-area .board-item-sticky")).toHaveCount(2);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
@@ -129,7 +126,7 @@ test("named Sections, grouped movement, typography, links, and export relationsh
   );
   await expect.poll(() => stickies.nth(0).getAttribute("transform")).not.toBe(firstGroupTransform);
   await expect.poll(() => stickies.nth(1).getAttribute("transform")).not.toBe(secondGroupTransform);
-  await page.getByRole("button", { name: "Copy selected items" }).click();
+  await page.keyboard.press("Control+d");
   await expect(page.locator("#drawing-area .board-item-sticky")).toHaveCount(4);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
