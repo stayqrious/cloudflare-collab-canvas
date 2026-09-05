@@ -1,14 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isConfiguredValue } from "./deployment-config.ts";
 
-export function loadLocalEnv(path = ".env"): void {
-  if (!existsSync(path)) return;
+/** Parses a local env file without applying it; a missing file yields no values. */
+export function readLocalEnv(path = ".env"): Record<string, string> {
+  const values: Record<string, string> = {};
+  if (!existsSync(path)) return values;
   for (const rawLine of readFileSync(path, "utf8").split(/\r?\n/u)) {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
     const equals = line.indexOf("=");
     if (equals < 1) continue;
     const key = line.slice(0, equals).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || process.env[key] !== undefined) continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) continue;
     let value = line.slice(equals + 1).trim();
     if (
       value.length >= 2 &&
@@ -26,7 +29,14 @@ export function loadLocalEnv(path = ".env"): void {
       }
       value = url.hostname;
     }
-    process.env[key] = value;
+    values[key] = value;
+  }
+  return values;
+}
+
+export function loadLocalEnv(path = ".env"): void {
+  for (const [key, value] of Object.entries(readLocalEnv(path))) {
+    if (process.env[key] === undefined) process.env[key] = value;
   }
 }
 
@@ -35,7 +45,7 @@ export function requireEnvironment(names: readonly string[]): Record<string, str
   const missing: string[] = [];
   for (const name of names) {
     const value = process.env[name]?.trim();
-    if (!value || value.startsWith("replace-with-")) missing.push(name);
+    if (!value || !isConfiguredValue(value)) missing.push(name);
     else values[name] = value;
   }
   if (missing.length > 0) {

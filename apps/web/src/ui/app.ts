@@ -1,5 +1,8 @@
-import { boundsForItems, ZONE_TITLE_PADDING, zoneTitleBandHeight } from "@collab/geometry";
+import { ZONE_TITLE_PADDING, zoneTitleBandHeight } from "@collab/geometry";
 import {
+  ASSIST_ACTIONS,
+  type AssistAction,
+  type Assistance,
   BOARD_FEATURE_KEYS,
   type BoardFeatureKey,
   type BoardFeatures,
@@ -15,7 +18,7 @@ import {
   validateClientFrame,
   validateDurableOperation,
 } from "@collab/protocol";
-import { renderSvgItem } from "@collab/svg-export";
+import { boundsForSvgItems, renderSvgItem, type SvgItemOptions } from "@collab/svg-export";
 import {
   buildOrganisationTemplateBatch,
   OrganisationTemplateError,
@@ -23,18 +26,23 @@ import {
 } from "../activities/organisation-templates";
 import {
   ACTIVITY_TEMPLATES,
+  type ActivityTemplate,
   type ActivityTemplateId,
   buildActivityBatch,
 } from "../activities/templates";
 import { buildClearVoteDeletes, isVoteTable, summarizeVotes } from "../activities/voting";
-import { BoardModel, SequenceError } from "../board/model";
+import { VIDEO_EMBED_HEIGHT, VIDEO_EMBED_WIDTH, videoEmbedFromText } from "../board/links";
+import { mathExportOptions } from "../board/math-export";
+import { BoardModel, SequenceError, translateMatrix } from "../board/model";
 import { BoardRenderer, STICKY_PADDING } from "../board/renderer";
+import { randomBoardName } from "../board-name";
 import {
   BRAND_MARK_HTML,
   brandedDocumentTitle,
   PRODUCT_HOME_LABEL,
   PRODUCT_NAME,
 } from "../branding";
+import { clearTypesetMath, typesetMath } from "../mathjax";
 import { DRAWING_COLOR_VALUES, DRAWING_COLORS, STICKY_COLORS, UI_COLORS } from "../palette";
 import {
   DurableOutbox,
@@ -52,6 +60,7 @@ import {
   DEFAULT_STICKY_HEIGHT,
   DEFAULT_STICKY_WIDTH,
   assignCreatedItemsToSections as decorateCreatedItemsWithSections,
+  type ImageAssetMetadata,
   type ShapeVariant,
   sectionIdAfterBoundsChange,
   ToolController,
@@ -61,6 +70,7 @@ import {
   type ApiClient,
   ApiError,
   type AttributedDataExport,
+  type BoardImageAsset,
   type FragmentClaim,
   type ManagedInvitation,
   type OrganisationTemplate,
@@ -72,9 +82,11 @@ import type {
   AccessMode,
   Actor,
   BatchItemOperation,
+  BoardComment,
   BoardItem,
   BoardSnapshot,
   Bootstrap,
+  CommentMedia,
   CommitFrame,
   ConnectionPhase,
   DrawingPolicy,
@@ -98,7 +110,38 @@ import type {
   TextFontWeight,
   ToolName,
 } from "../types";
-import { canRoleDraw, createId, PROTOCOL_VERSION } from "../types";
+import { canRoleComment, canRoleDraw, createId, PROTOCOL_VERSION } from "../types";
+import { ActivityTemplateWebMcp } from "../webmcp/activity-templates";
+import { BoardWriteWebMcp, type StickyMove } from "../webmcp/board-writes";
+import { ClassDecisionWebMcp } from "../webmcp/class-decision";
+import { CollectiveInquiryWebMcp } from "../webmcp/collective-inquiry";
+import { EducationPartnerWebMcp, type EducationVisualSource } from "../webmcp/education-partner";
+import { InquiryMapWebMcp } from "../webmcp/inquiry-map";
+import {
+  ASSIST_GUIDANCE,
+  ASSIST_NOTE_MAX_LENGTH,
+  assistActionLabel,
+  PROBLEM_STEP_WATCH_DURATION_MS,
+  type WatchState,
+} from "../webmcp/problem-step-watch";
+import {
+  isVisibleWebMcpActivityCall,
+  observeWebMcpRegistry,
+  type WebMcpRegistryState,
+  webMcpRegistryState,
+} from "../webmcp/shared";
+import { MathFieldPanel } from "./math-field";
+import {
+  type MathRegion,
+  mathRegionAtCaret,
+  replaceMathRegion,
+  unclosedOpeningAt,
+} from "./math-region";
+
+// The four-point glitter mark is the conventional "ask the AI" affordance: a sparkle rather than
+// an "AI" badge, so the button reads as a request you can make and twinkles under the pointer.
+const aiSparkleIcon = (extraClass = ""): string =>
+  `<span class="ai-sparkle${extraClass ? ` ${extraClass}` : ""}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor" focusable="false" aria-hidden="true"><path class="ai-sparkle-core" d="M10.5 4Q10.5 12.5 19 12.5Q10.5 12.5 10.5 21Q10.5 12.5 2 12.5Q10.5 12.5 10.5 4Z"/><path class="ai-sparkle-spark" d="M18.5 1.5Q18.5 5 22 5Q18.5 5 18.5 8.5Q18.5 5 15 5Q18.5 5 18.5 1.5Z"/><path class="ai-sparkle-spark ai-sparkle-spark-late" d="M19.5 15.5Q19.5 18 22 18Q19.5 18 19.5 20.5Q19.5 18 17 18Q19.5 18 19.5 15.5Z"/></svg></span>`;
 
 const TOOL_DEFINITIONS: Array<{
   name: ToolName;
@@ -112,16 +155,25 @@ const TOOL_DEFINITIONS: Array<{
   { name: "pan", label: "Pan canvas", dockLabel: "Hand", shortcut: "H", glyph: "✋" },
   { name: "pencil", label: "Pencil", dockLabel: "Draw", shortcut: "P", glyph: "✎" },
   { name: "line", label: "Straight line", dockLabel: "Line", shortcut: "L", glyph: "╱" },
-  { name: "rectangle", label: "Shapes", dockLabel: "Shape", shortcut: "R", glyph: "□" },
   {
-    name: "protractor",
-    label: "Tools",
-    dockLabel: "Tools",
-    shortcut: "U",
-    glyph: "∠",
+    name: "rectangle",
+    label: "Shapes",
+    dockLabel: "Shape",
+    shortcut: "R",
+    glyph: "",
+    iconSvg:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M12 4 21 20H3Z"/></svg>',
   },
   { name: "text", label: "Text", dockLabel: "Text", shortcut: "T", glyph: "T" },
-  { name: "sticky", label: "Sticky note", dockLabel: "Sticky", shortcut: "N", glyph: "▣" },
+  {
+    name: "sticky",
+    label: "Sticky note",
+    dockLabel: "Sticky",
+    shortcut: "N",
+    glyph: "",
+    iconSvg:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M5 3h14v12l-6 6H5Z"/><path d="M13 21v-6h6"/></svg>',
+  },
   {
     name: "image",
     label: "Add image",
@@ -133,7 +185,15 @@ const TOOL_DEFINITIONS: Array<{
   },
   { name: "table", label: "Table", dockLabel: "Table", shortcut: "G", glyph: "▦" },
   { name: "stamp", label: "Stamp", dockLabel: "Stamp", shortcut: "K", glyph: "★" },
-  { name: "zone", label: "Section", dockLabel: "Section", shortcut: "Z", glyph: "▭" },
+  {
+    name: "zone",
+    label: "Section",
+    dockLabel: "Section",
+    shortcut: "Z",
+    glyph: "",
+    iconSvg:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M8 8h8v8H8z" opacity=".45"/></svg>',
+  },
   {
     name: "eraser",
     label: "Eraser",
@@ -144,6 +204,8 @@ const TOOL_DEFINITIONS: Array<{
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="m7 21-4-4a2.83 2.83 0 0 1 0-4L13.1 2.9a2.83 2.83 0 0 1 4 0l4 4a2.83 2.83 0 0 1 0 4L11 21"/><path d="m5 11 9 9"/><path d="M21 21H7"/></svg>',
   },
 ];
+
+const MORE_TOOL_NAMES = new Set<ToolName>(["stamp", "image", "table", "protractor"]);
 
 const DRAW_TOOLS = new Set<ToolName>([
   "pencil",
@@ -203,6 +265,48 @@ const FEATURE_LABELS: Readonly<Record<BoardFeatureKey, { label: string; detail: 
   voting: { label: "Voting", detail: "Vote controls on templates" },
   spotlight: { label: "Follow me", detail: "Coach-led viewport spotlight" },
 };
+
+/**
+ * A template that seeds a vote is hidden rather than disabled when voting is off, as the stamp
+ * vote always has been. Both such templates are covered here so the activities menu, the WebMCP
+ * catalogue, and the insert can never disagree about what this Space offers.
+ */
+export function templateHiddenByVoting(
+  templateId: ActivityTemplateId,
+  features: BoardFeatures,
+): boolean {
+  return (
+    (templateId === "vote-with-stamps" || templateId === "collective-inquiry-demo") &&
+    !features.voting
+  );
+}
+
+/** Why this Space cannot take a WebMCP-written object of this kind, or null when it can. */
+export function webMcpWriteFeatureIssue(
+  kind: "sticky" | "image" | "video",
+  features: BoardFeatures,
+): string | null {
+  if (kind === "sticky") {
+    return features.stickyNotes ? null : "Enable sticky notes to add one to this Space.";
+  }
+  if (kind === "image") {
+    return features.images ? null : "Enable images to add an image card to this Space.";
+  }
+  // A video embed is a canvas text object carrying a video link, so it follows the text feature.
+  return features.text ? null : "Enable text to embed a video in this Space.";
+}
+
+/** Why this board cannot insert the template, or null when it can. */
+export function templateAvailabilityIssue(
+  template: ActivityTemplate,
+  features: BoardFeatures,
+): string | null {
+  if (!features.templates) return "Enable templates to use this template.";
+  if (templateHiddenByVoting(template.id, features)) {
+    return "Enable voting to use this template.";
+  }
+  return templateFeatureIssue(template.items, features);
+}
 
 export function templateFeatureIssue(
   items: readonly { kind: string; geometry?: unknown; transform?: readonly number[] }[],
@@ -276,7 +380,7 @@ function featureForTemplateItem(item: {
 }
 
 const BRUSH_PRESETS = {
-  pen: { width: 4, opacity: 1 },
+  pen: { width: 2, opacity: 1 },
   marker: { width: 10, opacity: 1 },
   highlighter: { width: 20, opacity: 0.35 },
 } as const;
@@ -380,7 +484,7 @@ export function imageUploadIssue(image: Pick<Blob, "size" | "type">): string | n
   return null;
 }
 
-async function privacySafeImageUpload(image: File): Promise<Blob> {
+async function privacySafeImageUpload(image: Blob): Promise<Blob> {
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(image, { imageOrientation: "from-image" });
@@ -426,6 +530,124 @@ async function privacySafeImageUpload(image: File): Promise<Blob> {
   }
 }
 
+const MEME_CANVAS_WIDTH = 1_200;
+const MEME_CANVAS_HEIGHT = 675;
+
+const MEME_PALETTES: Record<
+  Extract<EducationVisualSource, { format: "meme_card" }>["palette"],
+  readonly [string, string, string]
+> = {
+  sunset: ["#ff7657", "#ffbd59", "#642b73"],
+  ocean: ["#006d77", "#00b4d8", "#caf0f8"],
+  lime: ["#1b4332", "#70e000", "#d8f3dc"],
+  violet: ["#3c096c", "#9d4edd", "#ff9eeb"],
+  chalkboard: ["#172a24", "#315c4c", "#f4e8c1"],
+  confetti: ["#ff4d6d", "#4361ee", "#ffd60a"],
+};
+
+function inlineImageDataUrlBlob(value: string): Blob {
+  const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/u.exec(value);
+  if (!match?.[1] || !match[2]) {
+    throw new ImagePreparationError(
+      "The generated image must be an inline PNG, JPEG, WebP, or GIF.",
+    );
+  }
+  let decoded: string;
+  try {
+    decoded = atob(match[2]);
+  } catch {
+    throw new ImagePreparationError("The generated image data could not be decoded.");
+  }
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  const blob = new Blob([bytes], { type: match[1] });
+  const issue = imageUploadIssue(blob);
+  if (issue) throw new ImagePreparationError(issue);
+  return blob;
+}
+
+async function educationVisualBlob(source: EducationVisualSource): Promise<Blob> {
+  if (source.format === "inline_image") return inlineImageDataUrlBlob(source.imageDataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = MEME_CANVAS_WIDTH;
+  canvas.height = MEME_CANVAS_HEIGHT;
+  const context = canvas.getContext("2d");
+  if (!context) throw new ImagePreparationError("The class meme could not be rendered.");
+  const colors = MEME_PALETTES[source.palette];
+  const gradient = context.createLinearGradient(0, 0, MEME_CANVAS_WIDTH, MEME_CANVAS_HEIGHT);
+  gradient.addColorStop(0, colors[0]);
+  gradient.addColorStop(0.58, colors[1]);
+  gradient.addColorStop(1, colors[2]);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, MEME_CANVAS_WIDTH, MEME_CANVAS_HEIGHT);
+
+  context.fillStyle = "rgba(12, 10, 22, 0.3)";
+  context.fillRect(0, 0, MEME_CANVAS_WIDTH, 172);
+  context.fillRect(0, MEME_CANVAS_HEIGHT - 196, MEME_CANVAS_WIDTH, 196);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = "180px sans-serif";
+  context.fillStyle = "rgba(255, 255, 255, 0.95)";
+  context.fillText(source.emoji, MEME_CANVAS_WIDTH / 2, MEME_CANVAS_HEIGHT / 2 + 4);
+  drawMemeCopy(context, source.headline.toLocaleUpperCase(), 82, 56, 2);
+  drawMemeCopy(context, source.punchline.toLocaleUpperCase(), MEME_CANVAS_HEIGHT - 98, 50, 3);
+
+  const rendered = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!rendered) throw new ImagePreparationError("The class meme could not be rendered.");
+  return rendered;
+}
+
+function drawMemeCopy(
+  context: CanvasRenderingContext2D,
+  text: string,
+  centerY: number,
+  initialFontSize: number,
+  maxLines: number,
+): void {
+  let fontSize = initialFontSize;
+  let lines: string[] = [];
+  while (fontSize >= 30) {
+    context.font = `800 ${fontSize}px sans-serif`;
+    lines = wrapCanvasText(context, text, MEME_CANVAS_WIDTH - 100);
+    if (lines.length <= maxLines) break;
+    fontSize -= 4;
+  }
+  lines = lines.slice(0, maxLines);
+  const lineHeight = fontSize * 1.08;
+  const firstY = centerY - ((lines.length - 1) * lineHeight) / 2;
+  context.lineJoin = "round";
+  context.lineWidth = Math.max(5, fontSize / 9);
+  context.strokeStyle = "rgba(18, 13, 28, 0.94)";
+  context.fillStyle = "#ffffff";
+  lines.forEach((line, index) => {
+    const y = firstY + index * lineHeight;
+    context.strokeText(line, MEME_CANVAS_WIDTH / 2, y);
+    context.fillText(line, MEME_CANVAS_WIDTH / 2, y);
+  });
+}
+
+function wrapCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/u)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && context.measureText(candidate).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
 export function clampImageAlt(value: string): string {
   return [...value].slice(0, MAX_IMAGE_ALT_CODE_POINTS).join("");
 }
@@ -448,6 +670,8 @@ export function elementColour(item: BoardItem): string | null {
       return item.style.fill;
     case "image":
       return null;
+    case "text":
+      return item.geometry.embed === "video" ? null : item.style.color;
     default:
       return item.style.color;
   }
@@ -457,11 +681,16 @@ export function buildElementColourOperations(
   items: readonly BoardItem[],
   color: string,
 ): BatchItemOperation[] {
-  if (items.length === 0 || items.some((item) => item.version <= 0 || item.kind === "image")) {
+  if (
+    items.length === 0 ||
+    items.some((item) => item.version <= 0 || elementColour(item) === null)
+  ) {
     return [];
   }
   return items.flatMap((item) => {
-    if (item.kind === "image") return [];
+    if (item.kind === "image" || (item.kind === "text" && item.geometry.embed === "video")) {
+      return [];
+    }
     const nextStyle =
       item.kind === "sticky" || item.kind === "table" || item.kind === "zone"
         ? item.style.fill === color
@@ -496,6 +725,17 @@ type TextWeightItem = {
   style: { fontWeight?: TextFontWeight };
 };
 
+type TextStyleItem = Extract<BoardItem, { kind: "text" | "sticky" | "table" | "zone" }>;
+
+function supportsTextStyling(item: BoardItem): item is TextStyleItem {
+  return (
+    (item.kind === "text" && item.geometry.embed !== "video") ||
+    item.kind === "sticky" ||
+    item.kind === "table" ||
+    item.kind === "zone"
+  );
+}
+
 export function effectiveTextFontWeight(item: TextWeightItem): TextFontWeight {
   return item.style.fontWeight ?? (item.kind === "zone" ? "bold" : "normal");
 }
@@ -506,13 +746,7 @@ export function buildTextStyleOperations(
   allItems: Iterable<BoardItem> = items,
   assignNewMembership = true,
 ): BatchItemOperation[] {
-  const textItems = items.filter(
-    (item) =>
-      item.kind === "text" ||
-      item.kind === "sticky" ||
-      item.kind === "table" ||
-      item.kind === "zone",
-  );
+  const textItems = items.filter(supportsTextStyling);
   if (
     textItems.length !== items.length ||
     textItems.length === 0 ||
@@ -570,6 +804,70 @@ export function savedAuthoritativeItems(
   }
   return result;
 }
+
+/**
+ * Why a set of per-note translations would tear apart objects the board moves as one, or null
+ * when it would not.
+ *
+ * `buildTranslationMembershipOperations` spreads a move outwards to a fixed point over two
+ * relations — everything sharing an explicit group travels together, and a Section that moves
+ * carries its members — but it never overrides a delta the call supplied. So when that spread
+ * reaches another named note holding a different delta, the two end up translated by different
+ * amounts while still grouped, or with a member drifting away from the Section it still claims:
+ * states no drag can produce, because a drag moves a whole selection by one delta.
+ *
+ * The walk mirrors that spread rather than approximating it. In particular the Section relation
+ * is one-way: a Section carries its members, but a member does not carry its Section, so two
+ * notes that merely share a Section are independent and are not refused. A note that already
+ * holds its own delta stops the walk, exactly as a direct update stops the propagation; its own
+ * walk covers whatever lies beyond it.
+ */
+export function conflictingMoveIssue(
+  named: readonly BoardItem[],
+  deltaById: ReadonlyMap<string, { x: number; y: number }>,
+  boardItems: Iterable<BoardItem>,
+): string | null {
+  const byGroup = new Map<string, BoardItem[]>();
+  const bySection = new Map<string, BoardItem[]>();
+  for (const item of boardItems) {
+    if (item.groupId) byGroup.set(item.groupId, [...(byGroup.get(item.groupId) ?? []), item]);
+    if (item.sectionId) {
+      bySection.set(item.sectionId, [...(bySection.get(item.sectionId) ?? []), item]);
+    }
+  }
+  const requested = new Map(named.map((item) => [item.id, deltaById.get(item.id) ?? ZERO_DELTA]));
+
+  for (const start of named) {
+    const delta = requested.get(start.id) ?? ZERO_DELTA;
+    const seen = new Set([start.id]);
+    const queue: BoardItem[] = [start];
+    for (let index = 0; index < queue.length; index += 1) {
+      const item = queue[index];
+      if (!item) continue;
+      const carried = [
+        ...(item.groupId ? (byGroup.get(item.groupId) ?? []) : []),
+        ...(item.kind === "zone" ? (bySection.get(item.id) ?? []) : []),
+      ];
+      for (const related of carried) {
+        if (seen.has(related.id)) continue;
+        seen.add(related.id);
+        const other = requested.get(related.id);
+        if (other) {
+          if (other.x !== delta.x || other.y !== delta.y) return CONFLICTING_MOVE_MESSAGE;
+          // Its own delta is what spreads from here, and its own walk already covers that.
+          continue;
+        }
+        queue.push(related);
+      }
+    }
+  }
+  return null;
+}
+
+const ZERO_DELTA = { x: 0, y: 0 } as const;
+
+const CONFLICTING_MOVE_MESSAGE =
+  "Some of these notes are grouped together, or sit in a Section another of them carries, so the board moves them as one unit. Sending them to different places would pull that unit apart. Give every note the board moves together the same shift — a note asked to stay put counts as a different shift — or name just one of them and let the rest follow it.";
 
 export function lockedSectionIdForItem(
   item: BoardItem,
@@ -808,16 +1106,39 @@ export class BoardApp {
   private readonly renderer: BoardRenderer;
   private readonly tools: ToolController;
   private readonly socket: BoardSocket;
+  private webMcp: CollectiveInquiryWebMcp | null = null;
+  private inquiryMapWebMcp: InquiryMapWebMcp | null = null;
+  private classDecisionWebMcp: ClassDecisionWebMcp | null = null;
+  private educationPartnerWebMcp: EducationPartnerWebMcp | null = null;
+  private activityTemplateWebMcp: ActivityTemplateWebMcp | null = null;
+  private boardWriteWebMcp: BoardWriteWebMcp | null = null;
+  private readonly pendingWebMcpCommits = new PendingCommitTracker();
+  /** True until the board first becomes editable, when the landing tool is chosen. */
+  private landingToolPending = true;
+  private aiWatchState: WatchState = { phase: "idle", expiresAt: null, watchedItemIds: new Set() };
+  private webMcpState: WebMcpRegistryState = webMcpRegistryState();
+  private stopObservingWebMcp: (() => void) | null = null;
+  private mathFieldPanel: MathFieldPanel | null = null;
+  private mathFieldTarget: {
+    editor: HTMLTextAreaElement | HTMLInputElement;
+    region: MathRegion;
+    onValueChanged: () => void;
+    /** Finishes the edit the field belongs to, as that editor's own blur would. */
+    finish: (save: boolean) => void;
+  } | null = null;
+  private webMcpWatchCountdown: number | null = null;
+  private aiAssistSelectionKey = "";
+  private readonly pendingRenderedTextSectionUpdates = new Set<string>();
   private bootstrap: Bootstrap;
   private phase: ConnectionPhase = "idle";
   private history: HistoryState;
   private style: StyleState = {
     color: DRAWING_COLOR_VALUES.ink,
-    width: 4,
+    width: 2,
     opacity: 1,
     lineArrowhead: "none",
     shapeVariant: "rectangle",
-    fontSize: 28,
+    fontSize: 20,
     fontFamily: "sans",
     stickyFill: STICKY_COLORS[0].value,
     stickyTextColor: UI_COLORS.ink,
@@ -844,13 +1165,13 @@ export class BoardApp {
   private expiredRecovery: OutboxEntry[] = [];
   private previewExpiryTimer: number;
   private textEditor: HTMLTextAreaElement | null = null;
-  private textEditorTimer: number | null = null;
   private textEditContext: CapturedTextEdit | null = null;
   private textEditorMode: "text" | "sticky" | null = null;
   private textEditorPreview: (() => void) | null = null;
   private textEditorClosing = false;
   private textEditorCloseAttempt = 0;
   private imageUploadInFlight = false;
+  private videoEmbedPending = false;
   private imageAltEdit: ImageAltEdit | null = null;
   private tableCellEditor: HTMLTextAreaElement | null = null;
   private tableCellEdit: TableCellEdit | null = null;
@@ -863,7 +1184,28 @@ export class BoardApp {
   private readonly pendingZoneTitleDrafts = new Map<string, ZoneTitleDraftRecovery>();
   private readonly rejectedZoneTitleDrafts: ZoneTitleDraftRecovery[] = [];
   private readonly pendingNewZoneTitles = new Set<string>();
+  private readonly comments = new CommentStore(
+    (itemId) => this.model.getItem(itemId) !== undefined,
+  );
+  private readonly commentsResolving = new Set<string>();
+  private activeCommentTargetId: string | null = null;
+  /** The one object whose comments the drawer shows, when opened from its marker. */
+  private commentsFocusItemId: string | null = null;
+  private showHiddenComments = false;
+  private commentSubmitting = false;
+  private commentsLoading = true;
+  /** The picture or video the composer will send with the next comment, if any. */
+  private pendingCommentMedia: CommentMedia | null = null;
+  private commentImageUploading = false;
+  /** The comment whose video the participant is playing in the drawer, if any. */
+  private playingCommentVideoId: string | null = null;
+  /** Set when a render was withheld to keep a playing comment video alive. */
+  private commentsRenderPending = false;
+  /** Object URLs for the pictures comments carry, one per asset, revoked on teardown. */
+  private readonly commentImageUrls = new Map<string, Promise<string>>();
   private accessMembers: Member[] = [];
+  private readonly participantRoleChangesPending = new Set<string>();
+  private participantRenderPending = false;
   private managedInvitations: ManagedInvitation[];
   private recoverySnapshots: RecoverySnapshot[] = [];
   private outboxAvailable = true;
@@ -886,9 +1228,27 @@ export class BoardApp {
   private readonly titleInput: HTMLInputElement;
   private readonly saveStatus: HTMLElement;
   private readonly saveStatusText: HTMLElement;
+  private readonly participantsButton: HTMLButtonElement;
   private readonly participantCount: HTMLElement;
   private readonly participantDrawer: HTMLElement;
   private readonly participantList: HTMLElement;
+  private readonly commentsButton: HTMLButtonElement;
+  private readonly commentsCount: HTMLElement;
+  private readonly commentsDrawer: HTMLElement;
+  private readonly commentsList: HTMLElement;
+  private readonly commentComposer: HTMLElement;
+  private readonly commentTargetLabel: HTMLElement;
+  private readonly commentInput: HTMLTextAreaElement;
+  private readonly commentImageInput: HTMLInputElement;
+  private readonly commentAttachment: HTMLElement;
+  private readonly commentAttachmentLabel: HTMLElement;
+  private readonly commentImageAltInput: HTMLInputElement;
+  private readonly commentVideoField: HTMLElement;
+  private readonly commentVideoUrl: HTMLInputElement;
+  private readonly showHiddenCommentsInput: HTMLInputElement;
+  private readonly commentsFilter: HTMLElement;
+  private readonly commentsEyebrow: HTMLElement;
+  private readonly commentsHeading: HTMLElement;
   private readonly spotlightToggle: HTMLButtonElement;
   private readonly spotlightFollowBanner: HTMLElement;
   private readonly spotlightFollowText: HTMLElement;
@@ -903,13 +1263,30 @@ export class BoardApp {
   private readonly shapeMenu: HTMLElement;
   private readonly toolsMenu: HTMLElement;
   private readonly stylePopover: HTMLElement;
-  private readonly exportMenu: HTMLElement;
+  private readonly moreToolsButton: HTMLButtonElement;
+  private toolRailResizeObserver: ResizeObserver | null = null;
   private readonly selectionActions: HTMLElement;
+  private readonly aiAssistWrap: HTMLElement;
+  private readonly aiAssistButton: HTMLButtonElement;
+  private readonly aiAssistMenu: HTMLElement;
+  private readonly aiAssistNote: HTMLInputElement;
+  private readonly webMcpStatus: HTMLButtonElement;
+  private readonly webMcpStatusText: HTMLElement;
+  private readonly webMcpStatusTime: HTMLElement;
+  private readonly mcpActivityMenu: HTMLElement;
+  private readonly mcpActivitySummary: HTMLElement;
+  private readonly mcpActivityList: HTMLOListElement;
+  private readonly mcpActivityEmpty: HTMLElement;
+  private readonly aiShareButton: HTMLButtonElement;
+  private readonly aiShareMenu: HTMLElement;
+  private readonly aiShareNote: HTMLInputElement;
   private readonly selectionColourButton: HTMLButtonElement;
   private readonly selectionColourMenu: HTMLElement;
   private readonly arrangeButton: HTMLButtonElement;
   private readonly arrangeMenu: HTMLElement;
   private readonly imageInput: HTMLInputElement;
+  private readonly videoEmbedDialog: HTMLDialogElement;
+  private readonly videoEmbedUrl: HTMLInputElement;
   private readonly tablePickerDialog: HTMLDialogElement;
   private readonly imageAltDialog: HTMLDialogElement;
   private readonly imageAltInput: HTMLTextAreaElement;
@@ -946,9 +1323,51 @@ export class BoardApp {
     this.titleInput = query(this.root, "[data-testid='board-title']", HTMLInputElement);
     this.saveStatus = query(this.root, "[data-testid='save-status']", HTMLElement);
     this.saveStatusText = query(this.root, "[data-save-status-text]", HTMLElement);
+    this.participantsButton = query(
+      this.root,
+      "[data-testid='participants-button']",
+      HTMLButtonElement,
+    );
     this.participantCount = query(this.root, "[data-participant-count]", HTMLElement);
     this.participantDrawer = query(this.root, "[data-testid='participant-drawer']", HTMLElement);
     this.participantList = query(this.root, "[data-participant-list]", HTMLElement);
+    this.commentsButton = query(this.root, "[data-testid='comments-button']", HTMLButtonElement);
+    this.commentsCount = query(this.commentsButton, "[data-comments-count]", HTMLElement);
+    this.commentsDrawer = query(this.root, "[data-testid='comments-drawer']", HTMLElement);
+    this.commentsList = query(this.commentsDrawer, "[data-comments-list]", HTMLElement);
+    this.commentComposer = query(this.commentsDrawer, "[data-comment-composer]", HTMLElement);
+    this.commentTargetLabel = query(this.commentComposer, "[data-comment-target]", HTMLElement);
+    this.commentInput = query(this.commentComposer, "[data-comment-input]", HTMLTextAreaElement);
+    this.commentImageInput = query(
+      this.commentComposer,
+      "[data-comment-image-input]",
+      HTMLInputElement,
+    );
+    this.commentAttachment = query(this.commentComposer, "[data-comment-attachment]", HTMLElement);
+    this.commentAttachmentLabel = query(
+      this.commentAttachment,
+      "[data-comment-attachment-label]",
+      HTMLElement,
+    );
+    this.commentImageAltInput = query(
+      this.commentAttachment,
+      "[data-comment-image-alt]",
+      HTMLInputElement,
+    );
+    this.commentVideoField = query(this.commentComposer, "[data-comment-video-field]", HTMLElement);
+    this.commentVideoUrl = query(
+      this.commentVideoField,
+      "[data-comment-video-url]",
+      HTMLInputElement,
+    );
+    this.showHiddenCommentsInput = query(
+      this.commentsDrawer,
+      "[data-show-hidden-comments]",
+      HTMLInputElement,
+    );
+    this.commentsFilter = query(this.commentsDrawer, "[data-comments-filter]", HTMLElement);
+    this.commentsEyebrow = query(this.commentsDrawer, "[data-comments-eyebrow]", HTMLElement);
+    this.commentsHeading = query(this.commentsDrawer, "[data-comments-heading]", HTMLElement);
     this.spotlightToggle = query(this.root, "[data-testid='spotlight-toggle']", HTMLButtonElement);
     this.spotlightFollowBanner = query(
       this.root,
@@ -976,8 +1395,30 @@ export class BoardApp {
     this.shapeMenu = query(this.root, "[data-testid='shape-menu']", HTMLElement);
     this.toolsMenu = query(this.root, "[data-testid='tools-menu']", HTMLElement);
     this.stylePopover = query(this.root, "[data-testid='style-popover']", HTMLElement);
-    this.exportMenu = query(this.root, "[data-testid='export-menu']", HTMLElement);
     this.selectionActions = query(this.root, "[data-testid='selection-actions']", HTMLElement);
+    this.moreToolsButton = query(this.root, "[data-testid='tool-more']", HTMLButtonElement);
+    this.aiAssistWrap = query(this.selectionActions, "[data-selection-ai-wrap]", HTMLElement);
+    this.aiAssistButton = query(this.selectionActions, "[data-selection-ai]", HTMLButtonElement);
+    this.aiAssistMenu = query(this.selectionActions, "[data-testid='ai-assist-menu']", HTMLElement);
+    this.aiAssistNote = query(this.aiAssistMenu, "[data-ai-assist-note]", HTMLInputElement);
+    this.webMcpStatus = query(this.root, "[data-webmcp-status]", HTMLButtonElement);
+    this.webMcpStatusText = query(this.root, "[data-webmcp-status-text]", HTMLElement);
+    this.webMcpStatusTime = query(this.root, "[data-webmcp-status-time]", HTMLElement);
+    this.mcpActivityMenu = query(this.root, "[data-testid='mcp-activity-menu']", HTMLElement);
+    this.mcpActivitySummary = query(
+      this.mcpActivityMenu,
+      "[data-mcp-activity-summary]",
+      HTMLElement,
+    );
+    this.mcpActivityList = query(
+      this.mcpActivityMenu,
+      "[data-mcp-activity-list]",
+      HTMLOListElement,
+    );
+    this.mcpActivityEmpty = query(this.mcpActivityMenu, "[data-mcp-activity-empty]", HTMLElement);
+    this.aiShareButton = query(this.root, "[data-ai-share]", HTMLButtonElement);
+    this.aiShareMenu = query(this.root, "[data-testid='ai-share-menu']", HTMLElement);
+    this.aiShareNote = query(this.aiShareMenu, "[data-ai-share-note]", HTMLInputElement);
     this.selectionColourButton = query(
       this.selectionActions,
       "[data-selection-colour]",
@@ -995,6 +1436,12 @@ export class BoardApp {
     );
     this.arrangeMenu = query(this.selectionActions, "[data-testid='arrange-menu']", HTMLElement);
     this.imageInput = query(this.root, "[data-image-input]", HTMLInputElement);
+    this.videoEmbedDialog = query(
+      this.root,
+      "[data-testid='video-embed-dialog']",
+      HTMLDialogElement,
+    );
+    this.videoEmbedUrl = query(this.videoEmbedDialog, "[data-video-url]", HTMLInputElement);
     this.tablePickerDialog = query(this.root, "[data-testid='table-picker']", HTMLDialogElement);
     this.imageAltDialog = query(this.root, "[data-testid='image-alt-dialog']", HTMLDialogElement);
     this.imageAltInput = query(this.imageAltDialog, "[data-image-alt-input]", HTMLTextAreaElement);
@@ -1027,12 +1474,15 @@ export class BoardApp {
       this.model,
       (assetId) => this.api.boardImage(this.bootstrap.board.id, assetId),
       (actorId) => this.creatorNames.get(actorId),
+      (itemId, expectedVersion) =>
+        this.reconcileRenderedTextSectionMembership(itemId, expectedVersion),
     );
     this.renderer.setVotingEnabled(this.bootstrap.board.features.voting);
     this.renderer.setObjectTransformsEnabled(this.bootstrap.board.features.objectTransforms);
     this.renderer.viewport.subscribe((zoom) => {
       this.zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
       this.renderer.refreshSelection();
+      this.renderer.refreshComments();
     });
     this.unsubscribeViewport = this.renderer.viewport.subscribeView(() => {
       this.scheduleSpotlightViewportUpdate();
@@ -1067,7 +1517,7 @@ export class BoardApp {
       },
       onToolChanged: (tool) => {
         this.setActiveToolButton(tool);
-        if (tool === "stamp") this.setStylePopoverOpen(true);
+        if (tool === "stamp" || tool === "sticky") this.setStylePopoverOpen(true);
         this.setTablePickerOpen(tool === "table");
         if (tool === "image") {
           this.setStylePopoverOpen(false);
@@ -1105,8 +1555,10 @@ export class BoardApp {
           this.flushOutbox();
           this.socket.sendPresence(null, this.tools.tool);
           this.sendCurrentSpotlight();
+          void this.reloadComments(false);
         },
         onRejected: (frame) => this.handleRejection(frame),
+        onCommentsChanged: () => void this.reloadComments(false),
         onHistory: (state) => {
           this.history = state;
           this.updateHistoryControls();
@@ -1123,12 +1575,152 @@ export class BoardApp {
       api.embedSessionToken,
     );
 
+    this.webMcpState = webMcpRegistryState();
+    this.renderWebMcpStatus(this.webMcpState);
+    this.stopObservingWebMcp = observeWebMcpRegistry((state) => {
+      this.renderWebMcpStatus(state);
+    });
+
+    this.mathFieldPanel = new MathFieldPanel({
+      root: this.root,
+      onChange: this.applyMathField,
+      onDone: this.finishMathField,
+      onFocusLeft: this.leaveMathField,
+    });
+
+    this.webMcp = new CollectiveInquiryWebMcp({
+      root: this.root,
+      getSelectedItems: () =>
+        savedAuthoritativeItems(
+          [...this.tools.selection],
+          this.model.items,
+          this.model.authoritativeItems,
+        ),
+      getBoardItems: () => [...this.model.authoritativeItems.values()],
+      getAuthoritativeItem: (itemId) => this.model.authoritativeItems.get(itemId),
+      getSequence: () => this.model.lastAppliedSeq,
+      getParticipantDisplayName: (participantId) => this.creatorNames.get(participantId) ?? null,
+      notify: (message, kind) => this.notify(message, kind),
+      canComment: () => this.canComment(),
+      canWrite: () => this.canCommit(),
+      createComment: (itemId, body, assistance) => this.commentFromWebMcp(itemId, body, assistance),
+      onWatchStateChanged: (state) => this.setAiWatchState(state),
+    });
+
+    this.educationPartnerWebMcp = new EducationPartnerWebMcp({
+      canWrite: () => this.canCommit(),
+      getSnapshot: (token) => this.webMcp?.getSnapshot(token),
+      getItemVersion: (itemId) => this.model.authoritativeItems.get(itemId)?.version,
+      getItemBounds: (itemId) => this.model.getBounds(itemId),
+      getPlacementBounds: () => this.model.boundsFor(this.model.items.keys()),
+      imagesEnabled: () => this.bootstrap.board.imagesEnabled,
+      storeVisualImages: (sources, signal) => this.storeEducationVisualImages(sources, signal),
+      commit: (operation) => this.commitAndWait(operation),
+      selectItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.activityTemplateWebMcp = new ActivityTemplateWebMcp({
+      canWrite: () => this.canCommit(),
+      templateIssue: (template) =>
+        templateAvailabilityIssue(template, this.bootstrap.board.features),
+      getPlacementCenter: () => {
+        const view = this.renderer.viewport.viewState;
+        return [view.center.x, view.center.y];
+      },
+      commit: (operation) => this.commitAndWait(operation),
+      revealItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+        this.renderer.viewport.fit(this.model.boundsFor(itemIds));
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.boardWriteWebMcp = new BoardWriteWebMcp({
+      canWrite: () => this.canCommit(),
+      canComment: () => this.canComment(),
+      imagesEnabled: () => this.bootstrap.board.imagesEnabled,
+      featureIssue: (kind) => webMcpWriteFeatureIssue(kind, this.bootstrap.board.features),
+      getStyle: () => ({
+        stickyFill: this.style.stickyFill,
+        stickyTextColor: this.style.stickyTextColor,
+        stickyFontSize: this.style.stickyFontSize,
+        stickyOpacity: this.style.stickyOpacity,
+        textColor: this.style.color,
+        textFontSize: this.style.fontSize,
+        textFontFamily: this.style.fontFamily,
+        textOpacity: this.style.opacity,
+      }),
+      getPlacementCenter: () => this.imagePlacementCenter(),
+      itemAt: (point) => this.savedItemAt(point),
+      getSelectedItem: () => this.singleSavedSelection(),
+      resolveWatchedStep: (watchToken, stepAlias, action) => {
+        const inquiry = this.webMcp;
+        if (!inquiry) throw new Error("The board watch is not available in this browser.");
+        return inquiry.watchedStepCommentTarget(watchToken, stepAlias, action);
+      },
+      resolveWatchedStickies: (watchToken, stepAliases) => {
+        const inquiry = this.webMcp;
+        if (!inquiry) throw new Error("The board watch is not available in this browser.");
+        return inquiry.watchedStepItems(watchToken, stepAliases);
+      },
+      moveItems: (moves) => this.moveItemsFromWebMcp(moves),
+      commit: (operation) => this.commitAndWait(operation),
+      createComment: (itemId, body, assistance, media) =>
+        this.commentFromWebMcp(itemId, body, assistance, media),
+      storeImage: (imageDataUrl, signal) => this.storeWebMcpImage(imageDataUrl, signal),
+      revealItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.inquiryMapWebMcp = new InquiryMapWebMcp({
+      root: this.root,
+      canWrite: () => this.canCommit(),
+      getSnapshot: (token) => this.webMcp?.getSnapshot(token),
+      getItemVersion: (itemId) => this.model.authoritativeItems.get(itemId)?.version,
+      getItemBounds: (itemId) => this.model.getBounds(itemId),
+      commit: (operation) => this.commitAndWait(operation),
+      selectItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.classDecisionWebMcp = new ClassDecisionWebMcp({
+      root: this.root,
+      canWrite: () => this.canCommit(),
+      getSelectedItems: () =>
+        savedAuthoritativeItems(
+          [...this.tools.selection],
+          this.model.items,
+          this.model.authoritativeItems,
+        ),
+      getItem: (itemId) => this.model.authoritativeItems.get(itemId),
+      getItems: () => this.model.items.values(),
+      getItemBounds: (itemId) => this.model.getBounds(itemId),
+      commit: (operation) => this.commitAndWait(operation),
+      selectItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
     this.bindShellEvents();
     this.model.subscribe(() => {
       this.updateStatus();
       this.tools.reconcileSelection();
       this.updateSelectionActions(this.tools.selection);
       this.syncNewZoneTitleEditor();
+      this.reconcileCommentStates();
     });
     this.model.subscribeRebase((error) => this.handleRebaseState(error));
     this.presences.set(bootstrap.actor.id, {
@@ -1150,11 +1742,16 @@ export class BoardApp {
 
   destroy(): void {
     window.clearInterval(this.previewExpiryTimer);
+    if (this.webMcpWatchCountdown !== null) {
+      window.clearInterval(this.webMcpWatchCountdown);
+      this.webMcpWatchCountdown = null;
+    }
+    this.toolRailResizeObserver?.disconnect();
+    this.toolRailResizeObserver = null;
     this.stopBroadcastingSpotlight();
     this.clearFollowingSpotlight();
     this.unsubscribeViewport?.();
     this.unsubscribeViewport = null;
-    if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
     this.pendingStickyDrafts.clear();
     this.rejectedStickyDrafts.length = 0;
     this.pendingTableCellDrafts.clear();
@@ -1162,16 +1759,39 @@ export class BoardApp {
     this.pendingZoneTitleDrafts.clear();
     this.rejectedZoneTitleDrafts.length = 0;
     this.pendingNewZoneTitles.clear();
+    clearTypesetMath(this.commentsList);
+    this.playingCommentVideoId = null;
+    this.releaseCommentImages();
     document.removeEventListener("paste", this.onImagePaste);
     this.renderer.svg.removeEventListener("dragover", this.onImageDragOver);
     this.renderer.svg.removeEventListener("drop", this.onImageDrop);
     this.tablePickerDialog.close();
+    this.videoEmbedDialog.close();
     this.closeImageAltEditor();
     this.organisationTemplateDialog.close();
     void this.closeTableCellEditor(false);
     void this.closeZoneTitleEditor(false);
     void this.closeTextEditor(false);
+    this.pendingWebMcpCommits.finishAll(false);
     this.socket.destroy();
+    this.activityTemplateWebMcp?.destroy();
+    this.activityTemplateWebMcp = null;
+    this.boardWriteWebMcp?.destroy();
+    this.boardWriteWebMcp = null;
+    this.educationPartnerWebMcp?.destroy();
+    this.educationPartnerWebMcp = null;
+    this.classDecisionWebMcp?.destroy();
+    this.classDecisionWebMcp = null;
+    this.inquiryMapWebMcp?.destroy();
+    this.inquiryMapWebMcp = null;
+    this.webMcp?.destroy();
+    this.webMcp = null;
+    this.stopObservingWebMcp?.();
+    this.stopObservingWebMcp = null;
+    this.mathFieldPanel?.destroy();
+    this.mathFieldPanel = null;
+    this.mathFieldTarget = null;
+    this.setAiWatchState({ phase: "idle", expiresAt: null, watchedItemIds: new Set() });
     this.tools.destroy();
     this.renderer.destroy();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
@@ -1185,18 +1805,42 @@ export class BoardApp {
             ${BRAND_MARK_HTML}
             <span class="wordmark-text">${PRODUCT_NAME}</span>
           </a>
-          <label class="board-title-wrap">
-            <span class="sr-only">Board title</span>
-            <input class="board-title" data-testid="board-title" maxlength="100" autocomplete="off" />
-          </label>
-          <div class="topbar-actions">
-            <div class="history-controls" aria-label="Board history">
-              <button class="icon-button" type="button" data-testid="undo-button" aria-label="Undo (Control or Command Z)" title="Undo · Ctrl/⌘ Z">↶</button>
-              <button class="icon-button" type="button" data-testid="redo-button" aria-label="Redo (Control or Command Shift Z)" title="Redo · Ctrl/⌘ Shift Z">↷</button>
-            </div>
+          <div class="board-identity">
+            <label class="board-title-wrap">
+              <span class="sr-only">Board title</span>
+              <input class="board-title" data-testid="board-title" maxlength="100" autocomplete="off" />
+            </label>
             <div class="save-status" data-testid="save-status" role="status" aria-live="polite">
-              <span class="status-dot" aria-hidden="true"></span>
+              <svg class="save-cloud-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7.6 18.2h9.3a4.1 4.1 0 0 0 .7-8.1A6 6 0 0 0 6.2 8.9a4.7 4.7 0 0 0 1.4 9.3Z"></path>
+                <path class="save-cloud-check" d="m9.2 13.4 1.9 1.9 3.9-4"></path>
+              </svg>
               <span data-save-status-text>Connecting…</span>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <div class="menu-wrap mcp-status-wrap">
+              <button class="webmcp-status" type="button" data-webmcp-status data-testid="webmcp-status" data-state="ready" data-host="unlinked" aria-haspopup="dialog" aria-controls="mcp-activity-menu" aria-expanded="false">
+                <svg class="webmcp-status-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m5 4 14 7.2-6.1 2.1-2.2 6.2L5 4Z"></path>
+                  <path d="m12.9 13.3 4.4 4.4"></path>
+                </svg>
+                <span class="webmcp-status-copy">
+                  <span data-webmcp-status-text>MCP</span>
+                  <small class="webmcp-status-time" data-webmcp-status-time data-testid="webmcp-status-time">Ready</small>
+                </span>
+              </button>
+              <section class="floating-menu mcp-activity-menu" data-testid="mcp-activity-menu" id="mcp-activity-menu" role="dialog" aria-label="MCP call activity" hidden>
+                <header class="mcp-activity-heading">
+                  <span>
+                    <strong>MCP activity</strong>
+                    <small data-mcp-activity-summary>Waiting for a compatible browser</small>
+                  </span>
+                  <span class="mcp-activity-live" aria-hidden="true"></span>
+                </header>
+                <p class="mcp-activity-empty" data-mcp-activity-empty>No MCP calls in this tab yet.</p>
+                <ol class="mcp-activity-list" data-mcp-activity-list aria-live="polite"></ol>
+              </section>
             </div>
             <div class="menu-wrap activities-wrap">
               <button class="topbar-button activities-button" type="button" data-testid="activities-button" aria-label="Add a template" aria-haspopup="menu" aria-controls="activities-menu" aria-expanded="false" hidden>
@@ -1217,28 +1861,13 @@ export class BoardApp {
                 </section>
               </div>
             </div>
-            <button class="topbar-button spotlight-toggle" type="button" data-testid="spotlight-toggle" aria-label="Start Follow me" aria-pressed="false" hidden>
-              <span class="spotlight-toggle-mark" aria-hidden="true"></span>
-              <span class="spotlight-toggle-label">Follow me</span>
-            </button>
-            <button class="topbar-button people-button" type="button" data-testid="participants-button" aria-controls="participant-drawer" aria-expanded="false">
+            <button class="topbar-button people-button" type="button" data-testid="participants-button" aria-label="1 person here" aria-controls="participant-drawer" aria-expanded="false" title="1 person here">
               <span class="avatar-stack" aria-hidden="true"><i></i><i></i></span>
               <span data-participant-count>1</span>
               <span class="wide-label">here</span>
             </button>
-            <button class="topbar-button" type="button" data-testid="access-button" aria-controls="access-drawer" aria-expanded="false">Share</button>
+            <button class="topbar-button access-button" type="button" data-testid="access-button" aria-label="Share and export Space" aria-controls="access-drawer" aria-expanded="false" title="Share and export"><span class="access-button-mark" aria-hidden="true">↗</span><span class="access-button-label">Share</span></button>
             <button class="icon-button settings-button" type="button" data-testid="settings-button" aria-label="Space settings" aria-controls="settings-drawer" aria-expanded="false" title="Settings">⚙</button>
-            <div class="menu-wrap">
-              <button class="icon-button" type="button" data-testid="export-button" aria-label="Export board" aria-controls="export-menu" aria-expanded="false" title="Export">↓</button>
-              <div class="floating-menu export-menu" data-testid="export-menu" id="export-menu" hidden>
-                <p class="menu-eyebrow">Download current board</p>
-                <button type="button" data-export-attributed-json${attributedDataDownloadAllowed(this.bootstrap.actor.role) ? "" : " hidden"}>Attributed data JSON <span>people + text attribution</span></button>
-                <a data-export-svg download href="/api/v1/boards/${encodeURIComponent(this.bootstrap.board.id)}/export.svg">SVG image <span>authoritative</span></a>
-                <a data-export-json download href="/api/v1/boards/${encodeURIComponent(this.bootstrap.board.id)}/export.json">Canonical JSON <span>authoritative</span></a>
-                <button type="button" data-local-svg>Local SVG <span>includes pending edits</span></button>
-                <button type="button" data-local-json>Local recovery JSON <span>includes outbox</span></button>
-              </div>
-            </div>
           </div>
         </header>
 
@@ -1253,10 +1882,14 @@ export class BoardApp {
         </div>
 
         <main class="board-stage">
-          <nav class="tool-rail" aria-label="Drawing tools" data-testid="tool-rail"></nav>
+          <div class="tool-rail-shell" data-tool-rail-shell data-overflow="false">
+            <button class="tool-rail-scroll tool-rail-scroll-back" type="button" data-tool-rail-scroll="-1" aria-label="Scroll tools left" hidden>‹</button>
+            <nav class="tool-rail" aria-label="Drawing tools" data-testid="tool-rail"></nav>
+            <button class="tool-rail-scroll tool-rail-scroll-forward" type="button" data-tool-rail-scroll="1" aria-label="Scroll tools right" hidden>›</button>
+          </div>
           <section class="canvas-wrap" data-canvas-host>
             <p class="sr-only" id="canvas-help">Use the bottom toolbar to draw. Hold Space to pan. Scroll or pinch to zoom.</p>
-            <div class="canvas-hint" data-canvas-hint aria-hidden="true">Drag anywhere to begin</div>
+            <div class="canvas-hint" data-canvas-hint aria-hidden="true">Draw or add an element to get started</div>
             <dialog class="claim-dialog table-picker" data-testid="table-picker" aria-labelledby="table-picker-title" aria-describedby="table-picker-note">
               <form data-table-picker-form>
                 <span class="eyebrow">Table</span>
@@ -1277,10 +1910,23 @@ export class BoardApp {
                 </div>
               </form>
             </dialog>
+            <dialog class="claim-dialog video-embed-dialog" data-testid="video-embed-dialog" aria-labelledby="video-embed-title" aria-describedby="video-embed-note">
+              <form data-video-embed-form>
+                <span class="eyebrow">Video</span>
+                <h2 id="video-embed-title">Embed a video</h2>
+                <p id="video-embed-note">Paste a public YouTube or Vimeo link. SpaceScale uses privacy-conscious player URLs.</p>
+                <label><span>Video URL</span><input type="url" inputmode="url" autocomplete="url" placeholder="https://www.youtube.com/watch?v=…" data-video-url required /></label>
+                <p class="dialog-field-error" data-video-error role="alert"></p>
+                <div class="dialog-actions">
+                  <button type="button" data-video-cancel>Cancel</button>
+                  <button class="primary-button" type="submit" data-video-submit>Embed video</button>
+                </div>
+              </form>
+            </dialog>
             <div class="selection-actions" data-testid="selection-actions" hidden>
               <button type="button" data-selection-alt aria-label="Edit image alt text" hidden>Edit alt text</button>
               <div class="selection-colour-wrap" hidden>
-                <button type="button" data-selection-colour aria-label="Change selected element colour" aria-haspopup="menu" aria-controls="selection-colour-menu" aria-expanded="false">Colour</button>
+                <button class="selection-colour-trigger" type="button" data-selection-colour aria-label="Change selected element colour" title="Colour" aria-haspopup="menu" aria-controls="selection-colour-menu" aria-expanded="false"><span class="selection-current-colour" data-selection-current-colour aria-hidden="true"></span></button>
                 <div class="selection-colour-menu" data-testid="selection-colour-menu" id="selection-colour-menu" role="menu" aria-label="Element colour" hidden></div>
               </div>
               <div class="selection-font-controls" data-selection-font-controls hidden>
@@ -1294,8 +1940,8 @@ export class BoardApp {
                 <select data-selection-font-size aria-label="Text size">
                   <option value="" disabled>Mixed sizes</option>
                   <option value="16">Small</option>
+                  <option value="20">Default</option>
                   <option value="24">Medium</option>
-                  <option value="28">Default</option>
                   <option value="36">Large</option>
                   <option value="52">Extra large</option>
                   <option value="72">Huge</option>
@@ -1305,8 +1951,18 @@ export class BoardApp {
                 <button type="button" data-selection-text-decoration aria-label="Underline" aria-pressed="false"><u>U</u></button>
               </div>
               <span class="selection-actions-divider" data-selection-style-divider aria-hidden="true" hidden></span>
-              <button type="button" data-selection-section-lock aria-label="Lock Section" aria-pressed="false" hidden>Lock Section</button>
-              <button type="button" data-selection-copy aria-label="Copy selected items">Copy</button>
+              <div class="selection-ai-wrap" data-selection-ai-wrap hidden>
+                <button type="button" data-selection-ai data-testid="selection-ai" aria-label="Ask the AI assistant about the selection" title="Ask AI" aria-haspopup="menu" aria-controls="ai-assist-menu" aria-expanded="false">${aiSparkleIcon()}<span>Ask AI</span></button>
+                <div class="arrange-menu ai-assist-menu" data-testid="ai-assist-menu" id="ai-assist-menu" role="menu" aria-label="Ask the AI assistant" hidden>
+                  ${ASSIST_ACTIONS.map(
+                    (action) =>
+                      `<button type="button" role="menuitem" data-ai-action="${action}">${ASSIST_GUIDANCE[action].label}</button>`,
+                  ).join("")}
+                  <label class="ai-assist-note"><span>Other instruction</span><input type="text" maxlength="${ASSIST_NOTE_MAX_LENGTH}" data-ai-assist-note placeholder="What are you unsure about?" autocomplete="off" /></label>
+                </div>
+              </div>
+              <button class="selection-comment-button" type="button" data-selection-comment aria-label="Comment on selected object" title="Comment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h9a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg></button>
+              <button class="selection-icon-button" type="button" data-selection-section-lock data-section-locked="false" aria-label="Lock Section" title="Lock Section" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path class="section-lock-icon-closed" d="M8 10V7a4 4 0 0 1 8 0v3"/><path class="section-lock-icon-open" d="M16 10V7a4 4 0 0 0-7.8-1.2"/><circle cx="12" cy="15.5" r="1"/></svg></button>
               <button type="button" data-selection-group aria-label="Group selected items" hidden>Group</button>
               <button type="button" data-selection-ungroup aria-label="Ungroup selected items" hidden>Ungroup</button>
               <div class="selection-arrange-wrap">
@@ -1324,13 +1980,14 @@ export class BoardApp {
                 </div>
               </div>
               <button type="button" data-selection-clear-votes aria-label="Clear votes from selected template" hidden>Clear votes</button>
-              <button type="button" data-selection-delete aria-label="Delete selected items">Delete</button>
             </div>
             <div class="quick-style-bar" data-testid="quick-style-bar" aria-label="Brush and colour" hidden>
-              <button class="brush-preset" type="button" data-brush-preset="pen" aria-pressed="true">Pen</button>
-              <button class="brush-preset" type="button" data-brush-preset="marker" aria-pressed="false">Marker</button>
-              <button class="brush-preset" type="button" data-brush-preset="highlighter" aria-pressed="false">Highlighter</button>
-              <span class="quick-style-divider" aria-hidden="true"></span>
+              <div class="brush-preset-group" data-brush-preset-group>
+                <button class="brush-preset" type="button" data-brush-preset="pen" aria-label="Pen" title="Pen" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 20 4.2-1 10.5-10.5a2.1 2.1 0 0 0-3-3L5.2 16Z"/><path d="m13.8 7.4 3 3"/></svg></button>
+                <button class="brush-preset" type="button" data-brush-preset="marker" aria-label="Marker" title="Marker" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15.2 4.1 4.7 4.7-9.4 9.4-6.4 1.7 1.7-6.4Z"/><path d="m12.8 6.5 4.7 4.7M4 21h16"/></svg></button>
+                <button class="brush-preset" type="button" data-brush-preset="highlighter" aria-label="Highlighter" title="Highlighter" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.8 3.8 5.4 5.4-9.8 9.8-6.5 1.1 1.1-6.5Z"/><path d="m12.1 6.5 5.4 5.4"/><path class="brush-highlighter-mark" d="M3 21h18"/></svg></button>
+              </div>
+              <span class="quick-style-divider" data-quick-style-divider aria-hidden="true"></span>
               <div data-quick-colours></div>
             </div>
             <div class="zoom-controls" aria-label="Canvas zoom">
@@ -1352,10 +2009,21 @@ export class BoardApp {
           <section class="shape-menu" data-testid="shape-menu" id="shape-menu" role="menu" aria-label="Choose a shape" hidden>
             <div class="shape-menu-grid" data-shape-menu-grid></div>
           </section>
-          <section class="shape-menu tools-menu" data-testid="tools-menu" id="tools-menu" role="menu" aria-label="Choose a tool" hidden>
-            <div class="shape-menu-grid tools-menu-grid">
+          <section class="shape-menu tools-menu" data-testid="tools-menu" id="tools-menu" role="menu" aria-label="More tools" hidden>
+            <div class="shape-menu-grid tools-menu-grid" data-more-tools-grid>
               <button type="button" data-tools-tool="protractor" data-testid="tools-protractor" role="menuitemradio" aria-checked="false" aria-label="Protractor"><span class="shape-choice-glyph" aria-hidden="true">∠</span><span>Protractor</span></button>
             </div>
+          </section>
+          <section class="shape-menu ai-share-menu" data-testid="ai-share-menu" id="ai-share-menu" role="menu" aria-label="Share the whole board with the AI assistant" hidden>
+            <p class="ai-share-heading">Share the whole board</p>
+            <div class="shape-menu-grid ai-share-grid">
+              ${ASSIST_ACTIONS.map(
+                (action) =>
+                  `<button type="button" role="menuitem" data-ai-share-action="${action}">${aiSparkleIcon("ai-sparkle-menu")}<span>${ASSIST_GUIDANCE[action].label}</span></button>`,
+              ).join("")}
+            </div>
+            <label class="ai-assist-note"><span>Other instruction</span><input type="text" maxlength="${ASSIST_NOTE_MAX_LENGTH}" data-ai-share-note placeholder="What should the assistant do?" autocomplete="off" /></label>
+            <p class="ai-assist-menu-note">Asks the assistant watching this Space to do what you picked, across the whole board.</p>
           </section>
           <section class="style-popover" data-testid="style-popover" id="style-popover" aria-label="Drawing style" hidden>
             <div class="popover-heading"><strong>Style</strong><span data-style-heading-context>New marks</span></div>
@@ -1369,30 +2037,92 @@ export class BoardApp {
               <div class="color-grid sticky-color-grid" data-sticky-color-grid hidden></div>
               <label class="custom-color" title="Custom colour" data-custom-color><span class="sr-only">Custom colour</span><input type="color" value="${UI_COLORS.ink}" data-style-color /></label>
             </fieldset>
-            <label class="range-row" data-style-stroke-row><span>Stroke</span><output data-width-output>4</output><input type="range" min="1" max="32" value="4" step="1" data-style-stroke /></label>
+            <label class="range-row" data-style-stroke-row><span>Stroke</span><output data-width-output>2</output><input type="range" min="1" max="32" value="2" step="1" data-style-stroke /></label>
             <label class="style-checkbox-row" data-line-arrow-row hidden><input type="checkbox" data-line-arrow /> <span>End arrow</span><span class="line-arrow-preview" aria-hidden="true">→</span></label>
-            <label class="range-row"><span>Opacity</span><output data-opacity-output>100%</output><input type="range" min="10" max="100" value="100" step="5" data-style-opacity /></label>
+            <label class="range-row" data-style-opacity-row><span>Opacity</span><output data-opacity-output>100%</output><input type="range" min="10" max="100" value="100" step="5" data-style-opacity /></label>
             <label class="style-select-row" data-style-font-family-row><span>Font</span><select data-style-font-family>
               <option value="sans">Sans</option>
               <option value="serif">Serif</option>
               <option value="handwritten">Handwritten</option>
               <option value="mono">Mono</option>
             </select></label>
-            <label class="range-row" data-style-font-row><span>Text</span><output data-font-output>28</output><input type="range" min="8" max="96" value="28" step="1" data-style-font /></label>
+            <label class="range-row" data-style-font-row><span>Text</span><output data-font-output>20</output><input type="range" min="8" max="96" value="20" step="1" data-style-font /></label>
           </section>
         </div>
 
+        <aside class="side-drawer comments-drawer" id="comments-drawer" data-testid="comments-drawer" aria-label="Comments" hidden>
+          <div class="drawer-heading"><div><span class="eyebrow" data-comments-eyebrow>Objects</span><h2 data-comments-heading>Comments</h2></div><button type="button" data-close-drawer aria-label="Close comments">×</button></div>
+          <label class="comments-filter" data-comments-filter><input type="checkbox" data-show-hidden-comments /> <span>Show resolved &amp; orphaned</span></label>
+          <section class="comment-composer" data-comment-composer hidden>
+            <span class="comment-target-label" data-comment-target></span>
+            <form data-comment-form>
+              <label class="sr-only" for="object-comment-input">Comment</label>
+              <textarea id="object-comment-input" data-comment-input rows="3" maxlength="2000" placeholder="Add a comment…" required></textarea>
+              <div class="comment-attachment" data-testid="comment-attachment" data-comment-attachment hidden>
+                <div class="comment-attachment-row">
+                  <span class="comment-attachment-label" data-comment-attachment-label></span>
+                  <button type="button" data-comment-attachment-remove>Remove</button>
+                </div>
+                <label class="comment-attachment-alt" data-comment-image-alt-field hidden><span class="sr-only">Describe the image</span><input type="text" maxlength="${MAX_IMAGE_ALT_CODE_POINTS}" placeholder="Describe the image (optional)" data-comment-image-alt /></label>
+              </div>
+              <div class="comment-video-field" data-comment-video-field hidden>
+                <label><span class="sr-only">Video link</span><input type="text" inputmode="url" autocomplete="url" placeholder="https://www.youtube.com/watch?v=…" data-comment-video-url /></label>
+                <button type="button" data-comment-video-attach>Attach video</button>
+                <p class="dialog-field-error" data-comment-video-error role="alert"></p>
+              </div>
+              <div class="comment-composer-actions">
+                <button type="button" data-testid="comment-add-image" data-comment-add-image>Add image</button>
+                <button type="button" data-testid="comment-add-video" data-comment-add-video>Add video</button>
+                <button type="button" data-comment-cancel>Cancel</button>
+                <button class="primary-button" type="submit" data-comment-submit>Comment</button>
+              </div>
+            </form>
+            <input type="file" data-testid="comment-image-input" data-comment-image-input accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+          </section>
+          <div class="comments-list" data-comments-list></div>
+        </aside>
+
         <aside class="side-drawer participant-drawer" id="participant-drawer" data-testid="participant-drawer" aria-label="Participants" hidden>
           <div class="drawer-heading"><div><span class="eyebrow">Live Space</span><h2>Participants</h2></div><button type="button" data-close-drawer aria-label="Close participants">×</button></div>
+          <section class="drawer-action-section">
+            <button class="drawer-action-button spotlight-toggle" type="button" data-testid="spotlight-toggle" aria-label="Start Follow me" aria-pressed="false" hidden>
+              <span class="spotlight-toggle-mark" aria-hidden="true"></span>
+              <span class="spotlight-toggle-label">Follow me</span>
+            </button>
+          </section>
           <div class="participant-list" data-participant-list></div>
         </aside>
 
-        <aside class="side-drawer access-drawer" id="access-drawer" data-testid="access-drawer" aria-label="Board access" hidden>
-          <div class="drawer-heading"><div><span class="eyebrow">People</span><h2>Share & access</h2></div><button type="button" data-close-drawer aria-label="Close access panel">×</button></div>
+        <aside class="side-drawer access-drawer" id="access-drawer" data-testid="access-drawer" aria-label="Share and export" hidden>
+          <div class="drawer-heading"><div><span class="eyebrow">Collaborate</span><h2>Share & export</h2></div><button type="button" data-close-drawer aria-label="Close access panel">×</button></div>
           <div data-access-body></div>
+          <section class="access-section access-export-section">
+            <h3>Export Space</h3>
+            <div class="export-menu access-export-actions" data-testid="export-menu" id="export-menu">
+              <button type="button" data-export-attributed-json${attributedDataDownloadAllowed(this.bootstrap.actor.role) ? "" : " hidden"}>Attributed data JSON <span>people + text attribution</span></button>
+              <a data-export-svg download href="/api/v1/boards/${encodeURIComponent(this.bootstrap.board.id)}/export.svg">SVG image <span>authoritative</span></a>
+              <a data-export-json download href="/api/v1/boards/${encodeURIComponent(this.bootstrap.board.id)}/export.json">Canonical JSON <span>authoritative</span></a>
+              <button type="button" data-local-svg>Local SVG <span>includes pending edits</span></button>
+              <button type="button" data-local-json>Local recovery JSON <span>includes outbox</span></button>
+            </div>
+          </section>
         </aside>
         <aside class="side-drawer settings-drawer" id="settings-drawer" data-testid="settings-drawer" aria-label="Space settings" hidden>
-          <div class="drawer-heading"><div><span class="eyebrow">Owner controls</span><h2>Space settings</h2></div><button type="button" data-close-drawer aria-label="Close settings">×</button></div>
+          <div class="drawer-heading"><div><span class="eyebrow">Space</span><h2>Settings</h2></div><button type="button" data-close-drawer aria-label="Close settings">×</button></div>
+          <section class="drawer-action-section">
+            <div class="drawer-section-label">History</div>
+            <div class="settings-history-controls" aria-label="Board history">
+              <button class="drawer-action-button" type="button" data-testid="undo-button" aria-label="Undo (Control or Command Z)" title="Undo · Ctrl/⌘ Z"><span aria-hidden="true">↶</span> Undo</button>
+              <button class="drawer-action-button" type="button" data-testid="redo-button" aria-label="Redo (Control or Command Shift Z)" title="Redo · Ctrl/⌘ Shift Z"><span aria-hidden="true">↷</span> Redo</button>
+            </div>
+            <div class="drawer-section-label">Comments</div>
+            <button class="drawer-action-button comments-button" type="button" data-testid="comments-button" aria-label="View all comments" aria-controls="comments-drawer" aria-expanded="false">
+              <span class="comments-button-mark" aria-hidden="true">●</span>
+              <span class="comments-button-label">View all comments</span>
+              <span class="comments-count" data-comments-count>0</span>
+              <span class="drawer-action-arrow" aria-hidden="true">›</span>
+            </button>
+          </section>
           <div data-settings-body></div>
         </aside>
         <dialog class="claim-dialog organisation-template-dialog" data-testid="organisation-template-dialog" aria-labelledby="organisation-template-title">
@@ -1438,6 +2168,8 @@ export class BoardApp {
     `;
 
     const rail = query(this.root, "[data-testid='tool-rail']", HTMLElement);
+    const shapeGrid = query(this.root, "[data-shape-menu-grid]", HTMLElement);
+    const moreToolsGrid = query(this.root, "[data-more-tools-grid]", HTMLElement);
     for (const definition of TOOL_DEFINITIONS) {
       const button = document.createElement("button");
       button.type = "button";
@@ -1449,16 +2181,8 @@ export class BoardApp {
         button.setAttribute("aria-haspopup", "menu");
         button.setAttribute("aria-controls", "shape-menu");
         button.setAttribute("aria-expanded", "false");
-      } else if (definition.name === "protractor") {
-        button.setAttribute("aria-label", "Tools");
-        button.setAttribute("aria-haspopup", "menu");
-        button.setAttribute("aria-controls", "tools-menu");
-        button.setAttribute("aria-expanded", "false");
       }
-      button.title =
-        definition.name === "protractor"
-          ? `Tools · Protractor shortcut ${definition.shortcut}`
-          : `${definition.label} · ${definition.shortcut}`;
+      button.title = `${definition.label} · ${definition.shortcut}`;
       const glyph = document.createElement("span");
       glyph.className = `tool-glyph tool-glyph-${definition.name}`;
       glyph.setAttribute("aria-hidden", "true");
@@ -1468,8 +2192,79 @@ export class BoardApp {
       label.className = "tool-label";
       label.textContent = definition.dockLabel;
       button.append(glyph, label);
-      rail.append(button);
+      if (definition.name === "line") {
+        button.setAttribute("role", "menuitem");
+        button.classList.add("shape-menu-tool");
+        glyph.className = "shape-choice-glyph";
+        label.className = "";
+        shapeGrid.append(button);
+      } else if (definition.name === "eraser") {
+        button.classList.add("brush-preset");
+        label.remove();
+        query(this.root, "[data-brush-preset-group]", HTMLElement).append(button);
+      } else if (MORE_TOOL_NAMES.has(definition.name)) {
+        button.setAttribute("role", "menuitem");
+        button.classList.add("more-tool-choice");
+        moreToolsGrid.append(button);
+      } else {
+        rail.append(button);
+      }
+      if (definition.name === "image") {
+        const video = document.createElement("button");
+        video.type = "button";
+        video.dataset.videoEmbed = "true";
+        video.dataset.testid = "tool-video";
+        video.setAttribute("aria-label", "Embed video");
+        video.title = "Embed a YouTube or Vimeo video";
+        video.innerHTML =
+          '<span class="tool-glyph tool-glyph-video" aria-hidden="true">▶</span><span class="tool-label">Video</span>';
+        moreToolsGrid.append(video);
+      }
     }
+    const aiShare = document.createElement("button");
+    aiShare.type = "button";
+    const moreToolsButton = document.createElement("button");
+    moreToolsButton.type = "button";
+    moreToolsButton.dataset.moreTools = "true";
+    moreToolsButton.dataset.testid = "tool-more";
+    moreToolsButton.setAttribute("aria-label", "More tools");
+    moreToolsButton.setAttribute("aria-haspopup", "menu");
+    moreToolsButton.setAttribute("aria-controls", "tools-menu");
+    moreToolsButton.setAttribute("aria-expanded", "false");
+    moreToolsButton.setAttribute("aria-pressed", "false");
+    moreToolsButton.title = "More tools";
+    moreToolsButton.innerHTML =
+      '<span class="tool-glyph tool-glyph-more" aria-hidden="true">•••</span><span class="tool-label">More</span>';
+    rail.append(moreToolsButton);
+    aiShare.dataset.aiShare = "true";
+    aiShare.dataset.testid = "tool-ai";
+    aiShare.hidden = true;
+    aiShare.setAttribute("aria-label", "Share the whole board with the AI assistant");
+    aiShare.setAttribute("aria-haspopup", "menu");
+    aiShare.setAttribute("aria-controls", "ai-share-menu");
+    aiShare.setAttribute("aria-expanded", "false");
+    aiShare.title = "Share the whole board with the AI assistant";
+    aiShare.innerHTML = `${aiSparkleIcon("tool-glyph")}<span class="tool-label">AI</span>`;
+    rail.append(aiShare);
+
+    // Templates are a secondary creation tool in More. Its fixed popover stays at workspace
+    // level so it is not clipped when the More menu closes.
+    const activitiesWrap = query(this.root, ".activities-wrap", HTMLElement);
+    const activitiesButton = query(
+      activitiesWrap,
+      "[data-testid='activities-button']",
+      HTMLElement,
+    );
+    const activitiesMenu = query(activitiesWrap, "[data-testid='activities-menu']", HTMLElement);
+    activitiesButton.classList.remove("topbar-button");
+    query(activitiesButton, ".activities-button-mark", HTMLElement).classList.add("tool-glyph");
+    query(activitiesButton, ".activities-button-label", HTMLElement).classList.add("tool-label");
+    activitiesButton.classList.add("more-tool-choice");
+    activitiesButton.setAttribute("role", "menuitem");
+    moreToolsGrid.append(activitiesButton);
+    query(this.root, ".workspace", HTMLElement).append(activitiesMenu);
+    activitiesWrap.remove();
+
     const divider = document.createElement("span");
     divider.className = "tool-divider";
     divider.setAttribute("aria-hidden", "true");
@@ -1485,7 +2280,6 @@ export class BoardApp {
       '<span class="rail-color-dot" aria-hidden="true"></span><span class="tool-label">Style</span>';
     rail.append(styleShortcut);
 
-    const shapeGrid = query(this.root, "[data-shape-menu-grid]", HTMLElement);
     for (const choice of SHAPE_CHOICES) {
       const button = document.createElement("button");
       button.type = "button";
@@ -1603,12 +2397,13 @@ export class BoardApp {
   private async insertActivity(templateId: ActivityTemplateId): Promise<void> {
     if (!this.bootstrap.board.features.templates || !this.canCommit() || this.activityInsertPending)
       return;
-    if (templateId === "vote-with-stamps" && !this.bootstrap.board.features.voting) return;
     const template = ACTIVITY_TEMPLATES.find((value) => value.id === templateId);
     if (!template) return;
-    const featureIssue = templateFeatureIssue(template.items, this.bootstrap.board.features);
+    const featureIssue = templateAvailabilityIssue(template, this.bootstrap.board.features);
     if (featureIssue) {
-      this.notify(featureIssue, "warning");
+      // A hidden button cannot be clicked, so there is nobody to tell.
+      if (!templateHiddenByVoting(template.id, this.bootstrap.board.features))
+        this.notify(featureIssue, "warning");
       return;
     }
     this.activityInsertPending = true;
@@ -2106,6 +2901,28 @@ export class BoardApp {
   }
 
   private bindShellEvents(): void {
+    this.moreToolsButton.addEventListener("click", () => {
+      const opening = this.toolsMenu.hidden === true;
+      if (opening) this.tools.setTool("select");
+      this.setShapeMenuOpen(false);
+      this.setToolsMenuOpen(opening);
+      if (opening) this.toolsMenu.querySelector<HTMLButtonElement>("button:not([hidden])")?.focus();
+    });
+    const toolRail = query(this.root, "[data-testid='tool-rail']", HTMLElement);
+    toolRail.addEventListener("scroll", () => this.updateToolRailOverflow(), { passive: true });
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-tool-rail-scroll]")) {
+      button.addEventListener("click", () => {
+        const direction = Number(button.dataset.toolRailScroll);
+        toolRail.scrollBy({
+          left: direction * Math.max(160, toolRail.clientWidth * 0.7),
+          behavior: "smooth",
+        });
+      });
+    }
+    this.toolRailResizeObserver = new ResizeObserver(() => this.updateToolRailOverflow());
+    this.toolRailResizeObserver.observe(toolRail);
+    window.requestAnimationFrame(() => this.updateToolRailOverflow());
+
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("button[data-tool]")) {
       button.addEventListener("click", () => this.activateTool(button.dataset.tool as ToolName));
     }
@@ -2191,7 +3008,8 @@ export class BoardApp {
         if (!preset) return;
         this.style.width = BRUSH_PRESETS[preset].width;
         this.style.opacity = BRUSH_PRESETS[preset].opacity;
-        this.updateStyleControls();
+        this.tools.setTool("pencil");
+        this.setActiveToolButton("pencil");
       });
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-sticky-color]")) {
@@ -2282,13 +3100,7 @@ export class BoardApp {
     ): void => {
       const items = [...this.tools.selection].flatMap((id) => {
         const item = this.model.getItem(id);
-        return item &&
-          (item.kind === "text" ||
-            item.kind === "sticky" ||
-            item.kind === "table" ||
-            item.kind === "zone")
-          ? [item]
-          : [];
+        return item && supportsTextStyling(item) ? [item] : [];
       });
       const allActive =
         items.length > 0 &&
@@ -2319,13 +3131,16 @@ export class BoardApp {
       this.setSelectionColourMenuOpen(false);
       this.selectionColourButton.focus();
     });
+    query(this.root, "[data-selection-comment]", HTMLButtonElement).addEventListener(
+      "click",
+      () => {
+        const [itemId] = this.tools.selection;
+        if (itemId && this.tools.selection.size === 1) this.openCommentsForItem(itemId);
+      },
+    );
     query(this.root, "[data-selection-section-lock]", HTMLButtonElement).addEventListener(
       "click",
       () => void this.toggleSelectedSectionLock(),
-    );
-    query(this.root, "[data-selection-copy]", HTMLButtonElement).addEventListener(
-      "click",
-      () => void this.tools.copySelection(),
     );
     query(this.root, "[data-selection-group]", HTMLButtonElement).addEventListener(
       "click",
@@ -2334,10 +3149,6 @@ export class BoardApp {
     query(this.root, "[data-selection-ungroup]", HTMLButtonElement).addEventListener(
       "click",
       () => void this.tools.ungroupSelection(),
-    );
-    query(this.root, "[data-selection-delete]", HTMLButtonElement).addEventListener(
-      "click",
-      () => void this.tools.deleteSelection(),
     );
     query(this.root, "[data-selection-clear-votes]", HTMLButtonElement).addEventListener(
       "click",
@@ -2348,6 +3159,59 @@ export class BoardApp {
       const opening = this.arrangeMenu.hidden !== false;
       this.setArrangeMenuOpen(opening);
       if (opening) this.arrangeMenu.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    });
+    this.aiShareButton.addEventListener("click", () => {
+      if (this.aiShareButton.hidden) return;
+      const opening = this.aiShareMenu.hidden !== false;
+      this.setAiShareMenuOpen(opening);
+      if (opening) this.aiShareMenu.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    });
+    for (const button of this.aiShareMenu.querySelectorAll<HTMLButtonElement>(
+      "[data-ai-share-action]",
+    )) {
+      button.addEventListener("click", () => {
+        const action = button.dataset.aiShareAction;
+        if (action && (ASSIST_ACTIONS as readonly string[]).includes(action)) {
+          this.shareBoardWithAi(action as AssistAction);
+        }
+      });
+    }
+    this.aiShareMenu.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.setAiShareMenuOpen(false);
+      this.aiShareButton.focus();
+    });
+    this.aiAssistButton.addEventListener("click", () => {
+      if (this.aiAssistButton.disabled) return;
+      const opening = this.aiAssistMenu.hidden !== false;
+      this.setAiAssistMenuOpen(opening);
+      if (opening) this.aiAssistMenu.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    });
+    for (const button of this.aiAssistMenu.querySelectorAll<HTMLButtonElement>(
+      "[data-ai-action]",
+    )) {
+      button.addEventListener("click", () => {
+        const action = button.dataset.aiAction;
+        if (action && (ASSIST_ACTIONS as readonly string[]).includes(action)) {
+          this.sendAiAssistRequest(action as AssistAction);
+        }
+      });
+    }
+    this.aiAssistMenu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.setAiAssistMenuOpen(false);
+        this.aiAssistButton.focus();
+        return;
+      }
+      if (event.key === "Enter" && event.target === this.aiAssistNote) {
+        // Enter in the note picks the first action so keyboard users can send without tabbing back.
+        event.preventDefault();
+        this.aiAssistMenu.querySelector<HTMLButtonElement>("[data-ai-action]")?.click();
+      }
     });
     for (const button of this.arrangeMenu.querySelectorAll<HTMLButtonElement>("[data-arrange]")) {
       button.addEventListener("click", () => {
@@ -2391,6 +3255,25 @@ export class BoardApp {
       this.imageInput.value = "";
       if (image) void this.uploadImage(image, this.imagePlacementCenter());
     });
+    query(this.root, "[data-video-embed]", HTMLButtonElement).addEventListener("click", () => {
+      this.setToolsMenuOpen(false);
+      this.openVideoEmbedDialog();
+    });
+    query(this.videoEmbedDialog, "[data-video-embed-form]", HTMLFormElement).addEventListener(
+      "submit",
+      (event) => {
+        event.preventDefault();
+        void this.addVideoEmbed();
+      },
+    );
+    query(this.videoEmbedDialog, "[data-video-cancel]", HTMLButtonElement).addEventListener(
+      "click",
+      () => this.videoEmbedDialog.close(),
+    );
+    this.videoEmbedDialog.addEventListener("close", () => {
+      this.videoEmbedUrl.value = "";
+      query(this.videoEmbedDialog, "[data-video-error]", HTMLElement).textContent = "";
+    });
     query(this.imageAltDialog, "[data-image-alt-form]", HTMLFormElement).addEventListener(
       "submit",
       (event) => {
@@ -2423,10 +3306,22 @@ export class BoardApp {
     this.renderer.svg.addEventListener("drop", this.onImageDrop);
     document.addEventListener("paste", this.onImagePaste);
 
+    this.webMcpStatus.addEventListener("click", () => {
+      this.togglePopover(this.mcpActivityMenu, this.webMcpStatus);
+    });
+    this.mcpActivityMenu.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeMcpActivityMenu();
+      this.webMcpStatus.focus();
+    });
+
     this.activitiesButton.addEventListener("click", () => {
       if (this.activitiesButton.disabled) return;
       const opening = this.activitiesMenu.hidden;
       this.togglePopover(this.activitiesMenu, this.activitiesButton);
+      if (opening) this.setToolsMenuOpen(false);
       if (opening) {
         void this.loadOrganisationTemplates();
         this.activitiesMenu.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
@@ -2491,11 +3386,85 @@ export class BoardApp {
       () => this.stopFollowingSpotlight(),
     );
 
+    this.commentsButton.addEventListener("click", () => {
+      if (!this.commentsDrawer.hidden && this.commentsFocusItemId !== null) {
+        // The drawer is showing one object's comments; widen it to every comment.
+        this.commentsFocusItemId = null;
+        this.activeCommentTargetId = null;
+        this.renderComments();
+        return;
+      }
+      const opening = this.commentsDrawer.hidden;
+      if (opening) {
+        this.activeCommentTargetId = null;
+        this.commentsFocusItemId = null;
+      }
+      this.toggleDrawer(this.commentsDrawer, this.commentsButton);
+      this.renderComments();
+    });
+    this.showHiddenCommentsInput.addEventListener("change", () => {
+      this.showHiddenComments = this.showHiddenCommentsInput.checked;
+      this.renderComments();
+    });
+    query(this.commentsDrawer, "[data-comment-cancel]", HTMLButtonElement).addEventListener(
+      "click",
+      () => {
+        this.activeCommentTargetId = null;
+        this.commentInput.value = "";
+        this.clearPendingCommentMedia();
+        this.renderComments();
+      },
+    );
+    query(this.commentComposer, "[data-comment-add-image]", HTMLButtonElement).addEventListener(
+      "click",
+      () => this.pickCommentImage(),
+    );
+    this.commentImageInput.addEventListener("change", () => {
+      const image = this.commentImageInput.files?.[0];
+      this.commentImageInput.value = "";
+      if (image) void this.attachCommentImage(image);
+    });
+    query(this.commentComposer, "[data-comment-add-video]", HTMLButtonElement).addEventListener(
+      "click",
+      () => this.openCommentVideoField(),
+    );
+    query(
+      this.commentVideoField,
+      "[data-comment-video-attach]",
+      HTMLButtonElement,
+    ).addEventListener("click", () => this.attachCommentVideo());
+    this.commentVideoUrl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      // The field lives inside the comment form, so Enter would post the comment instead.
+      event.preventDefault();
+      this.attachCommentVideo();
+    });
+    query(
+      this.commentAttachment,
+      "[data-comment-attachment-remove]",
+      HTMLButtonElement,
+    ).addEventListener("click", () => {
+      this.clearPendingCommentMedia();
+      this.commentInput.focus();
+    });
+    query(this.commentsDrawer, "[data-comment-form]", HTMLFormElement).addEventListener(
+      "submit",
+      (event) => {
+        event.preventDefault();
+        void this.submitComment();
+      },
+    );
+    this.renderer.svg.addEventListener("board-comment-open", (event) => {
+      const detail = (event as CustomEvent<{ itemId?: unknown }>).detail;
+      if (typeof detail?.itemId === "string") this.openCommentsFocused(detail.itemId);
+    });
+
     query(this.root, "[data-testid='participants-button']", HTMLButtonElement).addEventListener(
       "click",
       (event) => {
         this.toggleDrawer(this.participantDrawer, event.currentTarget as HTMLButtonElement);
         this.renderParticipants();
+        if (!this.participantDrawer.hidden) void this.loadParticipantRoles();
       },
     );
     this.accessButton.addEventListener("click", () => {
@@ -2510,8 +3479,6 @@ export class BoardApp {
       button.addEventListener("click", () => this.closeDrawers());
     }
 
-    const exportButton = query(this.root, "[data-testid='export-button']", HTMLButtonElement);
-    exportButton.addEventListener("click", () => this.togglePopover(this.exportMenu, exportButton));
     const attributedExportButton = query(
       this.root,
       "[data-export-attributed-json]",
@@ -2523,9 +3490,9 @@ export class BoardApp {
     query(this.root, "[data-local-json]", HTMLButtonElement).addEventListener("click", () =>
       this.downloadLocalJson(),
     );
-    query(this.root, "[data-local-svg]", HTMLButtonElement).addEventListener("click", () =>
-      this.downloadLocalSvg(),
-    );
+    query(this.root, "[data-local-svg]", HTMLButtonElement).addEventListener("click", () => {
+      void this.downloadLocalSvg();
+    });
 
     query(this.root, "[data-zoom-out]", HTMLButtonElement).addEventListener("click", () =>
       this.zoomBy(0.8),
@@ -2566,13 +3533,27 @@ export class BoardApp {
     document.addEventListener("pointerdown", (event) => {
       const target = event.target as Node;
       const shapeButton = query(this.root, "[data-testid='tool-rectangle']", HTMLElement);
-      const toolsButton = query(this.root, "[data-testid='tool-protractor']", HTMLElement);
+      const toolsButton = this.moreToolsButton;
       if (
         !this.shapeMenu.hidden &&
         !this.shapeMenu.contains(target) &&
         !shapeButton.contains(target)
       ) {
         this.setShapeMenuOpen(false);
+      }
+      if (
+        !this.aiAssistMenu.hidden &&
+        !this.aiAssistMenu.contains(target) &&
+        !this.aiAssistButton.contains(target)
+      ) {
+        this.setAiAssistMenuOpen(false);
+      }
+      if (
+        !this.aiShareMenu.hidden &&
+        !this.aiShareMenu.contains(target) &&
+        !this.aiShareButton.contains(target)
+      ) {
+        this.setAiShareMenuOpen(false);
       }
       if (
         !this.toolsMenu.hidden &&
@@ -2582,19 +3563,18 @@ export class BoardApp {
         this.setToolsMenuOpen(false);
       }
       if (
+        !this.mcpActivityMenu.hidden &&
+        !this.mcpActivityMenu.contains(target) &&
+        !this.webMcpStatus.contains(target)
+      ) {
+        this.closeMcpActivityMenu();
+      }
+      if (
         !this.stylePopover.hidden &&
         !this.stylePopover.contains(target) &&
         !query(this.root, "[data-testid='style-button']", HTMLElement).contains(target)
       ) {
         this.setStylePopoverOpen(false);
-      }
-      if (
-        !this.exportMenu.hidden &&
-        !this.exportMenu.contains(target) &&
-        !exportButton.contains(target)
-      ) {
-        this.exportMenu.hidden = true;
-        exportButton.setAttribute("aria-expanded", "false");
       }
       if (
         !this.activitiesMenu.hidden &&
@@ -2676,6 +3656,64 @@ export class BoardApp {
     return [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2];
   }
 
+  private openVideoEmbedDialog(): void {
+    if (!this.canCommit()) {
+      this.notify("Drawing is read only.", "warning");
+      return;
+    }
+    query(this.videoEmbedDialog, "[data-video-error]", HTMLElement).textContent = "";
+    if (!this.videoEmbedDialog.open) this.videoEmbedDialog.showModal();
+    this.videoEmbedUrl.focus();
+  }
+
+  private async addVideoEmbed(): Promise<void> {
+    if (this.videoEmbedPending || !this.canCommit()) return;
+    const video = videoEmbedFromText(this.videoEmbedUrl.value);
+    const error = query(this.videoEmbedDialog, "[data-video-error]", HTMLElement);
+    if (!video) {
+      error.textContent = "Use a complete HTTPS YouTube or Vimeo video link.";
+      this.videoEmbedUrl.focus();
+      return;
+    }
+    error.textContent = "";
+    const submit = query(this.videoEmbedDialog, "[data-video-submit]", HTMLButtonElement);
+    this.videoEmbedPending = true;
+    submit.disabled = true;
+    try {
+      const center = this.imagePlacementCenter();
+      const itemId = createId();
+      const accepted = await this.commit({
+        kind: "item.create",
+        item: {
+          id: itemId,
+          kind: "text",
+          style: {
+            kind: "text",
+            color: this.style.color,
+            fontSize: this.style.fontSize,
+            fontFamily: this.style.fontFamily,
+            opacity: this.style.opacity,
+          },
+          transform: [1, 0, 0, 1, 0, 0],
+          geometry: {
+            x: center[0] - VIDEO_EMBED_WIDTH / 2,
+            y: center[1] - VIDEO_EMBED_HEIGHT / 2 + this.style.fontSize,
+            text: video.sourceUrl,
+            embed: "video",
+          },
+        },
+      });
+      if (!accepted) return;
+      this.videoEmbedDialog.close();
+      this.tools.setTool("select");
+      this.tools.selectOnly([itemId]);
+      this.notify("Video embedded.", "info");
+    } finally {
+      this.videoEmbedPending = false;
+      submit.disabled = false;
+    }
+  }
+
   private async uploadImage(image: File, center: Point): Promise<void> {
     const issue = imageUploadIssue(image);
     if (issue) {
@@ -2724,6 +3762,138 @@ export class BoardApp {
       if (error instanceof ApiError) this.notify(error.message, "error");
       else if (error instanceof ImagePreparationError) this.notify(error.message, "warning");
       else this.notify("The image could not be uploaded.", "error");
+    } finally {
+      this.imageUploadInFlight = false;
+      this.updatePermissions();
+    }
+  }
+
+  /**
+   * Stores one inline image for a WebMCP write. Reuses the board's own upload path, so the same
+   * sanitizing, size limits, and private board bucket apply to an AI-supplied picture as to one
+   * a participant drops on the canvas.
+   */
+  private async storeWebMcpImage(
+    imageDataUrl: string,
+    signal: AbortSignal,
+  ): Promise<ImageAssetMetadata> {
+    const [asset] = await this.storeEducationVisualImages(
+      [{ format: "inline_image", imageDataUrl }],
+      signal,
+    );
+    if (!asset) throw new Error("The image could not be stored.");
+    return asset;
+  }
+
+  /**
+   * Applies a WebMCP rearrangement. Each note carries its own delta, and the board's own rules
+   * then decide what travels with it: a note leaving or entering a Section changes membership,
+   * and a grouped note brings its group, so the batch can be larger than the notes named. It
+   * goes in as one batch, so a class puts the board back with a single undo.
+   */
+  private async moveItemsFromWebMcp(moves: readonly StickyMove[]): Promise<void> {
+    if (moves.length === 0) return;
+    const limit = Math.max(1, Math.min(100, Math.floor(this.bootstrap.limits.maxBatchItems)));
+    const items = savedAuthoritativeItems(
+      moves.map((move) => move.item.id),
+      this.model.items,
+      this.model.authoritativeItems,
+    );
+    if (!items) throw new Error("Wait for every note to finish saving before moving it.");
+    if (items.some((item) => !this.canModifyItem(item))) {
+      throw new Error("This arrangement includes a note this browser cannot modify.");
+    }
+    const deltaById = new Map(moves.map((move) => [move.item.id, move.delta]));
+    // Validated over every note the call named, the ones asked to stay put included: a note left
+    // out here is one the spread below could pick up and move behind the caller's back.
+    if (this.bootstrap.board.features.grouping) {
+      const conflict = conflictingMoveIssue(items, deltaById, this.model.items.values());
+      if (conflict) throw new Error(conflict);
+    }
+    // Only the notes that actually travel reach the batch. A note staying put is unreachable
+    // from any of them now that the check above has passed, so leaving it out cannot move it.
+    const directUpdates = items.flatMap((item) => {
+      const delta = deltaById.get(item.id) ?? { x: 0, y: 0 };
+      if (delta.x === 0 && delta.y === 0) return [];
+      return [
+        {
+          kind: "item.update" as const,
+          itemId: item.id,
+          expectedVersion: item.version,
+          patch: { transform: translateMatrix(item.transform, delta.x, delta.y) },
+        },
+      ];
+    });
+    if (directUpdates.length === 0) return;
+    let operations: BatchItemOperation[];
+    try {
+      operations = buildTranslationMembershipOperations(
+        directUpdates,
+        this.model.items.values(),
+        this.bootstrap.board.features.grouping,
+        (item) => this.canModifyItem(item),
+        limit,
+      );
+    } catch (error) {
+      if (!(error instanceof GroupingError)) throw error;
+      throw new Error(error.message);
+    }
+    const accepted = await this.commitAndWait({ kind: "items.batch", operations });
+    if (!accepted) throw new Error("The move could not be queued for saving.");
+  }
+
+  /** The topmost saved object covering a board point, or undefined when none is saved there. */
+  private savedItemAt(point: Point): BoardItem | undefined {
+    const hit = this.model.hitTest(point, 0);
+    if (!hit) return undefined;
+    const [saved] =
+      savedAuthoritativeItems([hit.id], this.model.items, this.model.authoritativeItems) ?? [];
+    return saved;
+  }
+
+  /** The one saved object selected in this browser, or null when the selection is not exactly one. */
+  private singleSavedSelection(): BoardItem | null {
+    const selection = [...this.tools.selection];
+    if (selection.length !== 1) return null;
+    const saved = savedAuthoritativeItems(
+      selection,
+      this.model.items,
+      this.model.authoritativeItems,
+    );
+    return saved?.[0] ?? null;
+  }
+
+  private async storeEducationVisualImages(
+    sources: readonly EducationVisualSource[],
+    signal: AbortSignal,
+  ): Promise<readonly BoardImageAsset[]> {
+    if (!this.bootstrap.board.imagesEnabled) {
+      throw new Error("Image cards are disabled for this Space.");
+    }
+    if (!navigator.onLine || this.phase !== "ready") {
+      throw new Error("Reconnect before adding generated visuals.");
+    }
+    if (!this.canCommit()) throw new Error("This drawing is read only.");
+    if (this.imageUploadInFlight) throw new Error("Another image is already uploading.");
+
+    this.imageUploadInFlight = true;
+    this.updatePermissions();
+    try {
+      const assets: BoardImageAsset[] = [];
+      for (const source of sources) {
+        signal.throwIfAborted();
+        const image = await educationVisualBlob(source);
+        const prepared = await privacySafeImageUpload(image);
+        signal.throwIfAborted();
+        assets.push(await this.api.uploadBoardImage(this.bootstrap.board.id, prepared));
+      }
+      return assets;
+    } catch (error) {
+      if (signal.aborted || isAbortError(error)) throw error;
+      if (error instanceof ApiError || error instanceof ImagePreparationError) throw error;
+      throw new Error("The generated visual could not be prepared or stored.", {
+        cause: error,
+      });
     } finally {
       this.imageUploadInFlight = false;
       this.updatePermissions();
@@ -2869,7 +4039,13 @@ export class BoardApp {
       editor.value = value;
       editor.setSelectionRange(cursor, cursor);
     });
-    editor.addEventListener("blur", () => void this.closeTableCellEditor(true));
+    this.bindMathField(editor, (save) => void this.closeTableCellEditor(save));
+    editor.addEventListener("blur", (event) => {
+      // Reaching for the maths keyboard is not leaving the editor; the panel finishes the edit
+      // when focus leaves it too.
+      if (this.mathFieldPanel?.contains((event as FocusEvent).relatedTarget as Node | null)) return;
+      void this.closeTableCellEditor(true);
+    });
     editor.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -2890,6 +4066,7 @@ export class BoardApp {
     const editor = this.tableCellEditor;
     const edit = this.tableCellEdit;
     if (!editor) return;
+    this.dismissMathField(editor);
     const text = clampTableCellText(editor.value);
     const draft: TableCellDraftRecovery | null = edit
       ? {
@@ -3001,7 +4178,13 @@ export class BoardApp {
       editor.value = value;
       editor.setSelectionRange(cursor, cursor);
     });
-    editor.addEventListener("blur", () => void this.closeZoneTitleEditor(true));
+    this.bindMathField(editor, (save) => void this.closeZoneTitleEditor(save));
+    editor.addEventListener("blur", (event) => {
+      // Reaching for the maths keyboard is not leaving the editor; the panel finishes the edit
+      // when focus leaves it too.
+      if (this.mathFieldPanel?.contains((event as FocusEvent).relatedTarget as Node | null)) return;
+      void this.closeZoneTitleEditor(true);
+    });
     editor.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -3022,6 +4205,7 @@ export class BoardApp {
     const editor = this.zoneTitleEditor;
     const edit = this.zoneTitleEdit;
     if (!editor) return;
+    this.dismissMathField(editor);
     const title = clampZoneTitle(editor.value.replace(/[\r\n]/gu, " ")).trim() || "Section";
     const draft: ZoneTitleDraftRecovery | null = edit
       ? {
@@ -3145,6 +4329,7 @@ export class BoardApp {
         commands.map((command) => command.commandId),
       );
       this.model.discardOptimistic();
+      for (const command of commands) this.finishWebMcpCommit(command.commandId, false);
       this.notify("Unsaved edits were discarded. The shared board is unchanged.", "info");
     } catch {
       this.notify(
@@ -3157,6 +4342,32 @@ export class BoardApp {
   private assignCreatedItemsToSections(operation: DurableOperation): DurableOperation {
     if (!this.bootstrap.board.features.grouping) return operation;
     return decorateCreatedItemsWithSections(operation, this.model.items.values());
+  }
+
+  private reconcileRenderedTextSectionMembership(itemId: string, expectedVersion: number): void {
+    if (
+      !this.bootstrap.board.features.grouping ||
+      !this.canCommit() ||
+      this.pendingRenderedTextSectionUpdates.has(itemId)
+    ) {
+      return;
+    }
+    const operation = this.model.renderedTextSectionMembershipOperation(itemId, expectedVersion);
+    if (operation === null) return;
+    if (
+      !operationAllowedForActor(
+        operation,
+        this.bootstrap.actor.role,
+        this.bootstrap.actor.id,
+        this.model.authoritativeItems,
+      )
+    ) {
+      return;
+    }
+    this.pendingRenderedTextSectionUpdates.add(itemId);
+    void this.commit(operation).finally(() => {
+      this.pendingRenderedTextSectionUpdates.delete(itemId);
+    });
   }
 
   private async commit(
@@ -3225,6 +4436,34 @@ export class BoardApp {
     return true;
   }
 
+  private commitAndWait(operation: DurableOperation): Promise<boolean> {
+    return new Promise((resolve) => {
+      let queued = false;
+      void this.commit(operation, createId(), undefined, (commandId) => {
+        queued = true;
+        this.pendingWebMcpCommits.track(commandId, resolve, (id) => this.withdrawCommand(id));
+      }).then((accepted) => {
+        if (!accepted && !queued) resolve(false);
+      });
+    });
+  }
+
+  private finishWebMcpCommit(commandId: string, accepted: boolean): void {
+    this.pendingWebMcpCommits.finish(commandId, accepted);
+  }
+
+  /**
+   * Drops a command that is still queued locally so it cannot be flushed
+   * later. Returns false when the model no longer holds it, which means the
+   * server already answered it.
+   */
+  private withdrawCommand(commandId: string): boolean {
+    if (!this.model.reject(commandId)) return false;
+    void this.outbox.remove(this.bootstrap.board.id, this.bootstrap.actor.id, commandId);
+    this.updateStatus();
+    return true;
+  }
+
   private handleAction(action: ServerAction, replay: boolean): void {
     this.clearPreviewForGesture(action.actionId);
     if (action.seq <= this.model.lastAppliedSeq) {
@@ -3236,6 +4475,7 @@ export class BoardApp {
         this.pendingTableCellDrafts.delete(action.commandId);
         this.pendingZoneTitleDrafts.delete(action.commandId);
         this.model.reject(action.commandId);
+        this.finishWebMcpCommit(action.commandId, false);
         void this.outbox.remove(this.bootstrap.board.id, this.bootstrap.actor.id, action.commandId);
         this.updateStatus();
         return;
@@ -3247,8 +4487,14 @@ export class BoardApp {
     try {
       this.rememberCreators([action.actor, ...(action.creators ?? [])]);
       const result = this.model.applyAction(action);
+      try {
+        this.webMcp?.recordAuthoritativeAction(action, result.changedIds);
+      } catch {
+        this.notify("The problem-step watch could not process this saved change.", "warning");
+      }
       this.bootstrap.board.latestSeq = action.seq;
       if (result.acknowledged) {
+        this.finishWebMcpCommit(action.commandId, true);
         this.pendingStickyDrafts.delete(action.commandId);
         this.pendingTableCellDrafts.delete(action.commandId);
         this.pendingZoneTitleDrafts.delete(action.commandId);
@@ -3287,6 +4533,7 @@ export class BoardApp {
       this.pendingTableCellDrafts.delete(commandId);
       this.pendingZoneTitleDrafts.delete(commandId);
       this.model.reject(commandId);
+      this.finishWebMcpCommit(commandId, false);
       void this.outbox.remove(this.bootstrap.board.id, this.bootstrap.actor.id, commandId);
     }
     if (stickyDraft) this.recoverStickyDraft(stickyDraft);
@@ -3379,6 +4626,10 @@ export class BoardApp {
       this.tools.setTool("select");
     if (!this.isToolEnabled(this.tools.tool)) this.tools.setTool("select");
     this.updatePermissions();
+    this.renderParticipants();
+    if (this.bootstrap.actor.role === "owner" && !this.participantDrawer.hidden) {
+      void this.loadParticipantRoles();
+    }
     if (!this.settingsDrawer.hidden) this.renderSettingsPanel();
   }
 
@@ -3608,6 +4859,13 @@ export class BoardApp {
       this.creatorNames.set(actorId, displayName);
     }
     this.model.load(next.snapshot as BoardSnapshot, true);
+    try {
+      // A replacement cannot be expressed as individual changes, so active watches
+      // re-snapshot and report a resync instead of retaining stale text and sequences.
+      this.webMcp?.recordAuthoritativeReload(this.model.lastAppliedSeq);
+    } catch {
+      this.notify("The problem-step watch could not follow the refreshed board.", "warning");
+    }
     for (const entry of activeEntries) {
       this.model.restoreQueued(entry.command, next.actor.id);
       this.hydrateOutboxRecovery(entry.command.commandId, entry.recovery);
@@ -3660,32 +4918,32 @@ export class BoardApp {
   }
 
   private readonly onGlobalKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && !this.toolsMenu.hidden) {
-      event.preventDefault();
-      this.setToolsMenuOpen(false);
-      query(this.root, "[data-testid='tool-protractor']", HTMLButtonElement).focus();
-      return;
-    }
-    if (event.key === "Escape" && !this.shapeMenu.hidden) {
-      event.preventDefault();
-      this.setShapeMenuOpen(false);
-      query(this.root, "[data-testid='tool-rectangle']", HTMLButtonElement).focus();
-      return;
-    }
-    if (event.key === "Escape" && this.followedSpotlight) {
-      event.preventDefault();
-      this.stopFollowingSpotlight();
-      return;
-    }
-    if (isEditingTarget(event.target) || !(event.ctrlKey || event.metaKey)) return;
-    const key = event.key.toLowerCase();
-    if (key === "z") {
-      event.preventDefault();
-      if (event.shiftKey) void this.redo();
-      else void this.undo();
-    } else if (key === "y" && !event.metaKey) {
-      event.preventDefault();
-      void this.redo();
+    const shortcut = globalShortcutFor(event, {
+      editing: isEditingTarget(event.target),
+      toolsMenuOpen: !this.toolsMenu.hidden,
+      shapeMenuOpen: !this.shapeMenu.hidden,
+      followingSpotlight: this.followedSpotlight !== null,
+    });
+    if (shortcut === null) return;
+    event.preventDefault();
+    switch (shortcut) {
+      case "close-tools-menu":
+        this.setToolsMenuOpen(false);
+        this.moreToolsButton.focus();
+        break;
+      case "close-shape-menu":
+        this.setShapeMenuOpen(false);
+        query(this.root, "[data-testid='tool-rectangle']", HTMLButtonElement).focus();
+        break;
+      case "stop-following-spotlight":
+        this.stopFollowingSpotlight();
+        break;
+      case "undo":
+        void this.undo();
+        break;
+      case "redo":
+        void this.redo();
+        break;
     }
   };
 
@@ -3750,12 +5008,16 @@ export class BoardApp {
           : "Add text",
     );
     editor.maxLength = mode === "sticky" ? MAX_STICKY_TEXT_CODE_POINTS * 2 : 5_000;
-    editor.rows = mode === "sticky" ? 6 : 2;
+    editor.rows = mode === "sticky" ? 6 : 1;
     editor.value = recovery?.text ?? editedItem?.geometry.text ?? "";
     editor.dataset.boardX = String(textPoint[0]);
     editor.dataset.boardY = String(textPoint[1]);
     if (!editedItem) editor.dataset.draftItemId = recovery?.draftItemId ?? createId();
-    editor.placeholder = mode === "sticky" ? "Add an idea…" : "Type something";
+    editor.placeholder = mode === "sticky" ? "Add an idea…" : "Add text";
+    if (mode === "text") {
+      editor.title = "Enter to add · Ctrl/⌘ Enter for a new line";
+      editor.setAttribute("aria-keyshortcuts", "Enter Control+Enter Meta+Enter");
+    }
     const zoom = this.renderer.viewport.zoom;
     if (mode === "sticky") {
       const editorWidth = Math.min(
@@ -3826,18 +5088,32 @@ export class BoardApp {
         return;
       }
       preview();
-      if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
-      this.textEditorTimer = window.setTimeout(() => void this.closeTextEditor(true), 500);
     };
     editor.addEventListener("input", schedule);
-    editor.addEventListener("blur", () => void this.closeTextEditor(true));
+    this.bindMathField(editor, (save) => void this.closeTextEditor(save), schedule);
+    editor.addEventListener("blur", (event) => {
+      // Reaching for the maths keyboard is not leaving the editor; the panel finishes the edit
+      // when focus leaves it too.
+      if (this.mathFieldPanel?.contains((event as FocusEvent).relatedTarget as Node | null)) return;
+      void this.closeTextEditor(true);
+    });
     editor.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
         void this.closeTextEditor(false);
-      } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void this.closeTextEditor(true);
+      } else if (event.key === "Enter" && !event.isComposing) {
+        if (mode === "text") {
+          event.preventDefault();
+          if (event.ctrlKey || event.metaKey) {
+            editor.setRangeText("\n", editor.selectionStart, editor.selectionEnd, "end");
+            schedule();
+          } else {
+            void this.closeTextEditor(true);
+          }
+        } else if (event.ctrlKey || event.metaKey) {
+          event.preventDefault();
+          void this.closeTextEditor(true);
+        }
       }
     });
     preview();
@@ -3851,6 +5127,7 @@ export class BoardApp {
   private async closeTextEditor(save: boolean): Promise<void> {
     const editor = this.textEditor;
     if (!editor) return;
+    this.dismissMathField(editor);
     if (!save) {
       this.discardTextEditor(editor);
       return;
@@ -3863,8 +5140,6 @@ export class BoardApp {
       this.discardTextEditor(editor);
       return;
     }
-    if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
-    this.textEditorTimer = null;
     const value = mode === "sticky" ? clampStickyText(editor.value) : editor.value;
     if (mode === "text" && !value) {
       this.discardTextEditor(editor);
@@ -3933,6 +5208,10 @@ export class BoardApp {
     if (this.textEditor !== editor || attempt !== this.textEditorCloseAttempt) return;
     this.textEditorClosing = false;
     if (accepted) {
+      if ((mode === "sticky" || mode === "text") && context === null) {
+        this.tools.setTool("select");
+        this.tools.selectOnly([draftItemId]);
+      }
       this.discardTextEditor(editor);
       return;
     }
@@ -3955,8 +5234,6 @@ export class BoardApp {
     this.textEditContext = null;
     this.textEditorMode = null;
     this.textEditorPreview = null;
-    if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
-    this.textEditorTimer = null;
     editor.remove();
     this.renderer.clearLocalPreview();
     this.scheduleRejectedDraftRestore();
@@ -4092,13 +5369,26 @@ export class BoardApp {
   }
 
   private async loadAccessPanel(): Promise<void> {
-    if (this.bootstrap.actor.role !== "owner") return;
+    if (this.bootstrap.actor.role !== "owner") {
+      this.accessBody.replaceChildren();
+      return;
+    }
     this.accessBody.replaceChildren(loadingBlock("Loading access…"));
     try {
       this.accessMembers = await this.api.members(this.bootstrap.board.id);
       this.renderAccessPanel();
     } catch (error) {
       this.accessBody.replaceChildren(errorBlock("Access controls could not be loaded."));
+      this.apiError(error);
+    }
+  }
+
+  private async loadParticipantRoles(): Promise<void> {
+    if (this.bootstrap.actor.role !== "owner") return;
+    try {
+      this.accessMembers = await this.api.members(this.bootstrap.board.id);
+      if (!this.participantDrawer.hidden) this.renderParticipants();
+    } catch (error) {
       this.apiError(error);
     }
   }
@@ -4154,7 +5444,10 @@ export class BoardApp {
   }
 
   private async loadSettingsPanel(): Promise<void> {
-    if (this.bootstrap.actor.role !== "owner") return;
+    if (this.bootstrap.actor.role !== "owner") {
+      this.settingsBody.replaceChildren();
+      return;
+    }
     this.settingsBody.replaceChildren(loadingBlock("Loading settings…"));
     try {
       const [recoverySnapshots, accessMembers, organisationWebhookSettings] = await Promise.all([
@@ -4185,6 +5478,8 @@ export class BoardApp {
       this.clearOwnerSettings();
       return;
     }
+    const permissionsOpen =
+      this.settingsBody.querySelector<HTMLDetailsElement>(".settings-collapsible")?.open ?? false;
     this.settingsBody.replaceChildren();
     this.settingsBody.setAttribute(
       "aria-busy",
@@ -4228,12 +5523,17 @@ export class BoardApp {
     this.settingsBody.append(boardSection);
 
     const featureSection = document.createElement("section");
-    featureSection.className = "access-section";
+    featureSection.className = "access-section settings-permissions-section";
     featureSection.innerHTML = `
-      <div class="section-heading"><h3>Features</h3><span>${BOARD_FEATURE_KEYS.filter((key) => this.bootstrap.board.features[key]).length}/${BOARD_FEATURE_KEYS.length}</span></div>
-      <p class="section-note">Changes apply immediately to everyone in this Space. Existing objects remain visible and movable.</p>
-      <div class="feature-toggle-grid" data-feature-toggle-grid></div>
+      <details class="settings-collapsible">
+        <summary><span class="settings-collapsible-label">Tool permissions</span><span class="settings-collapsible-count">${BOARD_FEATURE_KEYS.filter((key) => this.bootstrap.board.features[key]).length}/${BOARD_FEATURE_KEYS.length} enabled</span></summary>
+        <div class="settings-collapsible-body">
+          <p class="section-note">Changes apply immediately to everyone in this Space. Existing objects remain visible and movable.</p>
+          <div class="feature-toggle-grid" data-feature-toggle-grid></div>
+        </div>
+      </details>
     `;
+    query(featureSection, ".settings-collapsible", HTMLDetailsElement).open = permissionsOpen;
     const featureGrid = query(featureSection, "[data-feature-toggle-grid]", HTMLElement);
     for (const key of BOARD_FEATURE_KEYS) {
       const metadata = FEATURE_LABELS[key];
@@ -4738,6 +6038,32 @@ export class BoardApp {
     }
   }
 
+  private async changeParticipantRole(member: Member, role: "viewer" | "editor"): Promise<void> {
+    if (member.role === role || this.participantRoleChangesPending.has(member.id)) return;
+    this.participantRoleChangesPending.add(member.id);
+    this.renderParticipants();
+    try {
+      const result = await this.api.updateMember(
+        this.bootstrap.board.id,
+        member.id,
+        role,
+        this.bootstrap.board.aclVersion,
+      );
+      this.adoptAclVersion(result);
+      this.accessMembers = this.accessMembers.map((value) =>
+        value.id === member.id ? { ...value, role } : value,
+      );
+      for (const [key, presence] of this.presences) {
+        if (presence.id === member.id) this.presences.set(key, { ...presence, role });
+      }
+    } catch (error) {
+      this.apiError(error);
+    } finally {
+      this.participantRoleChangesPending.delete(member.id);
+      if (!this.participantDrawer.hidden) this.renderParticipants();
+    }
+  }
+
   private async revokeMember(member: Member): Promise<void> {
     if (!confirm(`Remove ${member.displayName} from this board?`)) return;
     try {
@@ -4932,10 +6258,550 @@ export class BoardApp {
     else this.bootstrap.board.aclVersion += 1;
   }
 
+  private canComment(): boolean {
+    return canActorComment(
+      this.phase,
+      this.bootstrap.actor.role,
+      this.bootstrap.board.drawingPolicy,
+    );
+  }
+
+  private async reloadComments(notifyOnError = true): Promise<void> {
+    const load = this.comments.beginLoad();
+    this.commentsLoading = true;
+    this.renderComments();
+    try {
+      const comments = await this.api.comments(this.bootstrap.board.id);
+      if (this.comments.completeLoad(load, comments)) this.applyCommentChange();
+    } catch (error) {
+      if (notifyOnError) this.apiError(error);
+    } finally {
+      if (this.comments.isLatestLoad(load)) {
+        this.commentsLoading = false;
+        this.renderComments();
+      }
+    }
+  }
+
+  private reconcileCommentStates(): void {
+    if (this.comments.reconcile()) this.applyCommentChange();
+  }
+
+  private applyCommentChange(): void {
+    this.renderer.setComments(this.comments.comments);
+    this.renderComments();
+  }
+
+  private openCommentsForItem(itemId: string): void {
+    if (!this.model.getItem(itemId)) return;
+    if (this.activeCommentTargetId !== itemId) this.clearPendingCommentMedia();
+    this.activeCommentTargetId = itemId;
+    this.commentsFocusItemId = null;
+    this.closeDrawers();
+    this.commentsDrawer.hidden = false;
+    this.commentsButton.setAttribute("aria-expanded", "true");
+    this.renderComments();
+    this.commentInput.focus();
+  }
+
+  /**
+   * Opens the drawer on one object's comments alone: no composer, no other objects' threads.
+   * This is what a comment marker does. Every comment is still a click away in Settings.
+   */
+  private openCommentsFocused(itemId: string): void {
+    if (!this.model.getItem(itemId)) return;
+    this.commentsFocusItemId = itemId;
+    this.activeCommentTargetId = null;
+    this.closeDrawers();
+    this.commentsDrawer.hidden = false;
+    this.commentsButton.setAttribute("aria-expanded", "true");
+    this.renderComments();
+    query(this.commentsDrawer, "[data-close-drawer]", HTMLButtonElement).focus();
+  }
+
+  private async submitComment(): Promise<void> {
+    const itemId = this.activeCommentTargetId;
+    const body = this.commentInput.value.trim();
+    if (!itemId || !this.model.getItem(itemId) || this.commentSubmitting || !this.canComment())
+      return;
+    if (this.commentImageUploading) {
+      this.notify("The image is still uploading.", "info");
+      return;
+    }
+    if (body.length === 0) {
+      this.commentInput.focus();
+      return;
+    }
+    if ([...body].length > 2_000) {
+      this.notify("Comments can contain at most 2,000 characters.", "error");
+      return;
+    }
+    const media = this.commentMediaToSend();
+    if (
+      media?.kind === "image" &&
+      media.alt !== undefined &&
+      [...media.alt].length > MAX_IMAGE_ALT_CODE_POINTS
+    ) {
+      this.notify(
+        `An image description can contain at most ${MAX_IMAGE_ALT_CODE_POINTS} characters.`,
+        "error",
+      );
+      return;
+    }
+    this.commentSubmitting = true;
+    this.renderComments();
+    try {
+      const comment = await this.api.createComment(
+        this.bootstrap.board.id,
+        itemId,
+        body,
+        undefined,
+        media,
+      );
+      this.comments.upsert(comment);
+      this.commentInput.value = "";
+      this.clearPendingCommentMedia();
+      this.applyCommentChange();
+      this.liveRegion.textContent = media ? "Comment with media added." : "Comment added.";
+    } catch (error) {
+      this.apiError(error);
+    } finally {
+      this.commentSubmitting = false;
+      this.renderComments();
+    }
+  }
+
+  /** Opens the file picker for a picture the next comment will carry. */
+  private pickCommentImage(): void {
+    if (this.pendingCommentMedia !== null || this.commentImageUploading) return;
+    if (!this.canUploadImages()) {
+      this.notify(
+        this.bootstrap.board.features.images && this.bootstrap.board.imagesEnabled
+          ? "Adding a picture to a comment needs board edit access."
+          : "Images are switched off for this Space.",
+        "warning",
+      );
+      return;
+    }
+    this.commentImageInput.click();
+  }
+
+  /**
+   * Uploads one picture through the board's own asset path and holds it for the next comment.
+   * The comment carries the stored asset, never the bytes, so it is the same private image a
+   * card on the canvas would show.
+   */
+  private async attachCommentImage(image: File): Promise<void> {
+    if (this.pendingCommentMedia !== null || this.commentImageUploading) return;
+    const issue = imageUploadIssue(image);
+    if (issue) {
+      this.notify(issue, "warning");
+      return;
+    }
+    if (!this.canUploadImages()) {
+      this.notify("Adding a picture to a comment needs board edit access.", "warning");
+      return;
+    }
+    if (!navigator.onLine || this.phase !== "ready") {
+      this.notify("Attach the image when reconnected.", "warning");
+      return;
+    }
+    this.commentImageUploading = true;
+    this.renderCommentComposerState();
+    try {
+      const prepared = await privacySafeImageUpload(image);
+      const asset = await this.api.uploadBoardImage(this.bootstrap.board.id, prepared);
+      this.pendingCommentMedia = {
+        kind: "image",
+        assetId: asset.assetId,
+        mimeType: asset.mimeType,
+        intrinsicWidth: asset.intrinsicWidth,
+        intrinsicHeight: asset.intrinsicHeight,
+      };
+      this.commentVideoField.hidden = true;
+      this.liveRegion.textContent = "Image attached to this comment.";
+    } catch (error) {
+      if (error instanceof ApiError) this.notify(error.message, "error");
+      else if (error instanceof ImagePreparationError) this.notify(error.message, "warning");
+      else this.notify("The image could not be uploaded.", "error");
+    } finally {
+      this.commentImageUploading = false;
+      this.renderCommentComposerState();
+      if (this.pendingCommentMedia?.kind === "image") this.commentImageAltInput.focus();
+    }
+  }
+
+  private openCommentVideoField(): void {
+    if (this.pendingCommentMedia !== null) return;
+    this.commentVideoField.hidden = false;
+    query(this.commentVideoField, "[data-comment-video-error]", HTMLElement).textContent = "";
+    this.commentVideoUrl.focus();
+  }
+
+  /** Holds a public YouTube or Vimeo link for the next comment, refusing anything else. */
+  private attachCommentVideo(): void {
+    const error = query(this.commentVideoField, "[data-comment-video-error]", HTMLElement);
+    const video = videoEmbedFromText(this.commentVideoUrl.value);
+    if (!video) {
+      error.textContent = "Use a complete HTTPS YouTube or Vimeo video link.";
+      this.commentVideoUrl.focus();
+      return;
+    }
+    error.textContent = "";
+    this.pendingCommentMedia = { kind: "video", provider: video.provider, url: video.sourceUrl };
+    this.commentVideoUrl.value = "";
+    this.commentVideoField.hidden = true;
+    this.renderCommentComposerState();
+    this.commentInput.focus();
+  }
+
+  private clearPendingCommentMedia(): void {
+    this.pendingCommentMedia = null;
+    this.commentImageAltInput.value = "";
+    this.commentVideoUrl.value = "";
+    this.commentVideoField.hidden = true;
+    query(this.commentVideoField, "[data-comment-video-error]", HTMLElement).textContent = "";
+    this.renderCommentComposerState();
+  }
+
+  /** What the composer will send with the next comment, with the description the author typed. */
+  private commentMediaToSend(): CommentMedia | undefined {
+    const media = this.pendingCommentMedia;
+    if (media === null) return undefined;
+    if (media.kind !== "image") return media;
+    const alt = this.commentImageAltInput.value.trim();
+    return alt.length === 0 ? media : { ...media, alt };
+  }
+
+  /** Reflects the pending attachment and what the composer can still accept. */
+  private renderCommentComposerState(): void {
+    const media = this.pendingCommentMedia;
+    const busy = this.commentSubmitting || this.commentImageUploading;
+    this.commentAttachment.hidden = media === null && !this.commentImageUploading;
+    query(this.commentAttachment, "[data-comment-image-alt-field]", HTMLElement).hidden =
+      media?.kind !== "image";
+    this.commentAttachmentLabel.textContent = this.commentImageUploading
+      ? "Uploading image…"
+      : media?.kind === "image"
+        ? "Image attached"
+        : media?.kind === "video"
+          ? `${videoProviderLabel(media.provider)} video attached`
+          : "";
+    const remove = query(
+      this.commentAttachment,
+      "[data-comment-attachment-remove]",
+      HTMLButtonElement,
+    );
+    remove.hidden = media === null;
+    remove.disabled = busy;
+    query(this.commentComposer, "[data-comment-add-image]", HTMLButtonElement).disabled =
+      busy || media !== null || !this.canUploadImages();
+    query(this.commentComposer, "[data-comment-add-video]", HTMLButtonElement).disabled =
+      busy || media !== null;
+    query(this.commentVideoField, "[data-comment-video-attach]", HTMLButtonElement).disabled = busy;
+    this.commentImageAltInput.disabled = busy;
+    this.commentVideoUrl.disabled = busy;
+  }
+
+  /**
+   * The picture or video under a comment's text. A picture loads from this board's private
+   * bucket; a video stays a link until a participant chooses to play it in the drawer.
+   */
+  private commentMediaNode(comment: BoardComment): HTMLElement | null {
+    const media = comment.media;
+    if (media === undefined) return null;
+    if (media.kind === "image") return this.commentImageNode(media);
+    return this.commentVideoNode(comment.id, media);
+  }
+
+  private commentImageNode(media: Extract<CommentMedia, { kind: "image" }>): HTMLElement {
+    const figure = document.createElement("figure");
+    figure.className = "comment-media comment-media-image";
+    figure.dataset.commentMedia = "image";
+    const image = document.createElement("img");
+    image.alt = media.alt ?? "Image attached to this comment";
+    image.loading = "lazy";
+    image.dataset.assetId = media.assetId;
+    figure.append(image);
+    if (media.alt !== undefined) {
+      const caption = document.createElement("figcaption");
+      caption.textContent = media.alt;
+      figure.append(caption);
+    }
+    void this.loadCommentImage(media.assetId).then(
+      (url) => {
+        image.src = url;
+      },
+      () => {
+        const failed = document.createElement("p");
+        failed.className = "comment-media-error";
+        failed.textContent = "This image could not be loaded.";
+        image.replaceWith(failed);
+      },
+    );
+    return figure;
+  }
+
+  private commentVideoNode(
+    commentId: string,
+    media: Extract<CommentMedia, { kind: "video" }>,
+  ): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "comment-media comment-media-video";
+    card.dataset.commentMedia = "video";
+    const video = videoEmbedFromText(media.url);
+    const link = document.createElement("a");
+    link.className = "comment-media-video-link";
+    link.href = media.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.referrerPolicy = "no-referrer";
+    link.textContent = `${video?.title ?? videoProviderLabel(media.provider)} · open in new tab`;
+    card.append(link);
+    if (!video) return card;
+
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "comment-media-play";
+    play.dataset.commentVideoPlay = "true";
+    play.textContent = "Play video here";
+    const player = document.createElement("div");
+    player.className = "comment-media-player";
+    const frame = document.createElement("iframe");
+    frame.className = "comment-media-frame";
+    frame.title = video.title;
+    frame.loading = "lazy";
+    frame.referrerPolicy = "strict-origin-when-cross-origin";
+    frame.allow =
+      "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share";
+    frame.allowFullscreen = true;
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "comment-media-stop";
+    stop.dataset.commentVideoStop = "true";
+    stop.textContent = "Stop video";
+    player.append(frame, stop);
+    play.addEventListener("click", () => {
+      // Swapped in place: rebuilding the list would reload the player mid-sentence.
+      this.playingCommentVideoId = commentId;
+      frame.src = video.embedUrl;
+      play.replaceWith(player);
+    });
+    stop.addEventListener("click", () => {
+      this.playingCommentVideoId = null;
+      frame.removeAttribute("src");
+      player.replaceWith(play);
+      play.focus();
+      if (this.commentsRenderPending) this.renderComments();
+    });
+    card.append(play);
+    return card;
+  }
+
+  /**
+   * One object URL per comment picture, shared by every card that shows it and revoked when
+   * the board tears down. The asset itself is fetched with the participant's own session.
+   */
+  private loadCommentImage(assetId: string): Promise<string> {
+    const existing = this.commentImageUrls.get(assetId);
+    if (existing) return existing;
+    const pending = this.api
+      .boardImage(this.bootstrap.board.id, assetId)
+      .then((blob) => URL.createObjectURL(blob))
+      .catch((error: unknown) => {
+        if (this.commentImageUrls.get(assetId) === pending) this.commentImageUrls.delete(assetId);
+        throw error;
+      });
+    this.commentImageUrls.set(assetId, pending);
+    return pending;
+  }
+
+  private releaseCommentImages(): void {
+    for (const pending of this.commentImageUrls.values()) {
+      void pending.then(
+        (url) => URL.revokeObjectURL(url),
+        () => undefined,
+      );
+    }
+    this.commentImageUrls.clear();
+  }
+
+  private async resolveObjectComment(commentId: string): Promise<void> {
+    if (this.commentsResolving.has(commentId)) return;
+    this.commentsResolving.add(commentId);
+    this.renderComments();
+    try {
+      const comment = await this.api.resolveComment(this.bootstrap.board.id, commentId);
+      this.comments.upsert(comment);
+      this.applyCommentChange();
+      this.liveRegion.textContent = "Comment resolved.";
+    } catch (error) {
+      this.apiError(error);
+    } finally {
+      this.commentsResolving.delete(commentId);
+      this.renderComments();
+    }
+  }
+
+  private renderComments(): void {
+    const comments = this.comments.comments;
+    const openCount = comments.filter((comment) => comment.state === "open").length;
+    this.commentsCount.textContent = String(openCount);
+    this.commentsCount.hidden = openCount === 0;
+    this.commentsButton.setAttribute(
+      "aria-label",
+      openCount === 0 ? "View all comments" : `View all comments, ${openCount} open`,
+    );
+    // The card list is rebuilt when the drawer opens, so a hidden drawer only
+    // needs the badge.
+    if (this.commentsDrawer.hidden) return;
+    if (this.playingCommentVideoId !== null) {
+      // Rebuilding the list would detach the iframe a participant is watching, reloading the
+      // video. Hold the render until they stop it, as the participant list does for its picker.
+      this.commentsRenderPending = true;
+      return;
+    }
+    this.commentsRenderPending = false;
+    this.showHiddenCommentsInput.checked = this.showHiddenComments;
+
+    const focused = this.commentsFocusItemId
+      ? this.model.getItem(this.commentsFocusItemId)
+      : undefined;
+    if (this.commentsFocusItemId && !focused) this.commentsFocusItemId = null;
+    this.commentsDrawer.dataset.focus = focused ? "object" : "all";
+    this.commentsEyebrow.textContent = focused ? "Comments on" : "Objects";
+    this.commentsHeading.textContent = focused
+      ? capitalise(commentObjectLabel(focused))
+      : "Comments";
+    this.commentsFilter.hidden = focused !== undefined;
+
+    const target =
+      this.activeCommentTargetId && !focused
+        ? this.model.getItem(this.activeCommentTargetId)
+        : undefined;
+    if (this.activeCommentTargetId && !target) this.activeCommentTargetId = null;
+    this.commentComposer.hidden = target === undefined || !this.canComment();
+    if (target) {
+      this.commentTargetLabel.textContent = `Comment on ${commentObjectLabel(target)}`;
+      this.commentInput.disabled = this.commentSubmitting;
+      query(this.commentComposer, "[data-comment-submit]", HTMLButtonElement).disabled =
+        this.commentSubmitting || this.commentImageUploading;
+    }
+    this.renderCommentComposerState();
+
+    const visible = comments
+      .filter((comment) => objectCommentVisible(comment.state, this.showHiddenComments))
+      .filter((comment) => focused === undefined || comment.itemId === focused.id)
+      .sort((left, right) => {
+        const leftTarget = left.itemId === this.activeCommentTargetId ? 0 : 1;
+        const rightTarget = right.itemId === this.activeCommentTargetId ? 0 : 1;
+        if (leftTarget !== rightTarget) return leftTarget - rightTarget;
+        const rank = { open: 0, orphaned: 1, resolved: 2 } as const;
+        return rank[left.state] - rank[right.state] || right.createdAt - left.createdAt;
+      });
+    clearTypesetMath(this.commentsList);
+    this.commentsList.replaceChildren();
+    if (visible.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "comments-empty";
+      empty.textContent = this.commentsLoading
+        ? "Loading comments…"
+        : focused
+          ? "No open comments on this object."
+          : this.showHiddenComments
+            ? "No comments yet."
+            : "No open comments. Select an object to start one.";
+      this.commentsList.append(empty);
+      return;
+    }
+
+    for (const comment of visible) {
+      const card = document.createElement("article");
+      card.className = "comment-card";
+      card.dataset.state = comment.state;
+      if (comment.itemId === this.activeCommentTargetId) card.dataset.activeTarget = "true";
+      const heading = document.createElement("div");
+      heading.className = "comment-card-heading";
+      const identity = document.createElement("span");
+      const author = document.createElement("strong");
+      author.textContent = comment.author.displayName;
+      const time = document.createElement("time");
+      time.dateTime = new Date(comment.createdAt).toISOString();
+      time.textContent = formatCommentTime(comment.createdAt);
+      identity.append(author);
+      if (comment.assistedBy === "ai") {
+        const tag = document.createElement("span");
+        tag.className = "assistance-tag";
+        tag.dataset.assistedBy = "ai";
+        const action = comment.assistance?.action;
+        tag.textContent = action ? `AI · ${assistActionLabel(action)}` : "AI";
+        tag.title = `Written by the AI assistant${comment.assistance ? ` through ${comment.assistance.tool}` : ""} on behalf of ${comment.author.displayName}`;
+        identity.append(tag);
+      }
+      identity.append(time);
+      const state = document.createElement("span");
+      state.className = "comment-state";
+      state.textContent = comment.state;
+      heading.append(identity, state);
+
+      const body = document.createElement("p");
+      body.className = "comment-body";
+      body.textContent = comment.body;
+      typesetMath(body);
+      const actions = document.createElement("div");
+      actions.className = "comment-card-actions";
+      const item = this.model.getItem(comment.itemId);
+      if (item) {
+        const show = document.createElement("button");
+        show.type = "button";
+        show.textContent = `Show ${commentObjectLabel(item)}`;
+        show.addEventListener("click", () => {
+          this.tools.setTool("select");
+          this.tools.selectOnly([item.id]);
+          const bounds = this.model.getBounds(item.id);
+          if (bounds) this.renderer.viewport.fit(bounds, 180);
+        });
+        actions.append(show);
+      } else {
+        const orphan = document.createElement("span");
+        orphan.className = "comment-orphan-label";
+        orphan.textContent = "Deleted object";
+        actions.append(orphan);
+      }
+      if (
+        comment.state !== "resolved" &&
+        canResolveComment(comment, this.bootstrap.actor.id, this.bootstrap.actor.role)
+      ) {
+        const resolve = document.createElement("button");
+        resolve.type = "button";
+        resolve.className = "comment-resolve";
+        resolve.textContent = "Resolve";
+        resolve.disabled = this.commentsResolving.has(comment.id);
+        resolve.addEventListener("click", () => void this.resolveObjectComment(comment.id));
+        actions.append(resolve);
+      }
+      const media = this.commentMediaNode(comment);
+      if (media) card.append(heading, body, media, actions);
+      else card.append(heading, body, actions);
+      this.commentsList.append(card);
+    }
+  }
+
   private renderParticipants(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLSelectElement && this.participantList.contains(active)) {
+      // Rebuilding the rows would close the role picker the owner is using.
+      this.participantRenderPending = true;
+      return;
+    }
+    this.participantRenderPending = false;
     this.participantList.replaceChildren();
     const entries = [...this.presences.values()];
-    this.participantCount.textContent = String(Math.max(1, entries.length));
+    const participantTotal = Math.max(1, entries.length);
+    const participantLabel = `${participantTotal} ${participantTotal === 1 ? "person" : "people"} here`;
+    this.participantCount.textContent = String(participantTotal);
+    this.participantsButton.setAttribute("aria-label", participantLabel);
+    this.participantsButton.title = participantLabel;
     for (const participant of entries) {
       const row = document.createElement("div");
       row.className = "participant-row";
@@ -4946,16 +6812,44 @@ export class BoardApp {
       const name = document.createElement("strong");
       name.textContent = participant.displayName;
       const detail = document.createElement("small");
-      const role =
+      const member = this.accessMembers.find((value) => value.id === participant.id);
+      const participantRole =
         participant.id === this.bootstrap.actor.id
-          ? `${this.bootstrap.actor.role} · you`
-          : (participant.role ?? "participant");
+          ? this.bootstrap.actor.role
+          : (member?.role ?? participant.role ?? "participant");
+      const role =
+        participant.id === this.bootstrap.actor.id ? `${participantRole} · you` : participantRole;
       detail.textContent = participant.activeTool ? `${role} · ${participant.activeTool}` : role;
       identity.append(name, detail);
+      const actions = document.createElement("span");
+      actions.className = "participant-row-actions";
+      if (
+        this.bootstrap.actor.role === "owner" &&
+        participant.id !== this.bootstrap.actor.id &&
+        member !== undefined &&
+        (member.role === "viewer" || member.role === "editor")
+      ) {
+        const select = document.createElement("select");
+        select.setAttribute("aria-label", `Role for ${participant.displayName}`);
+        select.innerHTML =
+          '<option value="editor">Editor</option><option value="viewer">Viewer</option>';
+        select.value = member.role;
+        select.disabled = this.participantRoleChangesPending.has(member.id);
+        select.addEventListener("change", () => {
+          if (select.value === "viewer" || select.value === "editor") {
+            void this.changeParticipantRole(member, select.value);
+          }
+        });
+        select.addEventListener("blur", () => {
+          if (this.participantRenderPending) this.renderParticipants();
+        });
+        actions.append(select);
+      }
       const live = document.createElement("i");
       live.className = "live-dot";
       live.title = "Connected";
-      row.append(avatar, identity, live);
+      actions.append(live);
+      row.append(avatar, identity, actions);
       this.participantList.append(row);
     }
   }
@@ -5051,6 +6945,7 @@ export class BoardApp {
     this.updateHistoryControls();
     this.updateStatus();
     this.renderParticipants();
+    this.renderComments();
     query(this.root, "[data-canvas-hint]", HTMLElement).hidden = this.model.items.size > 0;
     document.title = brandedDocumentTitle(this.bootstrap.board.title);
   }
@@ -5076,20 +6971,18 @@ export class BoardApp {
     for (const button of this.activitiesMenu.querySelectorAll<HTMLButtonElement>(
       "[data-activity-template]",
     )) {
-      const votingTemplate = button.dataset.activityTemplate === "vote-with-stamps";
       const template = ACTIVITY_TEMPLATES.find(
         (candidate) => candidate.id === button.dataset.activityTemplate,
       );
+      const hidden = template
+        ? templateHiddenByVoting(template.id, this.bootstrap.board.features)
+        : false;
       const featureIssue = template
-        ? templateFeatureIssue(template.items, this.bootstrap.board.features)
+        ? templateAvailabilityIssue(template, this.bootstrap.board.features)
         : null;
-      button.hidden = votingTemplate && !this.bootstrap.board.features.voting;
-      button.disabled =
-        !canEdit ||
-        this.activityInsertPending ||
-        (votingTemplate && !this.bootstrap.board.features.voting) ||
-        featureIssue !== null;
-      button.title = featureIssue ?? "";
+      button.hidden = hidden;
+      button.disabled = !canEdit || this.activityInsertPending || featureIssue !== null;
+      button.title = hidden ? "" : (featureIssue ?? "");
     }
     for (const button of this.activitiesMenu.querySelectorAll<HTMLButtonElement>(
       "[data-organisation-template]",
@@ -5145,24 +7038,48 @@ export class BoardApp {
     this.renderSpotlightState();
     if (!canEdit || !this.isToolEnabled(this.tools.tool)) {
       this.tools.setTool("select");
+    } else if (this.landingToolPending) {
+      // The first refresh runs before the socket is ready and forces select above; once
+      // drawing is possible, land on the pencil so a fresh board starts ready to draw.
+      this.landingToolPending = false;
+      if (this.tools.tool === "select" && this.isToolEnabled("pencil")) {
+        this.tools.setTool("pencil");
+      }
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-tool]")) {
       const name = button.dataset.tool as ToolName;
       const enabled =
         name === "rectangle"
-          ? SHAPE_CHOICES.some((choice) => this.isShapeVariantEnabled(choice.variant))
+          ? this.isToolEnabled("line") ||
+            SHAPE_CHOICES.some((choice) => this.isShapeVariantEnabled(choice.variant))
           : this.isToolEnabled(name);
       button.hidden = !enabled;
       button.disabled =
         DRAW_TOOLS.has(name) &&
         (!canEdit || !enabled || (name === "image" && this.imageUploadInFlight));
     }
+    const videoButton = query(this.root, "[data-video-embed]", HTMLButtonElement);
+    const videoEnabled = this.bootstrap.board.features.text;
+    videoButton.hidden = !videoEnabled;
+    videoButton.disabled = !canEdit || !videoEnabled;
+    if (videoButton.disabled && this.videoEmbedDialog.open) this.videoEmbedDialog.close();
     this.setShapeMenuOpen(!this.shapeMenu.hidden);
+    // Synchronize nested visibility before deciding whether the More trigger itself is useful.
     this.setToolsMenuOpen(!this.toolsMenu.hidden);
-    this.accessButton.hidden = this.bootstrap.actor.role !== "owner" || archived;
-    this.accessButton.disabled = archived || this.archivePending;
-    this.settingsButton.hidden = this.bootstrap.actor.role !== "owner" || archived;
-    this.settingsButton.disabled = archived || this.archivePending;
+    const moreToolsAvailable =
+      roleCanBroadcast &&
+      !archived &&
+      [...this.toolsMenu.querySelectorAll<HTMLButtonElement>("button")].some(
+        (button) => !button.hidden,
+      );
+    this.moreToolsButton.hidden = !moreToolsAvailable;
+    this.moreToolsButton.disabled = !canEdit;
+    if (this.moreToolsButton.hidden) this.setToolsMenuOpen(false);
+    window.requestAnimationFrame(() => this.updateToolRailOverflow());
+    this.accessButton.hidden = false;
+    this.accessButton.disabled = false;
+    this.settingsButton.hidden = false;
+    this.settingsButton.disabled = false;
     if (this.bootstrap.actor.role !== "owner") this.clearOwnerSettings();
     query(this.root, "[data-export-attributed-json]", HTMLButtonElement).hidden =
       !attributedDataDownloadAllowed(this.bootstrap.actor.role);
@@ -5176,7 +7093,7 @@ export class BoardApp {
       for (const control of this.root.querySelectorAll<
         HTMLButtonElement | HTMLInputElement | HTMLSelectElement
       >(
-        "[data-testid='access-drawer'] button, [data-testid='access-drawer'] input, [data-testid='access-drawer'] select, [data-testid='settings-drawer'] button, [data-testid='settings-drawer'] input, [data-testid='settings-drawer'] select",
+        "[data-access-body] button, [data-access-body] input, [data-access-body] select, [data-settings-body] button, [data-settings-body] input, [data-settings-body] select",
       )) {
         control.disabled = true;
       }
@@ -5193,6 +7110,7 @@ export class BoardApp {
     if (!canEdit) void this.closeTableCellEditor(false);
     if (!canEdit) void this.closeZoneTitleEditor(true);
     this.updateSelectionActions(this.tools.selection);
+    this.renderComments();
     if (canEdit && !this.textEditor && !this.tableCellEditor) {
       this.scheduleRejectedDraftRestore();
     }
@@ -5225,11 +7143,11 @@ export class BoardApp {
     } else if (this.phase !== "ready") {
       label = "Reconnecting…";
       state = "reconnecting";
-    } else if (this.model.pendingCount > 0) {
+    } else if (this.activityInsertPending || this.model.pendingCount > 0) {
       label = "Saving…";
       state = "saving";
     } else {
-      label = this.model.lastAppliedSeq > 0 ? `Saved · ${this.model.lastAppliedSeq}` : "Saved";
+      label = "Saved";
       state = "saved";
     }
     this.saveStatus.dataset.state = state;
@@ -5245,6 +7163,7 @@ export class BoardApp {
     const line = this.tools.tool === "line";
     const text = this.tools.tool === "text";
     const pencil = this.tools.tool === "pencil";
+    const eraser = this.tools.tool === "eraser";
     const activeColor = sticky
       ? this.style.stickyFill
       : stamp
@@ -5280,9 +7199,12 @@ export class BoardApp {
     query(this.root, "[data-custom-color]", HTMLElement).hidden = sticky;
     query(this.root, "[data-style-stroke-row]", HTMLElement).hidden = sticky || stamp;
     query(this.root, "[data-line-arrow-row]", HTMLElement).hidden = !line;
-    query(this.root, "[data-style-font-row]", HTMLElement).hidden = !(sticky || text);
+    query(this.root, "[data-style-opacity-row]", HTMLElement).hidden = sticky;
+    query(this.root, "[data-style-font-row]", HTMLElement).hidden = !text;
     query(this.root, "[data-style-font-family-row]", HTMLElement).hidden = !text;
-    query(this.root, "[data-testid='quick-style-bar']", HTMLElement).hidden = !pencil;
+    query(this.root, "[data-testid='quick-style-bar']", HTMLElement).hidden = !(pencil || eraser);
+    query(this.root, "[data-quick-style-divider]", HTMLElement).hidden = eraser;
+    query(this.root, "[data-quick-colours]", HTMLElement).hidden = eraser;
     query(this.root, "[data-style-color-label]", HTMLElement).textContent = sticky
       ? "Sticky colour"
       : stamp
@@ -5338,23 +7260,28 @@ export class BoardApp {
   }
 
   private setActiveToolButton(tool: ToolName): void {
-    const activeButtonTool =
-      tool === "polygon" || tool === "ellipse" ? ("rectangle" satisfies ToolName) : tool;
+    const shapeActive =
+      tool === "line" || tool === "rectangle" || tool === "polygon" || tool === "ellipse";
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-tool]")) {
-      button.setAttribute("aria-pressed", String(button.dataset.tool === activeButtonTool));
+      const isShapeTrigger = button.dataset.testid === "tool-rectangle";
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.tool === tool || (isShapeTrigger && shapeActive)),
+      );
     }
     for (const button of this.shapeMenu.querySelectorAll<HTMLButtonElement>(
       "[data-shape-variant]",
     )) {
       button.setAttribute(
         "aria-pressed",
-        String(button.dataset.shapeVariant === this.style.shapeVariant),
+        String(tool !== "line" && button.dataset.shapeVariant === this.style.shapeVariant),
       );
     }
     query(this.toolsMenu, "[data-tools-tool='protractor']", HTMLButtonElement).setAttribute(
       "aria-checked",
       String(tool === "protractor"),
     );
+    this.moreToolsButton.setAttribute("aria-pressed", String(MORE_TOOL_NAMES.has(tool)));
     this.updateStyleControls();
   }
 
@@ -5407,17 +7334,14 @@ export class BoardApp {
     this.arrangeButton.hidden = ids.size < 2;
     this.arrangeButton.disabled = enabledArrangeActions === 0;
     if (this.arrangeButton.hidden || this.arrangeButton.disabled) this.setArrangeMenuOpen(false);
-    const copyReady =
-      canEdit &&
-      allSelectedAuthoritative &&
-      allSelectedUnlocked &&
-      selectedIds.length <= maxBatchItems;
     const mutationReady =
       canEdit && allSelectedAuthoritative && selectedIds.length <= maxBatchItems;
-    const copy = query(this.selectionActions, "[data-selection-copy]", HTMLButtonElement);
-    const remove = query(this.selectionActions, "[data-selection-delete]", HTMLButtonElement);
-    copy.disabled = !copyReady;
-    remove.disabled = !mutationReady || !allSelectedOwned;
+    const comment = query(this.selectionActions, "[data-selection-comment]", HTMLButtonElement);
+    comment.disabled = !this.canComment() || selectedIds.length !== 1 || !allSelectedAuthoritative;
+    comment.title = allSelectedAuthoritative
+      ? ""
+      : "Wait for the selected object to finish saving.";
+    this.updateAiAssistAction(selectedIds, allSelectedAuthoritative);
     const group = query(this.selectionActions, "[data-selection-group]", HTMLButtonElement);
     const ungroup = query(this.selectionActions, "[data-selection-ungroup]", HTMLButtonElement);
     const selectedGroupIds = new Set(
@@ -5443,14 +7367,8 @@ export class BoardApp {
         : !allSelectedOwned
           ? "You can edit only work that you created."
           : "";
-    copy.title = !allSelectedAuthoritative
-      ? "Wait for the selected items to finish saving."
-      : !allSelectedUnlocked
-        ? "This Section is locked. Unlock it before copying its contents."
-        : "";
     group.title = pendingTitle;
     ungroup.title = pendingTitle;
-    remove.title = pendingTitle;
 
     const colourWrap = query(this.selectionActions, ".selection-colour-wrap", HTMLElement);
     const allFillItems =
@@ -5484,6 +7402,14 @@ export class BoardApp {
       }),
     );
     const selectedColour = selectedColours.size === 1 ? [...selectedColours][0] : undefined;
+    const currentColour = query(
+      this.selectionActions,
+      "[data-selection-current-colour]",
+      HTMLElement,
+    );
+    currentColour.style.background =
+      selectedColour ?? "conic-gradient(#f7cf52 0 25%, #ff8c69 0 50%, #6eb6ff 0 75%, #8dd8a4 0)";
+    currentColour.classList.toggle("is-mixed", selectedColour === undefined);
     for (const button of this.selectionColourMenu.querySelectorAll<HTMLButtonElement>(
       "[data-selection-colour]",
     )) {
@@ -5499,11 +7425,7 @@ export class BoardApp {
       HTMLElement,
     );
     const textItems = selectedItems.filter(
-      (item): item is Extract<BoardItem, { kind: "text" | "sticky" | "table" | "zone" }> =>
-        item.kind === "text" ||
-        item.kind === "sticky" ||
-        item.kind === "table" ||
-        item.kind === "zone",
+      (item) => item.kind !== "sticky" && supportsTextStyling(item),
     );
     const allText =
       selectedItems.length === selectedIds.length &&
@@ -5574,7 +7496,7 @@ export class BoardApp {
     const sectionLocked = selectedSection?.geometry.locked === true;
     sectionLock.hidden = this.bootstrap.actor.role !== "owner" || selectedSection === undefined;
     sectionLock.disabled = !canEdit || !allSelectedAuthoritative || selectedSection === undefined;
-    sectionLock.textContent = sectionLocked ? "Unlock Section" : "Lock Section";
+    sectionLock.dataset.sectionLocked = String(sectionLocked);
     sectionLock.setAttribute("aria-label", sectionLocked ? "Unlock Section" : "Lock Section");
     sectionLock.setAttribute("aria-pressed", String(sectionLocked));
     sectionLock.title = sectionLock.disabled
@@ -5623,6 +7545,24 @@ export class BoardApp {
     );
   }
 
+  private updateToolRailOverflow(): void {
+    const shell = query(this.root, "[data-tool-rail-shell]", HTMLElement);
+    const rail = query(this.root, "[data-testid='tool-rail']", HTMLElement);
+    const back = query(shell, "[data-tool-rail-scroll='-1']", HTMLButtonElement);
+    const forward = query(shell, "[data-tool-rail-scroll='1']", HTMLButtonElement);
+    const overflow = rail.scrollWidth - rail.clientWidth > 2;
+    shell.dataset.overflow = String(overflow);
+    back.hidden = !overflow;
+    forward.hidden = !overflow;
+    if (!overflow) {
+      rail.scrollLeft = 0;
+      return;
+    }
+    const maxScrollLeft = Math.max(0, rail.scrollWidth - rail.clientWidth);
+    back.disabled = rail.scrollLeft <= 2;
+    forward.disabled = rail.scrollLeft >= maxScrollLeft - 2;
+  }
+
   private activateTool(tool: ToolName): void {
     if (tool === "rectangle") {
       const opening = this.shapeMenu.hidden !== false;
@@ -5631,16 +7571,9 @@ export class BoardApp {
       this.setToolsMenuOpen(false);
       return;
     }
-    if (tool === "protractor") {
-      const opening = this.toolsMenu.hidden !== false;
-      if (opening) this.tools.setTool("select");
-      this.setShapeMenuOpen(false);
-      this.setToolsMenuOpen(opening);
-      return;
-    }
     this.setShapeMenuOpen(false);
+    this.setToolsMenuOpen(false);
     if (this.tools.tool === tool) {
-      this.setToolsMenuOpen(false);
       this.reactivateTool(tool);
       return;
     }
@@ -5648,10 +7581,10 @@ export class BoardApp {
   }
 
   private reactivateTool(tool: ToolName): void {
-    if (tool === "rectangle" || tool === "ellipse" || tool === "polygon") {
+    if (tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "polygon") {
       this.setShapeMenuOpen(true);
     }
-    if (tool === "stamp") this.setStylePopoverOpen(true);
+    if (tool === "stamp" || tool === "sticky") this.setStylePopoverOpen(true);
     if (tool === "image") this.openImagePicker();
     if (tool === "table") this.setTablePickerOpen(true);
   }
@@ -5660,7 +7593,7 @@ export class BoardApp {
     const enabledChoices = SHAPE_CHOICES.filter((choice) =>
       this.isShapeVariantEnabled(choice.variant),
     );
-    if (enabledChoices.length === 0) open = false;
+    if (enabledChoices.length === 0 && !this.isToolEnabled("line")) open = false;
     this.shapeMenu.hidden = !open;
     query(this.root, "[data-testid='tool-rectangle']", HTMLButtonElement).setAttribute(
       "aria-expanded",
@@ -5677,26 +7610,24 @@ export class BoardApp {
     this.setToolsMenuOpen(false);
     this.setStylePopoverOpen(false);
     this.closeActivitiesMenu();
-    this.exportMenu.hidden = true;
   }
 
   private setToolsMenuOpen(open: boolean): void {
-    const enabled = this.isToolEnabled("protractor");
-    if (!enabled) open = false;
-    this.toolsMenu.hidden = !open;
-    query(this.root, "[data-testid='tool-protractor']", HTMLButtonElement).setAttribute(
-      "aria-expanded",
-      String(open),
-    );
+    const protractorEnabled = this.isToolEnabled("protractor");
     const protractor = query(this.toolsMenu, "[data-tools-tool='protractor']", HTMLButtonElement);
-    protractor.hidden = !enabled;
-    protractor.disabled = !enabled || !this.canCommit();
+    protractor.hidden = !protractorEnabled;
+    protractor.disabled = !protractorEnabled || !this.canCommit();
     protractor.setAttribute("aria-checked", String(this.tools.tool === "protractor"));
+    const hasAvailableTool = [...this.toolsMenu.querySelectorAll<HTMLButtonElement>("button")].some(
+      (button) => !button.hidden,
+    );
+    if (!hasAvailableTool || this.moreToolsButton.hidden) open = false;
+    this.toolsMenu.hidden = !open;
+    this.moreToolsButton.setAttribute("aria-expanded", String(open));
     if (!open) return;
     this.setShapeMenuOpen(false);
     this.setStylePopoverOpen(false);
     this.closeActivitiesMenu();
-    this.exportMenu.hidden = true;
   }
 
   private isShapeVariantEnabled(variant: ShapeVariant): boolean {
@@ -5747,6 +7678,11 @@ export class BoardApp {
     }
   }
 
+  private closeMcpActivityMenu(): void {
+    this.mcpActivityMenu.hidden = true;
+    this.webMcpStatus.setAttribute("aria-expanded", "false");
+  }
+
   private setTablePickerOpen(open: boolean): void {
     if (open) {
       if (!this.tablePickerDialog.open) this.tablePickerDialog.showModal();
@@ -5766,6 +7702,261 @@ export class BoardApp {
     this.arrangeButton.setAttribute("aria-expanded", String(next));
   }
 
+  private setAiAssistMenuOpen(open: boolean): void {
+    const next = open && !this.aiAssistButton.disabled && !this.aiAssistWrap.hidden;
+    this.aiAssistMenu.hidden = !next;
+    this.aiAssistButton.setAttribute("aria-expanded", String(next));
+  }
+
+  /**
+   * The AI button exists only while a WebMCP watch is live in this browser, because the
+   * watch's pending wait is the page's only channel back to the agent. It sends only steps
+   * the watch already covers, so the watch contract never widens from the board side.
+   */
+  private updateAiAssistAction(selectedIds: readonly string[], allSaved: boolean): void {
+    const watching = this.aiWatchState.phase !== "idle";
+    const watched = this.aiWatchState.watchedItemIds;
+    this.aiAssistWrap.hidden = !watching;
+    const unwatched = selectedIds.filter((id) => !watched.has(id));
+    const ready = watching && allSaved && unwatched.length === 0 && watched.size > 0;
+    this.aiAssistButton.disabled = !ready;
+    this.aiAssistButton.title = !watching
+      ? ""
+      : unwatched.length > 0
+        ? "Only steps in the current AI watch can be sent. Ask the assistant to start a new watch to include this item."
+        : allSaved
+          ? ""
+          : "Wait for the selected object to finish saving.";
+    const selectionKey = [...selectedIds].sort().join("\u0000");
+    if (selectionKey !== this.aiAssistSelectionKey) {
+      this.aiAssistSelectionKey = selectionKey;
+      this.setAiAssistMenuOpen(false);
+    }
+    if (this.aiAssistWrap.hidden || this.aiAssistButton.disabled) this.setAiAssistMenuOpen(false);
+  }
+
+  /** Renders the compact MCP state and the page-session call history behind it. */
+  private renderWebMcpStatus(state: WebMcpRegistryState): void {
+    this.webMcpState = state;
+    const { activeCallCount, calls, hostPresent, toolCount } = state;
+    const activityCalls = calls.filter(isVisibleWebMcpActivityCall);
+    const watching = this.aiWatchState.phase !== "idle";
+    const visualState = activeCallCount > 0 ? "active" : watching ? "watch" : "ready";
+    this.webMcpStatus.dataset.state = visualState;
+    this.webMcpStatus.dataset.host = hostPresent ? "linked" : "unlinked";
+    this.mcpActivityMenu.dataset.state = visualState;
+    this.webMcpStatusText.textContent = "MCP";
+    const watchStartedAt =
+      watching && this.aiWatchState.expiresAt !== null
+        ? this.aiWatchState.expiresAt - PROBLEM_STEP_WATCH_DURATION_MS
+        : null;
+    const latestActivity = activityCalls.find(
+      (call) => watchStartedAt === null || call.startedAt >= watchStartedAt,
+    );
+    const watchMinutes =
+      watching && this.aiWatchState.expiresAt !== null
+        ? Math.ceil(Math.max(0, this.aiWatchState.expiresAt - Date.now()) / 60_000)
+        : null;
+    this.webMcpStatusTime.textContent = latestActivity
+      ? new Date(latestActivity.startedAt).toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : watchMinutes !== null
+        ? `${watchMinutes} min left`
+        : "Ready";
+
+    this.mcpActivitySummary.textContent =
+      activeCallCount > 0
+        ? `${activeCallCount} ${activeCallCount === 1 ? "call" : "calls"} running`
+        : watching
+          ? `Watching board · ${toolCount} site ${toolCount === 1 ? "tool" : "tools"}`
+          : hostPresent
+            ? `${toolCount} site ${toolCount === 1 ? "tool" : "tools"} ready`
+            : "Waiting for an MCP-capable browser";
+    this.mcpActivityEmpty.hidden = activityCalls.length > 0;
+    this.mcpActivityEmpty.textContent =
+      calls.length > 0
+        ? "Watch activity is hidden for this session."
+        : "No MCP calls in this tab yet.";
+    this.mcpActivityList.replaceChildren(
+      ...activityCalls.map((call) => {
+        const row = document.createElement("li");
+        row.className = "mcp-activity-row";
+        row.dataset.state = call.status;
+
+        const marker = document.createElement("span");
+        marker.className = "mcp-call-marker";
+        marker.setAttribute("aria-hidden", "true");
+
+        const details = document.createElement("span");
+        details.className = "mcp-call-details";
+        const name = document.createElement("strong");
+        name.textContent = call.toolName;
+        const meta = document.createElement("small");
+        const statusLabel =
+          call.status === "active"
+            ? "Running"
+            : call.status === "succeeded"
+              ? "Completed"
+              : "Failed";
+        const started = new Date(call.startedAt);
+        const timeLabel = started.toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        const duration =
+          call.completedAt === null
+            ? "now"
+            : (() => {
+                const elapsed = Math.max(0, call.completedAt - call.startedAt);
+                return elapsed < 1_000
+                  ? `${elapsed} ms`
+                  : `${(elapsed / 1_000).toFixed(elapsed < 10_000 ? 1 : 0)} s`;
+              })();
+        meta.textContent = `${statusLabel} · ${timeLabel} · ${duration}`;
+        details.append(name, meta);
+        row.append(marker, details);
+        return row;
+      }),
+    );
+
+    const stateDescription =
+      visualState === "active"
+        ? `${activeCallCount} MCP ${activeCallCount === 1 ? "call is" : "calls are"} active.`
+        : visualState === "watch"
+          ? "MCP is watching this board."
+          : "MCP is ready.";
+    const connectionDescription = hostPresent
+      ? `${toolCount} site ${toolCount === 1 ? "tool is" : "tools are"} available.`
+      : "No MCP host is linked to this browser.";
+    const callDescription =
+      activityCalls.length === 0
+        ? "No calls in this tab yet."
+        : `${activityCalls.length} ${activityCalls.length === 1 ? "call" : "calls"} in this tab.`;
+    const description = `${stateDescription} ${connectionDescription} ${callDescription} Click to view activity.`;
+    this.webMcpStatus.title = description;
+    this.webMcpStatus.setAttribute("aria-label", description);
+  }
+
+  private setAiShareMenuOpen(open: boolean): void {
+    const next = open && !this.aiShareButton.hidden;
+    this.aiShareMenu.hidden = !next;
+    this.aiShareButton.setAttribute("aria-expanded", String(next));
+  }
+
+  /**
+   * Hands the whole board to the assistant already watching this browser. The page cannot widen
+   * a running watch by itself, so this selects every saved object and asks the host to re-scope
+   * its watch to that selection, carrying the task the participant picked.
+   */
+  private shareBoardWithAi(action: AssistAction): void {
+    const itemIds = [...this.model.items.keys()].filter((itemId) =>
+      this.model.authoritativeItems.has(itemId),
+    );
+    if (itemIds.length === 0) {
+      this.notify("Add something to the board before sharing it.", "info");
+      return;
+    }
+    const note = this.aiShareNote.value.trim();
+    try {
+      this.tools.setTool("select");
+      this.tools.selectOnly(itemIds);
+      const receipt = this.webMcp?.shareEntireBoard({
+        action,
+        ...(note.length > 0 ? { note } : {}),
+        itemCount: itemIds.length,
+      });
+      if (!receipt) throw new Error("The AI assistant is not available in this browser.");
+      this.setAiShareMenuOpen(false);
+      this.aiShareNote.value = "";
+      this.aiShareButton.focus();
+      const label = assistActionLabel(action);
+      this.notify(
+        receipt.delivered
+          ? `Shared all ${itemIds.length} objects with the AI assistant: ${label}.`
+          : `Queued the whole board for the AI assistant: ${label}. It will see it on its next check.`,
+        "info",
+      );
+    } catch (error) {
+      this.notify(
+        error instanceof Error ? error.message : "The board could not be shared.",
+        "warning",
+      );
+    }
+  }
+
+  private setAiWatchState(state: WatchState): void {
+    this.aiWatchState = state;
+    this.renderWebMcpStatus(this.webMcpState);
+    const watching = state.phase !== "idle";
+    this.aiShareButton.hidden = !watching;
+    if (!watching) this.setAiShareMenuOpen(false);
+    if (this.webMcpWatchCountdown !== null) {
+      window.clearInterval(this.webMcpWatchCountdown);
+      this.webMcpWatchCountdown = null;
+    }
+    if (watching) {
+      this.webMcpWatchCountdown = window.setInterval(
+        () => this.renderWebMcpStatus(this.webMcpState),
+        30_000,
+      );
+    }
+    this.updateSelectionActions(this.tools.selection);
+  }
+
+  private sendAiAssistRequest(action: AssistAction): void {
+    const label = assistActionLabel(action);
+    const note = this.aiAssistNote.value.trim();
+    try {
+      const receipt = this.webMcp?.requestAssistance({
+        itemIds: [...this.tools.selection],
+        action,
+        ...(note.length > 0 ? { note } : {}),
+      });
+      if (!receipt) throw new Error("The AI assistant is not available in this browser.");
+      this.setAiAssistMenuOpen(false);
+      this.aiAssistNote.value = "";
+      this.aiAssistButton.focus();
+      const steps = `${receipt.stepAliases.length} step${receipt.stepAliases.length === 1 ? "" : "s"}`;
+      this.notify(
+        receipt.delivered
+          ? `Sent to the AI assistant: ${label} (${steps}).`
+          : `Queued for the AI assistant: ${label} (${steps}). It will see it on its next check.`,
+        "info",
+      );
+    } catch (error) {
+      this.notify(
+        error instanceof Error
+          ? error.message
+          : "The request could not be sent to the AI assistant.",
+        "warning",
+      );
+    }
+  }
+
+  /** The comment tool's write path: same three steps as the composer, tagged as AI-written. */
+  private async commentFromWebMcp(
+    itemId: string,
+    body: string,
+    assistance: Assistance,
+    media?: CommentMedia,
+  ): Promise<void> {
+    if (!this.model.getItem(itemId)) throw new Error("That step is no longer on the board.");
+    if (!this.canComment()) throw new Error("This browser cannot comment on this Space.");
+    const comment = await this.api.createComment(
+      this.bootstrap.board.id,
+      itemId,
+      body,
+      assistance,
+      media,
+    );
+    this.comments.upsert(comment);
+    this.applyCommentChange();
+    this.liveRegion.textContent = media ? "AI comment with media added." : "AI comment added.";
+  }
+
   private setSelectionColourMenuOpen(open: boolean): void {
     const next = open && !this.selectionColourButton.disabled && !this.selectionColourButton.hidden;
     this.selectionColourMenu.hidden = !next;
@@ -5775,12 +7966,8 @@ export class BoardApp {
   private togglePopover(popover: HTMLElement, trigger: HTMLButtonElement): void {
     const open = popover.hidden;
     this.setStylePopoverOpen(false);
+    if (popover !== this.mcpActivityMenu) this.closeMcpActivityMenu();
     if (popover !== this.activitiesMenu) this.closeActivitiesMenu();
-    this.exportMenu.hidden = true;
-    query(this.root, "[data-testid='export-button']", HTMLButtonElement).setAttribute(
-      "aria-expanded",
-      "false",
-    );
     popover.hidden = !open;
     trigger.setAttribute("aria-expanded", String(open));
   }
@@ -5800,14 +7987,10 @@ export class BoardApp {
       String(open),
     );
     if (!open) return;
+    this.closeMcpActivityMenu();
     this.setShapeMenuOpen(false);
     this.setToolsMenuOpen(false);
     this.closeActivitiesMenu();
-    this.exportMenu.hidden = true;
-    query(this.root, "[data-testid='export-button']", HTMLButtonElement).setAttribute(
-      "aria-expanded",
-      "false",
-    );
   }
 
   private toggleDrawer(drawer: HTMLElement, trigger: HTMLButtonElement): void {
@@ -5818,9 +8001,18 @@ export class BoardApp {
   }
 
   private closeDrawers(): void {
+    if (this.playingCommentVideoId !== null) {
+      // A hidden drawer must not keep playing, and the player cannot survive the next rebuild.
+      this.playingCommentVideoId = null;
+      clearTypesetMath(this.commentsList);
+      this.commentsList.replaceChildren();
+      this.commentsRenderPending = true;
+    }
+    this.commentsDrawer.hidden = true;
     this.participantDrawer.hidden = true;
     this.accessDrawer.hidden = true;
     this.settingsDrawer.hidden = true;
+    this.commentsButton.setAttribute("aria-expanded", "false");
     query(this.root, "[data-testid='participants-button']", HTMLButtonElement).setAttribute(
       "aria-expanded",
       "false",
@@ -5829,10 +8021,7 @@ export class BoardApp {
     this.settingsButton.setAttribute("aria-expanded", "false");
   }
   private clearOwnerSettings(): void {
-    this.accessDrawer.hidden = true;
-    this.settingsDrawer.hidden = true;
-    this.accessButton.setAttribute("aria-expanded", "false");
-    this.settingsButton.setAttribute("aria-expanded", "false");
+    this.accessBody.replaceChildren();
     this.organisationWebhookSettings = null;
     this.organisationWebhookIdempotencyKey = null;
     this.settingsBody.removeAttribute("aria-busy");
@@ -5876,11 +8065,6 @@ export class BoardApp {
         "application/json",
         serializeAttributedData(data),
       );
-      this.exportMenu.hidden = true;
-      query(this.root, "[data-testid='export-button']", HTMLButtonElement).setAttribute(
-        "aria-expanded",
-        "false",
-      );
       this.notify("Attributed data JSON downloaded.");
     } catch (error) {
       this.apiError(error);
@@ -5889,10 +8073,115 @@ export class BoardApp {
     }
   }
 
-  private downloadLocalSvg(): void {
+  /**
+   * Gives one text editor a maths keyboard. Typing an opening delimiter closes the pair and brings
+   * up MathLive's field over the editor, so a participant can build a formula without knowing TeX;
+   * the board still stores ordinary delimited TeX, which is what everything else here reads.
+   */
+  private bindMathField(
+    editor: HTMLTextAreaElement | HTMLInputElement,
+    finish: (save: boolean) => void,
+    onValueChanged: () => void = () => undefined,
+  ): void {
+    const sync = (): void => this.syncMathField(editor, finish, onValueChanged);
+    editor.addEventListener("input", () => {
+      this.closeMathDelimiter(editor, onValueChanged);
+      sync();
+    });
+    // The caret can move without the value changing, and that moves in and out of a formula.
+    editor.addEventListener("keyup", sync);
+    editor.addEventListener("click", sync);
+    sync();
+  }
+
+  /** Completes a delimiter pair the participant just opened, leaving the caret between the two. */
+  private closeMathDelimiter(
+    editor: HTMLTextAreaElement | HTMLInputElement,
+    onValueChanged: () => void,
+  ): void {
+    const caret = editor.selectionStart ?? editor.value.length;
+    const opening = unclosedOpeningAt(editor.value, caret);
+    if (!opening) return;
+    editor.value = `${editor.value.slice(0, caret)}${opening.close}${editor.value.slice(caret)}`;
+    editor.setSelectionRange(caret, caret);
+    onValueChanged();
+  }
+
+  private syncMathField(
+    editor: HTMLTextAreaElement | HTMLInputElement,
+    finish: (save: boolean) => void,
+    onValueChanged: () => void,
+  ): void {
+    const panel = this.mathFieldPanel;
+    if (!panel) return;
+    const caret = editor.selectionStart ?? editor.value.length;
+    const region = mathRegionAtCaret(editor.value, caret);
+    if (!region) {
+      this.mathFieldTarget = null;
+      panel.close();
+      return;
+    }
+    this.mathFieldTarget = { editor, region, onValueChanged, finish };
+    void panel.open(
+      `${region.delimiter.open}@${region.start}`,
+      region,
+      editor.value.slice(region.start, region.end),
+      editor.getBoundingClientRect(),
+    );
+  }
+
+  /** Writes the maths field's TeX back into the formula it was opened on. */
+  private readonly applyMathField = (tex: string): void => {
+    const target = this.mathFieldTarget;
+    if (!target) return;
+    const next = replaceMathRegion(target.editor.value, target.region, tex);
+    target.editor.value = next.value;
+    target.region = next.region;
+    const caret = next.region.end + next.region.delimiter.close.length;
+    target.editor.setSelectionRange(caret, caret);
+    target.onValueChanged();
+  };
+
+  /** Returns the participant to the text once the formula is written. */
+  private readonly finishMathField = (): void => {
+    const target = this.mathFieldTarget;
+    this.mathFieldPanel?.close();
+    this.mathFieldTarget = null;
+    target?.editor.focus();
+  };
+
+  /**
+   * Takes the maths field down with the editor it belongs to. An editor can close without focus
+   * ever reaching the panel, when a participant opens a formula and then clicks straight past it,
+   * and the panel would otherwise stay on screen writing into an editor that is already gone.
+   */
+  private dismissMathField(editor: HTMLTextAreaElement | HTMLInputElement): void {
+    if (this.mathFieldTarget?.editor !== editor) return;
+    this.mathFieldTarget = null;
+    this.mathFieldPanel?.close();
+  }
+
+  /**
+   * Focus left the maths field for something that is not the text it belongs to. The text editor
+   * declined to save when focus came to the field, so the edit is finished here instead; without
+   * it the editor would stay open and unsaved, and the next click on the canvas would discard it.
+   */
+  private readonly leaveMathField = (next: Node | null): void => {
+    const target = this.mathFieldTarget;
+    if (!target) return;
+    if (next !== null && (next === target.editor || target.editor.contains(next))) return;
+    this.mathFieldPanel?.close();
+    this.mathFieldTarget = null;
+    target.finish(true);
+  };
+
+  private async downloadLocalSvg(): Promise<void> {
+    const snapshot = this.model.toSnapshot(this.bootstrap.board.id);
+    // A downloaded picture should hold the formulas the board shows, not their source.
     const svg = localSvg(
-      this.model.toSnapshot(this.bootstrap.board.id),
+      snapshot,
       this.bootstrap.board.title,
+      await mathExportOptions(snapshot.items),
     );
     downloadBlob(`${safeFilename(this.bootstrap.board.title)}-local.svg`, "image/svg+xml", svg);
   }
@@ -6053,22 +8342,27 @@ export async function acknowledgeRecoveredOwnership(
 
 export function renderLanding(root: HTMLElement, api: ApiClient): void {
   document.title = brandedDocumentTitle();
+  const suggestedBoardName = randomBoardName();
   root.innerHTML = `
     <main class="landing" data-testid="landing-page">
       <div class="landing-glow" aria-hidden="true"></div>
-      <header><a class="wordmark" href="/" aria-label="${PRODUCT_HOME_LABEL}">${BRAND_MARK_HTML}<span>${PRODUCT_NAME}</span></a><span class="landing-badge">Cloudflare-native</span></header>
+      <header>
+        <a class="wordmark landing-wordmark" href="/" aria-label="${PRODUCT_HOME_LABEL}">${BRAND_MARK_HTML}<span>${PRODUCT_NAME}</span></a>
+        <span class="landing-badge landing-webmcp-badge"><span aria-hidden="true"></span>WebMCP enabled</span>
+      </header>
       <section class="landing-copy">
-        <span class="eyebrow">A room for unfinished ideas</span>
-        <h1>Think together,<br /><em>in the open.</em></h1>
-        <p>Sketch, explain, and move ideas around a shared infinite canvas. No account required.</p>
+        <div class="landing-hero-mark" aria-hidden="true">${BRAND_MARK_HTML}</div>
+        <span class="eyebrow">A shared canvas for classrooms</span>
+        <h1>Learn together,<br /><em>with AI.</em></h1>
+        <p>Turn lessons, problems, and group thinking into a live visual workspace. Sketch, explain, organise, and invite AI to help without losing the human conversation.</p>
       </section>
       <form class="create-card" data-create-form>
-        <div><span class="card-step">Start a board</span><h2>What are you working on?</h2></div>
-        <label><span class="sr-only">Board title</span><input name="title" maxlength="100" value="Untitled board" required autocomplete="off" /></label>
+        <div><span class="card-step">Start a learning board</span><h2>What will you explore?</h2></div>
+        <label><span class="sr-only">Board title</span><input name="title" maxlength="100" value="${suggestedBoardName}" required autocomplete="off" /></label>
         <button class="primary-button" type="submit">Open a fresh canvas <span aria-hidden="true">→</span></button>
-        <small>Private owner controls · automatic saving · SVG export</small>
+        <small>No account required · automatic saving · WebMCP-ready</small>
       </form>
-      <footer><span>Built for 2–20 people</span><span>Pointer, pen & touch ready</span></footer>
+      <footer><span>Built for educators, learners & study groups</span><span>People and AI, thinking on one canvas</span></footer>
     </main>
   `;
   const form = query(root, "[data-create-form]", HTMLFormElement);
@@ -6333,16 +8627,20 @@ function turnstileWhenReady(client: TurnstileClient): Promise<TurnstileClient> {
   });
 }
 
-export function localSvg(snapshot: BoardSnapshot, title: string): string {
+export function localSvg(
+  snapshot: BoardSnapshot,
+  title: string,
+  options: SvgItemOptions = {},
+): string {
   const items = [...snapshot.items]
     .map((item) => normalizeBoardItem(item))
     .sort((a, b) => a.z - b.z);
-  const bounds = aggregateItemBounds(items);
+  const bounds = boundsForSvgItems(items);
   const pad = 32;
   const viewBox = bounds
     ? `${bounds.minX - pad} ${bounds.minY - pad} ${Math.max(1, bounds.maxX - bounds.minX + pad * 2)} ${Math.max(1, bounds.maxY - bounds.minY + pad * 2)}`
     : "0 0 1200 800";
-  const content = items.map(renderSvgItem).join("");
+  const content = items.map((item) => renderSvgItem(item, options)).join("");
   return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" role="img" aria-label="${escapeXml(title)}"><metadata>{&quot;format&quot;:&quot;cf-whiteboard-json&quot;,&quot;seq&quot;:${snapshot.seq}}</metadata><rect x="-1000000" y="-1000000" width="2000000" height="2000000" fill="#ffffff"/>${content}</svg>`;
 }
 
@@ -6381,10 +8679,6 @@ function transformPoint(point: Point, matrix: Matrix): Point {
     matrix[0] * point[0] + matrix[2] * point[1] + matrix[4],
     matrix[1] * point[0] + matrix[3] * point[1] + matrix[5],
   ];
-}
-
-function aggregateItemBounds(items: Parameters<typeof boundsForItems>[0]) {
-  return boundsForItems(items);
 }
 
 function stickyDraftFromOperation(operation: DurableOperation): StickyDraftRecovery | undefined {
@@ -6605,6 +8899,45 @@ function parseManagedInvitation(value: unknown): ManagedInvitation[] {
   ];
 }
 
+export function objectCommentVisible(
+  state: BoardComment["state"],
+  showHiddenComments: boolean,
+): boolean {
+  return showHiddenComments || state === "open";
+}
+
+/** How a comment names the service a video it carries comes from. */
+function videoProviderLabel(provider: "youtube" | "vimeo"): string {
+  return provider === "vimeo" ? "Vimeo" : "YouTube";
+}
+
+function capitalise(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function commentObjectLabel(item: BoardItem): string {
+  switch (item.kind) {
+    case "sticky":
+      return "sticky note";
+    case "text":
+      return "text object";
+    case "image":
+      return "image";
+    case "table":
+      return "table";
+    case "zone":
+      return "section";
+    case "pencil":
+      return "drawing";
+    default:
+      return `${item.kind} object`;
+  }
+}
+
+function formatCommentTime(value: number): string {
+  return formatDateTime(value);
+}
+
 function snapshotKindLabel(kind: RecoverySnapshot["kind"]): string {
   if (kind === "pre_clear") return "Before board clear";
   if (kind === "automatic") return "Automatic recovery point";
@@ -6655,12 +8988,194 @@ function dataTransferHasImage(transfer: DataTransfer | null): boolean {
   );
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+export type GlobalShortcut =
+  | "close-tools-menu"
+  | "close-shape-menu"
+  | "stop-following-spotlight"
+  | "undo"
+  | "redo";
+
+/**
+ * Maps a window keydown to a board-wide shortcut. Escape closes transient UI
+ * even while a field is focused; every other shortcut stays out of inputs.
+ */
+export function globalShortcutFor(
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey">,
+  state: {
+    editing: boolean;
+    toolsMenuOpen: boolean;
+    shapeMenuOpen: boolean;
+    followingSpotlight: boolean;
+  },
+): GlobalShortcut | null {
+  if (event.key === "Escape") {
+    if (state.toolsMenuOpen) return "close-tools-menu";
+    if (state.shapeMenuOpen) return "close-shape-menu";
+    if (state.followingSpotlight) return "stop-following-spotlight";
+    return null;
+  }
+  if (state.editing || !(event.ctrlKey || event.metaKey)) return null;
+  const key = event.key.toLowerCase();
+  if (key === "z") return event.shiftKey ? "redo" : "undo";
+  if (key === "y" && !event.metaKey) return "redo";
+  return null;
+}
+
+/** Mirrors the server gate: commenting needs a live Space and drawing rights. */
+/** Mirrors the server rule: only the comment's author or a board owner may resolve it. */
+export function canResolveComment(
+  comment: Pick<BoardComment, "author">,
+  actorId: string,
+  role: Role,
+): boolean {
+  return role === "owner" || comment.author.id === actorId;
+}
+
+export function canActorComment(
+  phase: ConnectionPhase,
+  role: Role,
+  drawingPolicy: DrawingPolicy,
+): boolean {
+  return (
+    phase !== "archived" &&
+    phase !== "reload_required" &&
+    phase !== "stopped" &&
+    canRoleComment(role, drawingPolicy)
+  );
+}
+
+/**
+ * Derives the states shown for server comment snapshots: an open comment whose
+ * object is missing locally shows as orphaned, and flips back to open when the
+ * object returns (for example after a rejected optimistic delete).
+ */
+export function deriveCommentStates(
+  comments: Iterable<BoardComment>,
+  hasItem: (itemId: string) => boolean,
+): BoardComment[] {
+  const derived: BoardComment[] = [];
+  for (const comment of comments) {
+    derived.push(
+      comment.state === "open" && !hasItem(comment.itemId)
+        ? { ...comment, state: "orphaned" }
+        : comment,
+    );
+  }
+  return derived;
+}
+
+/**
+ * Holds the server's comment snapshots and the item-aware copies the UI shows.
+ * Every local write supersedes in-flight loads so an older response cannot
+ * overwrite fresher state.
+ */
+export class CommentStore {
+  private version = 0;
+  private latestLoad = 0;
+  private readonly server = new Map<string, BoardComment>();
+  private displayed: readonly BoardComment[] = [];
+
+  constructor(private readonly hasItem: (itemId: string) => boolean) {}
+
+  get comments(): readonly BoardComment[] {
+    return this.displayed;
+  }
+
+  beginLoad(): number {
+    this.version += 1;
+    this.latestLoad = this.version;
+    return this.version;
+  }
+
+  /** Whether no newer load has started since this token was issued. */
+  isLatestLoad(token: number): boolean {
+    return token === this.latestLoad;
+  }
+
+  /** Adopts a loaded snapshot unless it was superseded. Returns whether shown states changed. */
+  completeLoad(token: number, comments: readonly BoardComment[]): boolean {
+    if (token !== this.version) return false;
+    this.server.clear();
+    for (const comment of comments) this.server.set(comment.id, comment);
+    return this.reconcile();
+  }
+
+  /** Stores a comment the server just returned for a local write. */
+  upsert(comment: BoardComment): void {
+    this.version += 1;
+    this.server.set(comment.id, comment);
+    this.reconcile();
+  }
+
+  /** Re-derives shown states from item presence. Returns whether anything changed. */
+  reconcile(): boolean {
+    const next = deriveCommentStates(this.server.values(), this.hasItem);
+    const changed =
+      next.length !== this.displayed.length ||
+      next.some((comment, index) => {
+        const previous = this.displayed[index];
+        return (
+          previous === undefined ||
+          previous.id !== comment.id ||
+          previous.state !== comment.state ||
+          previous.updatedAt !== comment.updatedAt
+        );
+      });
+    if (changed) this.displayed = next;
+    return changed;
+  }
+}
+
+/**
+ * Tracks tool-initiated commits until the server answers them. A commit that
+ * receives no answer in time is withdrawn so the reported failure is truthful;
+ * one that can no longer be withdrawn was already acknowledged.
+ */
+export class PendingCommitTracker {
+  private readonly pending = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; resolve: (accepted: boolean) => void }
+  >();
+
+  constructor(private readonly timeoutMs = 30_000) {}
+
+  track(
+    commandId: string,
+    resolve: (accepted: boolean) => void,
+    withdraw: (commandId: string) => boolean,
+  ): void {
+    const timer = setTimeout(() => {
+      if (!this.pending.has(commandId)) return;
+      this.finish(commandId, !withdraw(commandId));
+    }, this.timeoutMs);
+    this.pending.set(commandId, { timer, resolve });
+  }
+
+  finish(commandId: string, accepted: boolean): void {
+    const entry = this.pending.get(commandId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.pending.delete(commandId);
+    entry.resolve(accepted);
+  }
+
+  finishAll(accepted: boolean): void {
+    for (const commandId of [...this.pending.keys()]) this.finish(commandId, accepted);
+  }
+}
+
 function isEditingTarget(target: EventTarget | null): boolean {
   return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
+    target instanceof Element &&
+    // MathLive's field is a custom element, and a key pressed inside it is retargeted to the host.
+    // Without it here, undo, redo and Delete would reach the board while a formula is being typed.
+    target.closest(
+      "input, textarea, select, math-field, [contenteditable]:not([contenteditable='false'])",
+    ) !== null
   );
 }
 

@@ -9,8 +9,8 @@ The hosted endpoints used in the examples are:
 
 | Environment | Base URL |
 | --- | --- |
-| Production | `https://spacescale.net` |
-| Staging | `https://staging-cloud-collab.spacescale.net` |
+| Production | `https://your-spacescale.example` |
+| Staging | `https://staging.example.test` |
 | Local development | `http://localhost:8787` |
 
 Use separate keys, Organisation registries, data, and allowed origins in every
@@ -146,7 +146,7 @@ The signature covers the literal bytes of `el1.<base64url JSON payload>`.
 | Claim | Required | Contract |
 | --- | --- | --- |
 | `v` | yes | Integer `1`. |
-| `aud` | yes | SpaceScale hostname only, such as `spacescale.net`; no scheme, path, or port. |
+| `aud` | yes | SpaceScale hostname only, such as `your-spacescale.example`; no scheme, path, or port. |
 | `organisation_id` | yes | Stable Organisation key, 1–120 Unicode code points after NFC normalisation and trimming. |
 | `space_id` | yes | Stable Space key and initial title, 1–120 Unicode code points after NFC normalisation and trimming. |
 | `key_id` | yes | Key ID present in this Organisation's `current` or `previous` registry entry. |
@@ -228,7 +228,7 @@ Example backend usage:
 
 ```js
 const common = {
-  hostname: "spacescale.net",
+  hostname: "your-spacescale.example",
   organisationId: "acme-learning",
   spaceId: "geometry-2026-08-lesson-04",
   keyId: process.env.SPACESCALE_KEY_ID,
@@ -263,11 +263,11 @@ const studentToken = createLaunchToken({
 });
 
 const coachUrl = createEmbedUrl({
-  origin: "https://spacescale.net",
+  origin: "https://your-spacescale.example",
   launchToken: coachToken,
 });
 const studentUrl = createEmbedUrl({
-  origin: "https://spacescale.net",
+  origin: "https://your-spacescale.example",
   launchToken: studentToken,
 });
 ```
@@ -296,7 +296,7 @@ Both examples:
 Run either with the same parent-server configuration:
 
 ```sh
-export SPACESCALE_ORIGIN=https://spacescale.net
+export SPACESCALE_ORIGIN=https://your-spacescale.example
 export SPACESCALE_ORGANISATION_ID=acme-learning
 export SPACESCALE_KEY_ID=2026-08
 export SPACESCALE_SIGNING_KEY='replace-with-the-current-organisation-signing-key'
@@ -602,7 +602,7 @@ To attach it:
 
 ```js
 const ownerUrl = createEmbedUrl({
-  origin: "https://spacescale.net",
+  origin: "https://your-spacescale.example",
   launchToken: coachToken,
   initialTemplate,
 });
@@ -659,8 +659,8 @@ iframe, it may perform the same launch exchange used by the iframe:
 
 ```http
 POST /api/v1/embed/session
-Host: spacescale.net
-Origin: https://spacescale.net
+Host: your-spacescale.example
+Origin: https://your-spacescale.example
 Content-Type: application/json
 
 {"token":"<owner-el1-assertion>"}
@@ -678,7 +678,7 @@ This lookup is optional—the normal iframe launch needs no preliminary call.
 
 ```http
 GET /api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx/export.json
-Host: spacescale.net
+Host: your-spacescale.example
 Authorization: Bearer <fresh-owner-el1-assertion>
 ```
 
@@ -767,7 +767,7 @@ Example:
 
 ```js
 const token = createLaunchToken({
-  hostname: "spacescale.net",
+  hostname: "your-spacescale.example",
   organisationId: "acme-learning",
   spaceId: "geometry-2026-08-lesson-04",
   keyId: process.env.SPACESCALE_KEY_ID,
@@ -779,7 +779,7 @@ const token = createLaunchToken({
 });
 
 const response = await fetch(
-  "https://spacescale.net/api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx/export.json",
+  "https://your-spacescale.example/api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx/export.json",
   { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
 );
 if (!response.ok) throw new Error(await response.text());
@@ -790,7 +790,7 @@ const canonicalExport = await response.json();
 
 ```http
 GET /api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx/export.attributed.json
-Host: spacescale.net
+Host: your-spacescale.example
 Authorization: Bearer <fresh-owner-el1-assertion>
 ```
 
@@ -930,7 +930,7 @@ of feedback, and which participant left a table cell incomplete.
 
 ```http
 DELETE /api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx
-Host: spacescale.net
+Host: your-spacescale.example
 Authorization: Bearer <fresh-owner-el1-assertion>
 ```
 
@@ -939,7 +939,7 @@ Or from a command line:
 ```sh
 curl -i -X DELETE \
   -H "Authorization: Bearer $SPACESCALE_OWNER_TOKEN" \
-  "https://spacescale.net/api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx"
+  "https://your-spacescale.example/api/v1/organisations/acme-learning/boards/b_xxxxxxxxxxxxxxxxxxxxxx"
 ```
 
 A successful deletion returns `204 No Content`. The operation is idempotent, so
@@ -999,7 +999,7 @@ helper without invoking it automatically.
 Open:
 
 ```text
-https://spacescale.net/viewer
+https://your-spacescale.example/viewer
 ```
 
 Paste a canonical `cf-whiteboard-json` export or choose a local `.json` file.
@@ -1024,7 +1024,7 @@ const viewerToken = createLaunchToken({
 });
 
 const viewerUrl =
-  `https://spacescale.net/viewer#launch=${encodeURIComponent(viewerToken)}`;
+  `https://your-spacescale.example/viewer#launch=${encodeURIComponent(viewerToken)}`;
 ```
 
 On load, SpaceScale removes the token from browser-visible history before the
@@ -1061,7 +1061,7 @@ const adminToken = createLaunchToken({
 });
 
 const adminUrl =
-  `https://spacescale.net/organisation/admin#launch=${encodeURIComponent(adminToken)}`;
+  `https://your-spacescale.example/organisation/admin#launch=${encodeURIComponent(adminToken)}`;
 ```
 
 The admin application removes the fragment before loading. It shows every
@@ -1256,7 +1256,7 @@ PUT /api/v1/organisations/<organisation-key>/webhook
 
 ```http
 PUT /api/v1/organisations/acme-learning/webhook
-Host: spacescale.net
+Host: your-spacescale.example
 Authorization: Bearer <fresh-owner-admin-el1-assertion>
 Content-Type: application/json
 

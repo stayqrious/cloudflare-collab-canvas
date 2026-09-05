@@ -23,7 +23,7 @@ def required(name: str) -> str:
     return value
 
 
-ORIGIN = os.environ.get("SPACESCALE_ORIGIN", "https://spacescale.net").rstrip("/")
+ORIGIN = os.environ.get("SPACESCALE_ORIGIN", "https://your-spacescale.example").rstrip("/")
 HOSTNAME = urlparse(ORIGIN).hostname
 if not HOSTNAME:
     raise RuntimeError("SPACESCALE_ORIGIN must contain a hostname")

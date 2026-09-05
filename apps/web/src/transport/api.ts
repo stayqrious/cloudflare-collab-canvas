@@ -1,7 +1,18 @@
-import { type BoardFeatures, MAX_BATCH_OPERATIONS, normalizeBoardItem } from "@collab/protocol";
+import {
+  ASSIST_ACTIONS,
+  type AssistAction,
+  type Assistance,
+  type BoardFeatures,
+  type CommentMedia,
+  CommentMediaError,
+  MAX_BATCH_OPERATIONS,
+  normalizeBoardItem,
+  normalizeCommentMedia,
+} from "@collab/protocol";
 
 import type {
   AccessMode,
+  BoardComment,
   BoardItem,
   BoardSnapshot,
   Bootstrap,
@@ -304,6 +315,47 @@ export class ApiClient {
         ...(features === undefined ? {} : { features }),
       }),
     });
+  }
+
+  async comments(boardId: string): Promise<BoardComment[]> {
+    const result = await this.request<unknown>(
+      `/api/v1/boards/${encodeURIComponent(boardId)}/comments`,
+    );
+    const values = isRecord(result) && Array.isArray(result.comments) ? result.comments : [];
+    return values.map(parseBoardComment);
+  }
+
+  async createComment(
+    boardId: string,
+    itemId: string,
+    body: string,
+    assistance?: Assistance,
+    media?: CommentMedia,
+  ): Promise<BoardComment> {
+    const result = await this.request<unknown>(
+      `/api/v1/boards/${encodeURIComponent(boardId)}/comments`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          itemId,
+          body,
+          ...(assistance === undefined ? {} : { assistedBy: "ai", assistance }),
+          ...(media === undefined ? {} : { media }),
+        }),
+      },
+    );
+    return parseBoardComment(result);
+  }
+
+  async resolveComment(boardId: string, commentId: string): Promise<BoardComment> {
+    const result = await this.request<unknown>(
+      `/api/v1/boards/${encodeURIComponent(boardId)}/comments/${encodeURIComponent(commentId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ state: "resolved" }),
+      },
+    );
+    return parseBoardComment(result);
   }
 
   async members(boardId: string): Promise<Member[]> {
@@ -705,6 +757,94 @@ function storeEmbedBearer(token: string): void {
   } catch {
     // The in-memory copy remains usable when session history is unavailable.
   }
+}
+
+export function parseBoardComment(value: unknown): BoardComment {
+  if (!isRecord(value) || !isRecord(value.author)) throw invalidCommentResponse(value);
+  const state = value.state;
+  if (
+    typeof value.id !== "string" ||
+    !/^c_[A-Za-z0-9_-]{22}$/u.test(value.id) ||
+    typeof value.itemId !== "string" ||
+    typeof value.body !== "string" ||
+    value.body.trim().length === 0 ||
+    (state !== "open" && state !== "resolved" && state !== "orphaned") ||
+    typeof value.author.id !== "string" ||
+    typeof value.author.displayName !== "string" ||
+    !Number.isSafeInteger(value.createdAt) ||
+    !Number.isSafeInteger(value.updatedAt)
+  ) {
+    throw invalidCommentResponse(value);
+  }
+  const resolvedBy = isRecord(value.resolvedBy) ? value.resolvedBy : null;
+  if (
+    (state === "resolved" &&
+      (resolvedBy === null ||
+        typeof resolvedBy.id !== "string" ||
+        typeof resolvedBy.displayName !== "string" ||
+        !Number.isSafeInteger(value.resolvedAt))) ||
+    (state !== "resolved" && (value.resolvedBy !== undefined || value.resolvedAt !== undefined))
+  ) {
+    throw invalidCommentResponse(value);
+  }
+  const assistance = parseCommentAssistance(value);
+  const media = parseCommentMedia(value);
+  return {
+    id: value.id,
+    itemId: value.itemId,
+    body: value.body,
+    state,
+    author: { id: value.author.id, displayName: value.author.displayName },
+    createdAt: value.createdAt as number,
+    updatedAt: value.updatedAt as number,
+    ...(state === "resolved" && resolvedBy !== null
+      ? {
+          resolvedBy: {
+            id: resolvedBy.id as string,
+            displayName: resolvedBy.displayName as string,
+          },
+          resolvedAt: value.resolvedAt as number,
+        }
+      : {}),
+    ...(assistance === null ? {} : { assistedBy: "ai" as const, assistance }),
+    ...(media === null ? {} : { media }),
+  };
+}
+
+/** Reads a comment's picture or video through the contract the edge validated it against. */
+function parseCommentMedia(value: Record<string, unknown>): CommentMedia | null {
+  if (value.media === undefined) return null;
+  try {
+    return normalizeCommentMedia(value.media);
+  } catch (error) {
+    if (error instanceof CommentMediaError) throw invalidCommentResponse(value);
+    throw error;
+  }
+}
+
+/** Validates the optional writer metadata pair; both fields must be present together. */
+function parseCommentAssistance(value: Record<string, unknown>): Assistance | null {
+  if (value.assistedBy === undefined && value.assistance === undefined) return null;
+  const assistance = value.assistance;
+  if (
+    value.assistedBy !== "ai" ||
+    !isRecord(assistance) ||
+    typeof assistance.tool !== "string" ||
+    assistance.tool.length === 0 ||
+    (assistance.action !== undefined &&
+      (typeof assistance.action !== "string" ||
+        !(ASSIST_ACTIONS as readonly string[]).includes(assistance.action)))
+  ) {
+    throw invalidCommentResponse(value);
+  }
+  return {
+    tool: assistance.tool,
+    ...(assistance.action === undefined ? {} : { action: assistance.action as AssistAction }),
+  };
+}
+
+function invalidCommentResponse(value: unknown): ApiError {
+  return new ApiError("INVALID_RESPONSE", "The server returned invalid comment data.", 500, value);
 }
 
 function parseBoardImageAsset(value: unknown): BoardImageAsset {

@@ -9,7 +9,7 @@ function required(name) {
 }
 
 const config = {
-  origin: (process.env.SPACESCALE_ORIGIN ?? "https://spacescale.net").replace(/\/$/u, ""),
+  origin: (process.env.SPACESCALE_ORIGIN ?? "https://your-spacescale.example").replace(/\/$/u, ""),
   organisationId: required("SPACESCALE_ORGANISATION_ID"),
   keyId: required("SPACESCALE_KEY_ID"),
   signingKey: required("SPACESCALE_SIGNING_KEY"),

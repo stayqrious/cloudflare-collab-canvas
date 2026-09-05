@@ -3,12 +3,15 @@ import {
   createCanonicalSnapshot,
   serializeCanonicalSnapshot,
 } from "@collab/board-core";
-import { MAX_SNAPSHOT_BYTES } from "@collab/protocol";
+import { MAX_CANONICAL_EXPORT_BYTES } from "@collab/protocol";
 
 import { BoardModel } from "../board/model";
 import { BoardRenderer, type ImageAssetLoader } from "../board/renderer";
 
 const VIEWER_STYLE_ID = "spacescale-read-only-viewer-styles";
+const EXPORT_TOO_LARGE_MESSAGE = `The Space export is larger than ${Math.ceil(
+  MAX_CANONICAL_EXPORT_BYTES / (1024 * 1024),
+)} MiB.`;
 const ZOOM_FACTOR = 1.2;
 
 export const SPACE_VIEWER_CSS = `
@@ -29,7 +32,7 @@ export const SPACE_VIEWER_CSS = `
   overflow: hidden;
   color: var(--viewer-ink);
   background: var(--viewer-canvas);
-  font: 14px/1.4 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 14px/1.4 "Rubik Variable", Rubik, ui-sans-serif, system-ui, sans-serif;
 }
 
 .space-viewer__header {
@@ -383,8 +386,8 @@ export interface ReadOnlySpaceViewerOptions {
 export function parseCanonicalSpaceExport(input: unknown): CanonicalSnapshot {
   let candidate = input;
   if (typeof input === "string") {
-    if (new TextEncoder().encode(input).byteLength > MAX_SNAPSHOT_BYTES) {
-      throw new SpaceViewerExportError("The Space export is larger than 20 MiB.");
+    if (new TextEncoder().encode(input).byteLength > MAX_CANONICAL_EXPORT_BYTES) {
+      throw new SpaceViewerExportError(EXPORT_TOO_LARGE_MESSAGE);
     }
     try {
       candidate = JSON.parse(input) as unknown;
@@ -454,8 +457,8 @@ export async function readCanonicalSpaceExportResponse(
     );
   }
   const declaredLength = Number(response.headers.get("Content-Length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_SNAPSHOT_BYTES) {
-    throw new SpaceViewerExportError("The Space export is larger than 20 MiB.");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_CANONICAL_EXPORT_BYTES) {
+    throw new SpaceViewerExportError(EXPORT_TOO_LARGE_MESSAGE);
   }
   return parseCanonicalSpaceExport(await response.text());
 }
@@ -464,8 +467,8 @@ export async function readCanonicalSpaceExportResponse(
 export async function readCanonicalSpaceExportFile(
   file: Pick<Blob, "size" | "text">,
 ): Promise<CanonicalSnapshot> {
-  if (file.size > MAX_SNAPSHOT_BYTES) {
-    throw new SpaceViewerExportError("The Space export is larger than 20 MiB.");
+  if (file.size > MAX_CANONICAL_EXPORT_BYTES) {
+    throw new SpaceViewerExportError(EXPORT_TOO_LARGE_MESSAGE);
   }
   return parseCanonicalSpaceExport(await file.text());
 }

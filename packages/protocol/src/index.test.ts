@@ -5,11 +5,14 @@ import {
   ACTIVE_TOOLS,
   assertCanonicalAssetId,
   BOARD_FEATURE_KEYS,
+  CommentMediaError,
   canonicalRequestHashInput,
   canonicalStringify,
   DEFAULT_BOARD_FEATURES,
+  MAX_IMAGE_ALT_CODE_POINTS,
   normalizeBoardAccessPolicy,
   normalizeBoardFeatures,
+  normalizeCommentMedia,
   ProtocolValidationError,
   parseClientFrame,
   TEXT_FONT_FAMILIES,
@@ -39,7 +42,13 @@ function line(id = ID_1, arrowhead = "arrow") {
   return {
     id,
     kind: "line",
-    style: { kind: "line", color: "#abcdef", width: 2.125, opacity: 0.555, arrowhead },
+    style: {
+      kind: "line",
+      color: "#abcdef",
+      width: 2.125,
+      opacity: 0.555,
+      arrowhead,
+    },
     transform: [1, 0, 0, 1, 0, 0],
     geometry: { x1: 5.129, y1: 7.555, x2: 25.555, y2: 17.129 },
   };
@@ -51,7 +60,13 @@ function polygon(id = ID_1) {
     kind: "polygon",
     style: { kind: "stroke", color: "#abcdef", width: 2.125, opacity: 0.555 },
     transform: [1, 0, 0, 1, 0, 0],
-    geometry: { x: 5.129, y: 7.555, width: 80, height: 60, polygon: "pentagon" },
+    geometry: {
+      x: 5.129,
+      y: 7.555,
+      width: 80,
+      height: 60,
+      polygon: "pentagon",
+    },
   };
 }
 
@@ -69,7 +84,13 @@ function text(id = ID_1, fontFamily = "sans") {
   return {
     id,
     kind: "text",
-    style: { kind: "text", color: "#123456", fontSize: 16.125, fontFamily, opacity: 0.555 },
+    style: {
+      kind: "text",
+      color: "#123456",
+      fontSize: 16.125,
+      fontFamily,
+      opacity: 0.555,
+    },
     transform: [1, 0, 0, 1, 0, 0],
     geometry: { x: 15.129, y: 17.555, text: "Shared words" },
   };
@@ -163,7 +184,13 @@ function zone(id = ID_1) {
       opacity: 0.175,
     },
     transform: [1, 0, 0, 1, 0, 0],
-    geometry: { x: 10.125, y: 20.555, width: 520.125, height: 320, title: "Evidence" },
+    geometry: {
+      x: 10.125,
+      y: 20.555,
+      width: 520.125,
+      height: 320,
+      title: "Evidence",
+    },
   };
 }
 
@@ -185,6 +212,53 @@ describe("durable operation validation", () => {
         item: { ...rectangle(), z: 10 },
       }),
     ).toThrow(/Unknown field/);
+
+    expect(
+      validateDurableOperation({
+        kind: "item.create",
+        item: { ...rectangle(), assistedBy: "ai" },
+      }),
+    ).toMatchObject({ item: { assistedBy: "ai" } });
+    expect(() =>
+      validateDurableOperation({
+        kind: "item.create",
+        item: { ...rectangle(), assistedBy: "automation" },
+      }),
+    ).toThrow(/Expected one of "ai"/);
+  });
+
+  it("persists explicit video embeds without interpreting ordinary URL text as an embed", () => {
+    expect(
+      validateDurableOperation({
+        kind: "item.create",
+        item: {
+          ...text(),
+          geometry: {
+            ...text().geometry,
+            text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            embed: "video",
+          },
+        },
+      }),
+    ).toMatchObject({ item: { geometry: { embed: "video" } } });
+    expect(validateDurableOperation({ kind: "item.create", item: text() })).not.toHaveProperty(
+      "item.geometry.embed",
+    );
+    expect(() =>
+      validateDurableOperation({
+        kind: "item.create",
+        item: { ...text(), geometry: { ...text().geometry, embed: "automatic" } },
+      }),
+    ).toThrow(/text embed/);
+    expect(() =>
+      validateDurableOperation({
+        kind: "item.create",
+        item: {
+          ...text(),
+          geometry: { ...text().geometry, text: "not a video", embed: "video" },
+        },
+      }),
+    ).toThrow(/supported HTTPS YouTube or Vimeo/);
   });
 
   it("normalizes explicit groups, Section membership, copy remapping, and block typography", () => {
@@ -250,7 +324,12 @@ describe("durable operation validation", () => {
         kind: "item.create",
         item: {
           ...rectangle(),
-          geometry: { ...rectangle().geometry, width: 40, height: 40, shape: "square" },
+          geometry: {
+            ...rectangle().geometry,
+            width: 40,
+            height: 40,
+            shape: "square",
+          },
         },
       }),
     ).toMatchObject({
@@ -262,7 +341,10 @@ describe("durable operation validation", () => {
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...rectangle(), geometry: { ...rectangle().geometry, shape: "circle" } },
+        item: {
+          ...rectangle(),
+          geometry: { ...rectangle().geometry, shape: "circle" },
+        },
       }),
     ).toThrow(/Rectangle shape must be one of/);
   });
@@ -287,7 +369,10 @@ describe("durable operation validation", () => {
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...line(), style: { kind: "stroke", color: "#abcdef", width: 2, opacity: 1 } },
+        item: {
+          ...line(),
+          style: { kind: "stroke", color: "#abcdef", width: 2, opacity: 1 },
+        },
       }),
     ).toThrow(/line/);
     expect(() =>
@@ -344,7 +429,13 @@ describe("durable operation validation", () => {
     expect(validateDurableOperation({ kind: "item.create", item: polygon() })).toMatchObject({
       item: {
         kind: "polygon",
-        geometry: { x: 5.13, y: 7.56, width: 80, height: 60, polygon: "pentagon" },
+        geometry: {
+          x: 5.13,
+          y: 7.56,
+          width: 80,
+          height: 60,
+          polygon: "pentagon",
+        },
       },
     });
     expect(validateDurableOperation({ kind: "item.create", item: protractor() })).toEqual({
@@ -368,12 +459,18 @@ describe("durable operation validation", () => {
   it("persists only allowlisted text font families with trusted local stacks", () => {
     for (const fontFamily of TEXT_FONT_FAMILIES) {
       expect(
-        validateDurableOperation({ kind: "item.create", item: text(ID_1, fontFamily) }),
+        validateDurableOperation({
+          kind: "item.create",
+          item: text(ID_1, fontFamily),
+        }),
       ).toMatchObject({ item: { style: { fontFamily } } });
       expect(textFontStack(fontFamily)).not.toMatch(/url\(|https?:/u);
     }
     expect(() =>
-      validateDurableOperation({ kind: "item.create", item: text(ID_1, "remote-font") }),
+      validateDurableOperation({
+        kind: "item.create",
+        item: text(ID_1, "remote-font"),
+      }),
     ).toThrow(/fontFamily/u);
   });
 
@@ -400,7 +497,10 @@ describe("durable operation validation", () => {
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...sticky(), geometry: { x: 0, y: 0, width: 0, height: 10, text: "" } },
+        item: {
+          ...sticky(),
+          geometry: { x: 0, y: 0, width: 0, height: 10, text: "" },
+        },
       }),
     ).toThrow(/greater than 0/);
     expect(() =>
@@ -412,7 +512,10 @@ describe("durable operation validation", () => {
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...sticky(), geometry: { ...sticky().geometry, text: "x".repeat(1_001) } },
+        item: {
+          ...sticky(),
+          geometry: { ...sticky().geometry, text: "x".repeat(1_001) },
+        },
       }),
     ).toThrow(/at most 1000/);
     for (const text of ["hidden\u007fcontrol", "hidden\u0085control"]) {
@@ -426,7 +529,10 @@ describe("durable operation validation", () => {
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...sticky(), geometry: { ...sticky().geometry, text: "unpaired\ud800" } },
+        item: {
+          ...sticky(),
+          geometry: { ...sticky().geometry, text: "unpaired\ud800" },
+        },
       }),
     ).toThrow(/unpaired surrogate/);
     expect(() =>
@@ -471,7 +577,10 @@ describe("durable operation validation", () => {
   it("normalizes every durable stamp and rejects unsafe geometry and styles", () => {
     for (const stampKind of ["star", "check", "heart", "question", "smile", "sparkle"]) {
       expect(
-        validateDurableOperation({ kind: "item.create", item: stamp(ID_1, stampKind) }),
+        validateDurableOperation({
+          kind: "item.create",
+          item: stamp(ID_1, stampKind),
+        }),
       ).toEqual({
         kind: "item.create",
         item: {
@@ -492,19 +601,28 @@ describe("durable operation validation", () => {
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...stamp(), geometry: { x: 0, y: 0, size: 72, stamp: "award" } },
+        item: {
+          ...stamp(),
+          geometry: { x: 0, y: 0, size: 72, stamp: "award" },
+        },
       }),
     ).toThrow(/Stamp must be one of/);
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...stamp(), style: { kind: "stamp", color: "#E11D48", opacity: 1 } },
+        item: {
+          ...stamp(),
+          style: { kind: "stamp", color: "#E11D48", opacity: 1 },
+        },
       }),
     ).toThrow(/lowercase/);
     expect(() =>
       validateDurableOperation({
         kind: "item.create",
-        item: { ...stamp(), style: { kind: "stamp", color: "#e11d48", opacity: 0 } },
+        item: {
+          ...stamp(),
+          style: { kind: "stamp", color: "#e11d48", opacity: 0 },
+        },
       }),
     ).toThrow(/between 0.1 and 1/);
     expect(
@@ -558,12 +676,25 @@ describe("durable operation validation", () => {
 
   it("rejects hostile image references, metadata, dimensions, alt, and styles", () => {
     const cases = [
-      { ...image(), geometry: { ...image().geometry, assetId: "data:image/png;base64,AAAA" } },
-      { ...image(), geometry: { ...image().geometry, mimeType: "image/svg+xml" } },
+      {
+        ...image(),
+        geometry: {
+          ...image().geometry,
+          assetId: "data:image/png;base64,AAAA",
+        },
+      },
+      {
+        ...image(),
+        geometry: { ...image().geometry, mimeType: "image/svg+xml" },
+      },
       { ...image(), geometry: { ...image().geometry, intrinsicWidth: 4097 } },
       {
         ...image(),
-        geometry: { ...image().geometry, intrinsicWidth: 4001, intrinsicHeight: 4000 },
+        geometry: {
+          ...image().geometry,
+          intrinsicWidth: 4001,
+          intrinsicHeight: 4000,
+        },
       },
       { ...image(), geometry: { ...image().geometry, alt: "x".repeat(501) } },
       { ...image(), geometry: { ...image().geometry, bytes: "AAAA" } },
@@ -625,7 +756,11 @@ describe("durable operation validation", () => {
         },
       }),
     ).toMatchObject({
-      patch: { geometry: { cells: [["A", "B", "C"], ...table().geometry.cells.slice(1)] } },
+      patch: {
+        geometry: {
+          cells: [["A", "B", "C"], ...table().geometry.cells.slice(1)],
+        },
+      },
     });
   });
 
@@ -633,12 +768,21 @@ describe("durable operation validation", () => {
     const base = table();
     const cases = [
       { ...base, geometry: { ...base.geometry, columnWidths: [] } },
-      { ...base, geometry: { ...base.geometry, rowHeights: Array(9).fill(48) } },
-      { ...base, geometry: { ...base.geometry, columnWidths: [120, 0, 120] } },
-      { ...base, geometry: { ...base.geometry, cells: base.geometry.cells.slice(0, 2) } },
       {
         ...base,
-        geometry: { ...base.geometry, cells: [["A"], ...base.geometry.cells.slice(1)] },
+        geometry: { ...base.geometry, rowHeights: Array(9).fill(48) },
+      },
+      { ...base, geometry: { ...base.geometry, columnWidths: [120, 0, 120] } },
+      {
+        ...base,
+        geometry: { ...base.geometry, cells: base.geometry.cells.slice(0, 2) },
+      },
+      {
+        ...base,
+        geometry: {
+          ...base.geometry,
+          cells: [["A"], ...base.geometry.cells.slice(1)],
+        },
       },
       {
         ...base,
@@ -667,7 +811,13 @@ describe("durable operation validation", () => {
       { ...base, style: { ...base.style, fontSize: 7 } },
       {
         ...base,
-        style: { kind: "sticky", fill: "#ffffff", textColor: "#000000", fontSize: 16, opacity: 1 },
+        style: {
+          kind: "sticky",
+          fill: "#ffffff",
+          textColor: "#000000",
+          fontSize: 16,
+          opacity: 1,
+        },
       },
     ];
     for (const item of cases) {
@@ -794,9 +944,9 @@ describe("durable operation validation", () => {
     ).toThrow(/greater than or equal to 1/);
   });
 
-  it("normalizes an exact, complete board feature map with safe image defaults", () => {
+  it("normalizes an exact, complete board feature map with images on by default", () => {
     expect(BOARD_FEATURE_KEYS).toHaveLength(25);
-    expect(DEFAULT_BOARD_FEATURES.images).toBe(false);
+    expect(DEFAULT_BOARD_FEATURES.images).toBe(true);
     expect(normalizeBoardFeatures(DEFAULT_BOARD_FEATURES)).toEqual(DEFAULT_BOARD_FEATURES);
     expect(() => normalizeBoardFeatures({ ...DEFAULT_BOARD_FEATURES, protractor: "yes" })).toThrow(
       /protractor must be a boolean/,
@@ -865,7 +1015,11 @@ describe("durable operation validation", () => {
       }),
     ).toThrow(/finite/);
     expect(() =>
-      validateDurableOperation({ kind: "item.delete", itemId: "../bad", expectedVersion: 1 }),
+      validateDurableOperation({
+        kind: "item.delete",
+        itemId: "../bad",
+        expectedVersion: 1,
+      }),
     ).toThrow(/canonical UUID/);
   });
 });
@@ -1006,7 +1160,9 @@ describe("hostile frame parsing", () => {
           payload: { ...preview.payload, style: rectangle().style },
         }),
       ),
-    ).toMatchObject({ payload: { itemKind: "line", style: { kind: "stroke" } } });
+    ).toMatchObject({
+      payload: { itemKind: "line", style: { kind: "stroke" } },
+    });
     expect(() =>
       parseClientFrame(
         JSON.stringify({
@@ -1038,7 +1194,13 @@ describe("hostile frame parsing", () => {
     expect(parseClientFrame(JSON.stringify(preview))).toMatchObject({
       payload: {
         itemKind: "polygon",
-        geometry: { x: 5.13, y: 7.56, width: 80, height: 60, polygon: "pentagon" },
+        geometry: {
+          x: 5.13,
+          y: 7.56,
+          width: 80,
+          height: 60,
+          polygon: "pentagon",
+        },
         style: { kind: "stroke", width: 2.13, opacity: 0.56 },
       },
     });
@@ -1086,7 +1248,10 @@ describe("hostile frame parsing", () => {
     expect(() =>
       // validateClientFrame accepts programmatic hostile values too; JSON itself
       // cannot encode Infinity.
-      validateDurableOperation({ kind: "board.clear", expectedBoardSeq: Number.NaN }),
+      validateDurableOperation({
+        kind: "board.clear",
+        expectedBoardSeq: Number.NaN,
+      }),
     ).toThrow(/safe integer/);
   });
 
@@ -1178,7 +1343,14 @@ describe("hostile frame parsing", () => {
         let nested: unknown = 0;
         for (let index = 0; index < depth; index += 1) nested = [nested];
         expect(() =>
-          parseClientFrame(JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: 0, nested })),
+          parseClientFrame(
+            JSON.stringify({
+              v: 1,
+              t: "client.sync_check",
+              latestSeq: 0,
+              nested,
+            }),
+          ),
         ).toThrow(ProtocolValidationError);
       }),
       { numRuns: 50 },
@@ -1200,5 +1372,89 @@ describe("canonical and Unicode handling", () => {
     expect(validatePlainText("hello 🌍")).toBe("hello 🌍");
     expect(() => validatePlainText("bad\u0000text")).toThrow(/control/);
     expect(() => validatePlainText("\ud800")).toThrow(/surrogate/);
+  });
+});
+
+describe("comment media", () => {
+  const assetId = `asset_${"A".repeat(43)}`;
+
+  it("canonicalizes a picture already stored on the board", () => {
+    expect(
+      normalizeCommentMedia({
+        kind: "image",
+        assetId,
+        mimeType: "image/png",
+        intrinsicWidth: 800,
+        intrinsicHeight: 600,
+        alt: "  A parabola opening upward  ",
+      }),
+    ).toEqual({
+      kind: "image",
+      assetId,
+      mimeType: "image/png",
+      intrinsicWidth: 800,
+      intrinsicHeight: 600,
+      alt: "A parabola opening upward",
+    });
+    // An empty description is the same as none at all.
+    expect(
+      normalizeCommentMedia({
+        kind: "image",
+        assetId,
+        mimeType: "image/png",
+        intrinsicWidth: 800,
+        intrinsicHeight: 600,
+        alt: "   ",
+      }),
+    ).not.toHaveProperty("alt");
+  });
+
+  it("derives a video's provider from its link and normalizes the link", () => {
+    expect(normalizeCommentMedia({ kind: "video", url: "https://youtu.be/dQw4w9WgXcQ" })).toEqual({
+      kind: "video",
+      provider: "youtube",
+      url: "https://youtu.be/dQw4w9WgXcQ",
+    });
+    expect(
+      normalizeCommentMedia({
+        kind: "video",
+        provider: "vimeo",
+        url: "https://vimeo.com/123456?h=abcdef",
+      }),
+    ).toMatchObject({ provider: "vimeo" });
+  });
+
+  it("refuses anything the board would not store or play", () => {
+    const cases: unknown[] = [
+      null,
+      "https://youtu.be/dQw4w9WgXcQ",
+      { kind: "sound", url: "https://example.com/a.mp3" },
+      { kind: "video", url: "https://example.com/clip.mp4" },
+      { kind: "video", url: "http://youtu.be/dQw4w9WgXcQ" },
+      { kind: "video", provider: "youtube", url: "https://vimeo.com/123456" },
+      { kind: "video", url: "https://youtu.be/dQw4w9WgXcQ", title: "extra" },
+      {
+        kind: "image",
+        assetId: "asset_short",
+        mimeType: "image/png",
+        intrinsicWidth: 8,
+        intrinsicHeight: 6,
+      },
+      { kind: "image", assetId, mimeType: "image/svg+xml", intrinsicWidth: 8, intrinsicHeight: 6 },
+      { kind: "image", assetId, mimeType: "image/png", intrinsicWidth: 0, intrinsicHeight: 6 },
+      { kind: "image", assetId, mimeType: "image/png", intrinsicWidth: 8.5, intrinsicHeight: 6 },
+      { kind: "image", assetId, mimeType: "image/png", intrinsicHeight: 6 },
+      {
+        kind: "image",
+        assetId,
+        mimeType: "image/png",
+        intrinsicWidth: 8,
+        intrinsicHeight: 6,
+        alt: "a".repeat(MAX_IMAGE_ALT_CODE_POINTS + 1),
+      },
+    ];
+    for (const value of cases) {
+      expect(() => normalizeCommentMedia(value)).toThrow(CommentMediaError);
+    }
   });
 });

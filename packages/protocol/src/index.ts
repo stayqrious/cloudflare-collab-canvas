@@ -1,11 +1,16 @@
 import {
   canonicalNumber,
   GeometryValidationError,
+  IMAGE_MIME_TYPES,
   type ImageGeometry,
+  type ImageMimeType,
   type ItemGeometry,
   inferAndNormalizeGeometry,
   isCanonicalImageAssetId,
   type LineGeometry,
+  MAX_IMAGE_ALT_CODE_POINTS,
+  MAX_IMAGE_INTRINSIC_DIMENSION,
+  MAX_IMAGE_INTRINSIC_PIXELS,
   MAX_TABLE_COLUMNS,
   MAX_TABLE_ROWS,
   normalizeCoordinate,
@@ -17,12 +22,14 @@ import {
   type Point,
   type PolygonGeometry,
   type ProtractorGeometry,
+  parseVideoEmbedReference,
   type RectangleGeometry,
   type StampGeometry,
   type StickyGeometry,
   type TableGeometry,
   type TextGeometry,
   type Transform,
+  type VideoEmbedReference,
   type ZoneGeometry,
 } from "@collab/geometry";
 
@@ -86,6 +93,16 @@ export const MAX_IMAGE_RADIUS = 256;
 export const MAX_TABLE_CELL_TEXT_CODE_POINTS = 500;
 export const MAX_TABLE_TEXT_CODE_POINTS = 8_000;
 export const MAX_ZONE_TITLE_CODE_POINTS = 120;
+/**
+ * Upper bound of the export-only Section index appended to canonical exports.
+ * Every live item contributes at most one summary entry (a Section: id, title
+ * of up to MAX_ZONE_TITLE_CODE_POINTS four-byte code points, lock flag and
+ * framing) or one member id, so the index can never exceed this many bytes.
+ */
+export const MAX_SECTION_EXPORT_INDEX_BYTES =
+  MAX_LIVE_ITEMS * (MAX_ZONE_TITLE_CODE_POINTS * 4 + 160);
+/** Largest canonical export a consumer must accept: the snapshot plus its Section index. */
+export const MAX_CANONICAL_EXPORT_BYTES = MAX_SNAPSHOT_BYTES + MAX_SECTION_EXPORT_INDEX_BYTES;
 export const LINE_ARROWHEADS = ["none", "arrow"] as const;
 export const TEXT_FONT_FAMILIES = ["sans", "serif", "handwritten", "mono"] as const;
 export const TEXT_FONT_WEIGHTS = ["normal", "bold"] as const;
@@ -162,7 +179,7 @@ export const DEFAULT_BOARD_FEATURES: BoardFeatures = {
   text: true,
   stickyNotes: true,
   stamps: true,
-  images: false,
+  images: true,
   tables: true,
   sections: true,
   protractor: true,
@@ -193,12 +210,219 @@ export const ITEM_KINDS = [
 export const BOARD_ROLES = ["viewer", "editor", "owner"] as const;
 export const DRAWING_POLICIES = ["editors_enabled", "owner_only", "locked"] as const;
 export const ACCESS_MODES = ["private", "link_view"] as const;
+export const ITEM_ASSISTANCE = ["ai"] as const;
+/**
+ * Actions a participant can request from the board's AI button while a WebMCP problem-step
+ * watch is live. Shared so the web tool schema, the comment metadata the edge validates, and
+ * the catalog cannot drift apart.
+ */
+export const ASSIST_ACTIONS = [
+  "explain",
+  "ideate",
+  "critique",
+  "check_work",
+  "examples",
+  "explain_with_video",
+] as const;
+/** Longest tool name the comment assistance metadata accepts. */
+export const MAX_ASSISTANCE_TOOL_LENGTH = 64;
+export const ASSISTANCE_TOOL_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
 
 export type ItemKind = (typeof ITEM_KINDS)[number];
 export type BoardItemKind = ItemKind;
 export type BoardRole = (typeof BOARD_ROLES)[number];
 export type DrawingPolicy = (typeof DRAWING_POLICIES)[number];
 export type AccessMode = (typeof ACCESS_MODES)[number];
+export type ItemAssistance = (typeof ITEM_ASSISTANCE)[number];
+export type AssistAction = (typeof ASSIST_ACTIONS)[number];
+/** Which WebMCP tool wrote an assisted comment, and the participant action it answered. */
+export type Assistance = {
+  tool: string;
+  action?: AssistAction;
+};
+
+/**
+ * The picture and video a comment can carry beside its text.
+ *
+ * A comment holds at most one of them, and it is the same material the canvas already takes:
+ * an image is a committed board asset from the private per-board bucket, never an external
+ * URL, and a video is one of the public YouTube or Vimeo links every embed surface accepts.
+ * Shared so the composer, the WebMCP write tool, the edge's validation and the stored row all
+ * read one definition.
+ */
+export const COMMENT_MEDIA_KINDS = ["image", "video"] as const;
+export type CommentMediaKind = (typeof COMMENT_MEDIA_KINDS)[number];
+
+/** Longest video link a comment accepts, matching the board's own embed field. */
+export const MAX_COMMENT_MEDIA_URL_LENGTH = 2_048;
+/**
+ * Longest JSON encoding of one comment's media. Every field above is separately bounded, so
+ * this only has to stop a pathological encoding from reaching the stored column.
+ */
+export const MAX_COMMENT_MEDIA_JSON_LENGTH = 4_096;
+
+export interface CommentImageMedia {
+  kind: "image";
+  assetId: string;
+  mimeType: ImageMimeType;
+  intrinsicWidth: number;
+  intrinsicHeight: number;
+  /** What the picture shows, for participants who cannot see it. */
+  alt?: string;
+}
+
+export interface CommentVideoMedia {
+  kind: "video";
+  provider: VideoEmbedReference["provider"];
+  url: string;
+}
+
+export type CommentMedia = CommentImageMedia | CommentVideoMedia;
+
+/** Why a comment's media was refused, carrying the field that failed for the caller's message. */
+export class CommentMediaError extends Error {
+  readonly field: string;
+
+  constructor(message: string, field: string) {
+    super(message);
+    this.name = "CommentMediaError";
+    this.field = field;
+  }
+}
+
+/**
+ * Validates one comment attachment and returns it in canonical form: an image's stored asset
+ * identity, or a video's provider and normalized source URL. Throws CommentMediaError with the
+ * offending field. The same function checks a request body, a server response, and a stored row,
+ * so none of the three can drift from the others.
+ */
+export function normalizeCommentMedia(value: unknown, path = "media"): CommentMedia {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new CommentMediaError("Comment media must be an object.", path);
+  }
+  const media = value as Record<string, unknown>;
+  if (media.kind === "image") return normalizeCommentImageMedia(media, path);
+  if (media.kind === "video") return normalizeCommentVideoMedia(media, path);
+  throw new CommentMediaError(
+    `Comment media kind must be one of ${COMMENT_MEDIA_KINDS.join(", ")}.`,
+    `${path}.kind`,
+  );
+}
+
+function normalizeCommentImageMedia(
+  media: Record<string, unknown>,
+  path: string,
+): CommentImageMedia {
+  expectCommentMediaKeys(
+    media,
+    ["kind", "assetId", "mimeType", "intrinsicWidth", "intrinsicHeight", "alt"],
+    ["kind", "assetId", "mimeType", "intrinsicWidth", "intrinsicHeight"],
+    path,
+  );
+  if (!isCanonicalImageAssetId(media.assetId)) {
+    throw new CommentMediaError(
+      "The image must be one already uploaded to this Space.",
+      `${path}.assetId`,
+    );
+  }
+  if (
+    typeof media.mimeType !== "string" ||
+    !(IMAGE_MIME_TYPES as readonly string[]).includes(media.mimeType)
+  ) {
+    throw new CommentMediaError(
+      `The image type must be one of ${IMAGE_MIME_TYPES.join(", ")}.`,
+      `${path}.mimeType`,
+    );
+  }
+  const intrinsicWidth = commentMediaDimension(media.intrinsicWidth, `${path}.intrinsicWidth`);
+  const intrinsicHeight = commentMediaDimension(media.intrinsicHeight, `${path}.intrinsicHeight`);
+  if (intrinsicWidth * intrinsicHeight > MAX_IMAGE_INTRINSIC_PIXELS) {
+    throw new CommentMediaError("That image has too many pixels.", `${path}.intrinsicWidth`);
+  }
+  const alt = commentMediaAlt(media.alt, `${path}.alt`);
+  return {
+    kind: "image",
+    assetId: media.assetId,
+    mimeType: media.mimeType as ImageMimeType,
+    intrinsicWidth,
+    intrinsicHeight,
+    ...(alt === undefined ? {} : { alt }),
+  };
+}
+
+function normalizeCommentVideoMedia(
+  media: Record<string, unknown>,
+  path: string,
+): CommentVideoMedia {
+  expectCommentMediaKeys(media, ["kind", "provider", "url"], ["kind", "url"], path);
+  if (typeof media.url !== "string" || media.url.length > MAX_COMMENT_MEDIA_URL_LENGTH) {
+    throw new CommentMediaError(
+      `The video link must be text of at most ${MAX_COMMENT_MEDIA_URL_LENGTH} characters.`,
+      `${path}.url`,
+    );
+  }
+  const reference = parseVideoEmbedReference(media.url);
+  if (reference === null) {
+    throw new CommentMediaError(
+      "The video link must be a complete HTTPS YouTube or Vimeo link.",
+      `${path}.url`,
+    );
+  }
+  // A caller may echo the provider back; it is derived, so it may agree but never decide.
+  if (media.provider !== undefined && media.provider !== reference.provider) {
+    throw new CommentMediaError("The video provider does not match its link.", `${path}.provider`);
+  }
+  return { kind: "video", provider: reference.provider, url: reference.sourceUrl };
+}
+
+function expectCommentMediaKeys(
+  media: Record<string, unknown>,
+  allowed: readonly string[],
+  required: readonly string[],
+  path: string,
+): void {
+  for (const key of Object.keys(media)) {
+    if (!allowed.includes(key)) {
+      throw new CommentMediaError(`Unknown comment media field ${key}.`, `${path}.${key}`);
+    }
+  }
+  for (const key of required) {
+    if (media[key] === undefined) {
+      throw new CommentMediaError(`Comment media is missing ${key}.`, `${path}.${key}`);
+    }
+  }
+}
+
+function commentMediaDimension(value: unknown, path: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_IMAGE_INTRINSIC_DIMENSION
+  ) {
+    throw new CommentMediaError(
+      `The image dimension must be a whole number of pixels up to ${MAX_IMAGE_INTRINSIC_DIMENSION}.`,
+      path,
+    );
+  }
+  return value;
+}
+
+function commentMediaAlt(value: unknown, path: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new CommentMediaError("The image description must be text.", path);
+  }
+  const alt = value.trim();
+  if (alt.length === 0) return undefined;
+  if ([...alt].length > MAX_IMAGE_ALT_CODE_POINTS) {
+    throw new CommentMediaError(
+      `The image description must be at most ${MAX_IMAGE_ALT_CODE_POINTS} characters.`,
+      path,
+    );
+  }
+  return alt;
+}
 
 export interface BoardAccessPolicy {
   accessMode: AccessMode;
@@ -318,6 +542,7 @@ interface BoardItemBase {
   z: number;
   version: number;
   createdBy: string;
+  assistedBy?: ItemAssistance;
   transform: Transform;
 }
 
@@ -1236,7 +1461,10 @@ function normalizeGeometryForItem(kind: ItemKind, value: unknown, path: string):
   }
   if (kind === "table") {
     const table = geometry as TableGeometry;
-    return { ...table, cells: validateTableCells(table.cells, `${path}.cells`) };
+    return {
+      ...table,
+      cells: validateTableCells(table.cells, `${path}.cells`),
+    };
   }
   if (kind === "zone") {
     const zone = geometry as ZoneGeometry;
@@ -1262,7 +1490,7 @@ export function normalizeNewBoardItem(value: unknown, path = "$item"): NewBoardI
   expectExactKeys(
     object,
     ["id", "kind", "style", "transform", "geometry"],
-    ["groupId", "sectionId"],
+    ["assistedBy", "groupId", "sectionId"],
     path,
   );
   const kind = expectLiteral(object.kind, ITEM_KINDS, `${path}.kind`);
@@ -1276,9 +1504,14 @@ export function normalizeNewBoardItem(value: unknown, path = "$item"): NewBoardI
       : {}),
     transform: fromGeometry(() => normalizeTransform(object.transform, `${path}.transform`)),
   };
+  const assistance = own.call(object, "assistedBy")
+    ? {
+        assistedBy: expectLiteral(object.assistedBy, ITEM_ASSISTANCE, `${path}.assistedBy`),
+      }
+    : {};
   const style = normalizeStyleForKind(kind, object.style, `${path}.style`);
   const geometry = normalizeGeometryForItem(kind, object.geometry, `${path}.geometry`);
-  return { ...common, kind, style, geometry } as NewBoardItem;
+  return { ...common, ...assistance, kind, style, geometry } as NewBoardItem;
 }
 
 export function normalizeBoardItem(value: unknown, path = "$item"): BoardItem {
@@ -1286,7 +1519,7 @@ export function normalizeBoardItem(value: unknown, path = "$item"): BoardItem {
   expectExactKeys(
     object,
     ["id", "kind", "z", "version", "createdBy", "style", "transform", "geometry"],
-    ["groupId", "sectionId"],
+    ["assistedBy", "groupId", "sectionId"],
     path,
   );
   const normalized = normalizeNewBoardItem(
@@ -1298,6 +1531,7 @@ export function normalizeBoardItem(value: unknown, path = "$item"): BoardItem {
       style: object.style,
       transform: object.transform,
       geometry: object.geometry,
+      ...(own.call(object, "assistedBy") ? { assistedBy: object.assistedBy } : {}),
     },
     path,
   );
@@ -1790,7 +2024,11 @@ function inspectJsonValue(value: unknown, maximumDepth: number): void {
     }
     if (!isRecord(entry)) fail("Value is not a plain JSON object", current.path);
     for (const [key, nested] of Object.entries(entry)) {
-      stack.push({ value: nested, depth: current.depth + 1, path: `${current.path}.${key}` });
+      stack.push({
+        value: nested,
+        depth: current.depth + 1,
+        path: `${current.path}.${key}`,
+      });
     }
   }
 }

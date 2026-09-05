@@ -2,6 +2,7 @@ import {
   lineArrowheadPoints,
   type OutlineGeometry,
   polygonPoints,
+  textLayoutEstimateSource,
   transformPoint,
   visibleOutlinePaths,
   ZONE_TITLE_PADDING,
@@ -10,6 +11,7 @@ import {
 import { resolveTextFontWeight, textFontStack } from "@collab/protocol";
 import { STAMP_SVG_PATHS } from "@collab/svg-export";
 import { summarizeBoardVotes, type VoteSummary } from "../activities/voting";
+import { clearTypesetMath, containsMathMarkup, splitMathMarkup, typesetMath } from "../mathjax";
 import {
   isRotatableObjectItem,
   isScalableObjectItem,
@@ -20,6 +22,7 @@ import {
   type ScalableObjectItem,
 } from "../tools/transform";
 import type {
+  BoardComment,
   BoardItem,
   BoxGeometry,
   ImageGeometry,
@@ -49,7 +52,13 @@ import type {
   ZoneGeometry,
   ZoneStyle,
 } from "../types";
-import { tokenizeSafeLinks } from "./links";
+import {
+  tokenizeSafeLinks,
+  VIDEO_EMBED_HEIGHT,
+  VIDEO_EMBED_WIDTH,
+  type VideoEmbed,
+  videoEmbedFromText,
+} from "./links";
 import { type BoardModel, type Bounds, itemBounds as boardItemBounds } from "./model";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -65,12 +74,14 @@ export const TABLE_CHARACTER_WIDTH = 0.56;
 export const RESIZE_HANDLE_RADIUS_CSS_PX = 6;
 export const RESIZE_HANDLE_HIT_RADIUS_CSS_PX = 22;
 export const ROTATE_HANDLE_OFFSET_CSS_PX = 30;
+const MAX_MATH_TEXT_WIDTH = 720;
 
 type ResizableCardItem = Extract<BoardItem, { kind: "sticky" | "image" }>;
 export type ResizableStructuredItem = Extract<BoardItem, { kind: "table" | "zone" }>;
 type ResizableItem = ResizableCardItem | ResizableStructuredItem;
 type AttributedItem = Extract<BoardItem, { kind: "sticky" | "image" | "stamp" }>;
 export type CreatorNameResolver = (actorId: string) => string | undefined;
+export type RenderedTextBoundsChangeHandler = (itemId: string, expectedVersion: number) => void;
 
 export function selectionResizeHandle(
   item: ResizableItem,
@@ -308,6 +319,7 @@ export class BoardRenderer {
   readonly viewport: CanvasViewport;
 
   private readonly drawingArea: SVGGElement;
+  private readonly commentLayer: SVGGElement;
   private readonly voteCountLayer: SVGGElement;
   private readonly remoteLayer: SVGGElement;
   private readonly localLayer: SVGGElement;
@@ -319,12 +331,15 @@ export class BoardRenderer {
   private resizeHandlesEnabled = true;
   private objectTransformsEnabled = true;
   private votingEnabled = true;
+  private comments: readonly BoardComment[] = [];
+  private commentRefreshFrame: number | null = null;
 
   constructor(
     container: HTMLElement,
     private readonly model: BoardModel,
     loadImageAsset: ImageAssetLoader,
     private readonly resolveCreatorName: CreatorNameResolver = () => undefined,
+    private readonly onRenderedTextBoundsChange: RenderedTextBoundsChangeHandler = () => undefined,
   ) {
     this.imageAssets = new ImageAssetCache(loadImageAsset);
     this.svg = svgElement("svg");
@@ -360,6 +375,7 @@ export class BoardRenderer {
 
     this.drawingArea = layer("drawing-area", "Authoritative board content");
     this.voteCountLayer = layer("vote-count-layer", "Live voting counts");
+    this.commentLayer = layer("comment-layer", "Open object comments");
     this.voteCountLayer.setAttribute("pointer-events", "none");
     this.remoteLayer = layer("remote-preview-layer", "Collaborator previews");
     this.localLayer = layer("local-preview-layer", "Your current gesture");
@@ -370,6 +386,7 @@ export class BoardRenderer {
       background,
       this.drawingArea,
       this.voteCountLayer,
+      this.commentLayer,
       this.remoteLayer,
       this.localLayer,
       this.selectionLayer,
@@ -383,8 +400,10 @@ export class BoardRenderer {
   }
 
   destroy(): void {
+    this.cancelCommentRefresh();
     this.imageAssets.destroy();
     this.viewport.destroy();
+    clearTypesetMath(this.svg);
     this.svg.remove();
   }
 
@@ -406,6 +425,27 @@ export class BoardRenderer {
     if (this.votingEnabled === enabled) return;
     this.votingEnabled = enabled;
     this.renderVoteCounts();
+  }
+
+  /** Comments are immutable snapshots, so the array is kept as given. */
+  setComments(comments: readonly BoardComment[]): void {
+    this.comments = comments;
+    this.renderCommentMarkers();
+  }
+
+  /** Coalesces marker repositioning (for example zoom changes) into one frame. */
+  refreshComments(): void {
+    if (this.commentRefreshFrame !== null) return;
+    this.commentRefreshFrame = requestAnimationFrame(() => {
+      this.commentRefreshFrame = null;
+      this.renderCommentMarkers();
+    });
+  }
+
+  private cancelCommentRefresh(): void {
+    if (this.commentRefreshFrame === null) return;
+    cancelAnimationFrame(this.commentRefreshFrame);
+    this.commentRefreshFrame = null;
   }
 
   setSelection(ids: Iterable<string>, translated?: { x: number; y: number }): void {
@@ -515,7 +555,7 @@ export class BoardRenderer {
   }
 
   showLocalPencil(points: readonly Point[], style: StrokeStyle): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     if (points.length === 0) return;
     const path = svgElement("path");
     path.classList.add("local-preview");
@@ -530,7 +570,7 @@ export class BoardRenderer {
     style: LineStyle | StrokeStyle,
     snapPoints: readonly Point[] = [],
   ): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     const preview = shapeNode(kind, geometry, style);
     preview.classList.add("local-preview");
     this.localLayer.append(preview, ...snapPoints.map((point) => this.snapHalo(point)));
@@ -556,7 +596,7 @@ export class BoardRenderer {
     style: Pick<TextStyle, "color" | "fontSize" | "fontFamily" | "opacity">,
     transform: Matrix = [1, 0, 0, 1, 0, 0],
   ): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     if (!value) return;
     const text = svgElement("text");
     text.classList.add("local-preview", "text-preview");
@@ -582,8 +622,8 @@ export class BoardRenderer {
     style: StickyStyle,
     transform: Matrix = [1, 0, 0, 1, 0, 0],
   ): void {
-    this.localLayer.replaceChildren();
-    const sticky = stickyNode(geometry, style);
+    this.clearLocalLayer();
+    const sticky = stickyNode(geometry, style, true);
     sticky.classList.add("local-preview", "sticky-preview");
     sticky.setAttribute("transform", matrixAttribute(transform));
     this.localLayer.append(sticky);
@@ -594,8 +634,8 @@ export class BoardRenderer {
     style: ZoneStyle,
     transform: Matrix = [1, 0, 0, 1, 0, 0],
   ): void {
-    this.localLayer.replaceChildren();
-    const zone = zoneNode("local-zone-preview", geometry, style);
+    this.clearLocalLayer();
+    const zone = zoneNode("local-zone-preview", geometry, style, true);
     zone.classList.add("local-preview", "zone-preview");
     zone.setAttribute("aria-hidden", "true");
     zone.setAttribute("transform", matrixAttribute(transform));
@@ -603,11 +643,13 @@ export class BoardRenderer {
   }
 
   showMovePreview(ids: readonly string[], x: number, y: number, snapPoint?: Point): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     for (const id of ids) {
       const item = this.model.getItem(id);
       if (!item) continue;
-      const node = itemNode(item, (assetId) => this.imageAssets.load(assetId));
+      const node = itemNode(item, (assetId) => this.imageAssets.load(assetId), {
+        preview: true,
+      });
       node.classList.add("local-preview", "move-preview");
       node.setAttribute(
         "transform",
@@ -639,9 +681,11 @@ export class BoardRenderer {
     transform: Matrix,
     className: "rotation-preview" | "scale-preview",
   ): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     const preview = { ...item, transform } as RotatableObjectItem;
-    const node = itemNode(preview, (assetId) => this.imageAssets.load(assetId));
+    const node = itemNode(preview, (assetId) => this.imageAssets.load(assetId), {
+      preview: true,
+    });
     node.classList.add("local-preview", className);
     this.localLayer.append(node);
     this.renderSelectionBounds(boardItemBounds(preview), [
@@ -653,10 +697,15 @@ export class BoardRenderer {
   }
 
   showCardResizePreview(item: ResizableCardItem, geometry: StickyGeometry | ImageGeometry): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     const preview = { ...item, geometry } as ResizableCardItem;
-    const renderItem = { ...preview, id: `${item.id}-resize-preview` } as ResizableCardItem;
-    const node = itemNode(renderItem, (assetId) => this.imageAssets.load(assetId));
+    const renderItem = {
+      ...preview,
+      id: `${item.id}-resize-preview`,
+    } as ResizableCardItem;
+    const node = itemNode(renderItem, (assetId) => this.imageAssets.load(assetId), {
+      preview: true,
+    });
     node.classList.add("local-preview", "resize-preview");
     this.localLayer.append(node);
     this.renderSelectionBounds(
@@ -669,13 +718,15 @@ export class BoardRenderer {
     item: ResizableStructuredItem,
     geometry: TableGeometry | ZoneGeometry,
   ): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     const preview = { ...item, geometry } as ResizableStructuredItem;
     const renderItem = {
       ...preview,
       id: `${item.id}-resize-preview`,
     } as ResizableStructuredItem;
-    const node = itemNode(renderItem, (assetId) => this.imageAssets.load(assetId));
+    const node = itemNode(renderItem, (assetId) => this.imageAssets.load(assetId), {
+      preview: true,
+    });
     node.classList.add("local-preview", "resize-preview");
     this.localLayer.append(node);
     this.renderSelectionBounds(
@@ -690,12 +741,18 @@ export class BoardRenderer {
   }
 
   clearLocalPreview(): void {
-    this.localLayer.replaceChildren();
+    this.clearLocalLayer();
     this.highlightForErase([]);
     this.setSelection(this.selectedIds);
   }
 
+  private clearLocalLayer(): void {
+    clearTypesetMath(this.localLayer);
+    this.localLayer.replaceChildren();
+  }
+
   renderRemotePreviews(previews: Iterable<RemotePreview>): void {
+    clearTypesetMath(this.remoteLayer);
     this.remoteLayer.replaceChildren();
     for (const preview of previews) {
       const group = svgElement("g");
@@ -739,7 +796,9 @@ export class BoardRenderer {
         for (const id of ids) {
           const item = this.model.getItem(id);
           if (!item) continue;
-          const node = itemNode(item, (assetId) => this.imageAssets.load(assetId));
+          const node = itemNode(item, (assetId) => this.imageAssets.load(assetId), {
+            preview: true,
+          });
           node.setAttribute("stroke", color);
           node.setAttribute("opacity", "0.45");
           node.setAttribute(
@@ -796,20 +855,45 @@ export class BoardRenderer {
       const current = this.itemNodes.get(id);
       const item = this.model.getItem(id);
       if (!item) {
-        current?.remove();
+        if (current) {
+          clearTypesetMath(current);
+          current.remove();
+        }
         this.itemNodes.delete(id);
         continue;
       }
-      const replacement = itemNode(
-        item,
-        (assetId) => this.imageAssets.load(assetId),
-        this.resolveCreatorName(item.createdBy),
-      );
-      if (current) current.replaceWith(replacement);
+      if (current && reuseItemNode(current, item)) {
+        const z = String(item.z);
+        const movedInPaintOrder = current.dataset.z !== z;
+        current.dataset.z = z;
+        current.setAttribute("transform", matrixAttribute(item.transform));
+        // Re-inserting detaches the node, so only reorder when this item's own z changed;
+        // siblings that moved are reordered by their own pass through this loop.
+        if (movedInPaintOrder) this.insertInPaintOrder(current, item.z);
+        continue;
+      }
+      if (current) clearTypesetMath(current);
+      const replacement = itemNode(item, (assetId) => this.imageAssets.load(assetId), {
+        creatorName: this.resolveCreatorName(item.createdBy),
+        onTextSize: (width, height) => {
+          if (this.model.setRenderedTextSize(id, item.version, width, height)) {
+            this.refreshSelection();
+            this.refreshComments();
+          }
+          const measured = this.model.getItem(id);
+          if (measured?.kind === "text" && measured.version === item.version) {
+            this.onRenderedTextBoundsChange(id, item.version);
+          }
+        },
+      });
+      if (current) {
+        current.replaceWith(replacement);
+      }
       this.itemNodes.set(id, replacement);
       this.insertInPaintOrder(replacement, item.z);
     }
     this.renderVoteCounts();
+    this.renderCommentMarkers();
     this.imageAssets.retain(
       new Set(
         [...this.model.items.values()].flatMap((item) =>
@@ -818,6 +902,20 @@ export class BoardRenderer {
       ),
     );
     this.setSelection([...this.selectedIds].filter((id) => this.model.getItem(id)));
+  }
+
+  private renderCommentMarkers(): void {
+    this.cancelCommentRefresh();
+    const counts = new Map<string, number>();
+    for (const comment of this.comments) {
+      if (comment.state !== "open" || !this.model.getItem(comment.itemId)) continue;
+      counts.set(comment.itemId, (counts.get(comment.itemId) ?? 0) + 1);
+    }
+    const nodes = [...counts.entries()].flatMap(([itemId, count]) => {
+      const bounds = this.model.getBounds(itemId);
+      return bounds ? [commentMarkerNode(itemId, count, bounds, this.viewport.zoom)] : [];
+    });
+    this.commentLayer.replaceChildren(...nodes);
   }
 
   private renderVoteCounts(): void {
@@ -840,6 +938,59 @@ export class BoardRenderer {
     }
     this.drawingArea.insertBefore(node, before);
   }
+}
+
+export function commentMarkerNode(
+  itemId: string,
+  count: number,
+  bounds: Bounds,
+  zoom: number,
+): SVGGElement {
+  const safeZoom = Math.max(0.1, zoom);
+  const radius = 13 / safeZoom;
+  const centerX = bounds.maxX + 8 / safeZoom;
+  const centerY = bounds.minY - 8 / safeZoom;
+  const marker = svgElement("g");
+  marker.classList.add("comment-marker");
+  marker.dataset.commentItemId = itemId;
+  marker.setAttribute("role", "button");
+  marker.setAttribute("tabindex", "0");
+  marker.setAttribute(
+    "aria-label",
+    `${count} open ${count === 1 ? "comment" : "comments"} on this object`,
+  );
+
+  const bubble = svgElement("circle");
+  bubble.setAttribute("cx", String(centerX));
+  bubble.setAttribute("cy", String(centerY));
+  bubble.setAttribute("r", String(radius));
+  bubble.setAttribute("vector-effect", "non-scaling-stroke");
+
+  const label = svgElement("text");
+  label.setAttribute("x", String(centerX));
+  label.setAttribute("y", String(centerY + 4 / safeZoom));
+  label.setAttribute("text-anchor", "middle");
+  label.setAttribute("font-size", String(11 / safeZoom));
+  label.setAttribute("font-weight", "750");
+  label.setAttribute("pointer-events", "none");
+  label.textContent = String(count);
+  marker.append(bubble, label);
+
+  marker.addEventListener("pointerdown", (event) => event.stopPropagation());
+  marker.addEventListener("click", (event) => {
+    event.stopPropagation();
+    marker.dispatchEvent(
+      new CustomEvent("board-comment-open", { bubbles: true, detail: { itemId } }),
+    );
+  });
+  marker.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    marker.dispatchEvent(
+      new CustomEvent("board-comment-open", { bubbles: true, detail: { itemId } }),
+    );
+  });
+  return marker;
 }
 
 export function renderVoteCounts(layer: SVGGElement, items: Iterable<BoardItem>): void {
@@ -897,7 +1048,10 @@ export function voteCountNode(table: TableItem, summary: VoteSummary): SVGGEleme
     count.setAttribute("text-anchor", "middle");
     count.setAttribute("fill", "#20201e");
     count.setAttribute("font-size", "12");
-    count.setAttribute("font-family", "Inter, ui-sans-serif, system-ui, sans-serif");
+    count.setAttribute(
+      "font-family",
+      "Rubik Variable, Rubik, ui-sans-serif, system-ui, sans-serif",
+    );
     count.setAttribute("font-weight", "750");
     count.textContent = label;
     badge.append(background, count);
@@ -1152,35 +1306,85 @@ export class CanvasViewport {
   }
 }
 
+type ItemNodeOptions = {
+  creatorName?: string;
+  onTextSize?: (width: number, height: number) => void;
+  preview?: boolean;
+};
+
+/**
+ * Updates an authoritative node in place when only its placement changed. Video cards hold a
+ * live iframe, so rebuilding them on every board update would reload the player.
+ */
+function reuseItemNode(node: SVGGraphicsElement, item: BoardItem): boolean {
+  if (item.kind !== "text" || item.geometry.embed !== "video") return false;
+  const video = videoEmbedFromText(item.geometry.text);
+  if (!video) return false;
+  return updateVideoEmbedNode(node, item.geometry, item.style, video, false);
+}
+
 function itemNode(
   item: BoardItem,
   loadImageAsset: (assetId: string) => Promise<string>,
-  creatorName?: string,
+  options: ItemNodeOptions = {},
 ): SVGGraphicsElement {
+  const preview = options.preview === true;
+  const creatorName = options.creatorName?.trim() ?? "";
+  const badged =
+    creatorName !== "" &&
+    (item.kind === "sticky" || item.kind === "image" || item.kind === "stamp");
+  // Previews echo a gesture in progress, so only authoritative nodes carry the AI mark; a
+  // badged item shows it inside the creator badge instead of as a standalone pill.
+  const marked = item.assistedBy === "ai" && !preview && !badged;
+  let mark: SVGGElement | undefined;
+  const onTextSize = marked
+    ? (width: number, height: number) => {
+        // Typeset math reports its real width, so keep the mark on the measured corner.
+        if (mark && item.kind === "text") {
+          positionAssistanceMark(mark, textAssistanceMarkAnchor(item.geometry, item.style, width));
+        }
+        options.onTextSize?.(width, height);
+      }
+    : options.onTextSize;
   let node: SVGGraphicsElement;
+  // Leaf elements (path, rect, text…) cannot hold the mark, so those get a wrapping group.
+  let leaf = false;
   switch (item.kind) {
     case "pencil": {
       const path = svgElement("path");
       path.setAttribute("d", outlinePath(visibleOutlinePaths("pencil", item.geometry)));
       setStroke(path, item.style);
       node = path;
+      leaf = true;
       break;
     }
     case "line":
+      node = shapeNode(item.kind, item.geometry, item.style);
+      break;
     case "rectangle":
     case "ellipse":
     case "polygon":
       node = shapeNode(item.kind, item.geometry, item.style);
+      leaf = true;
       break;
     case "protractor":
       node = protractorNode(item.geometry, item.style);
       break;
     case "text": {
-      node = textNode(item.geometry, item.style);
+      const video = item.geometry.embed === "video" ? videoEmbedFromText(item.geometry.text) : null;
+      const math = containsMathMarkup(item.geometry.text);
+      node = video
+        ? videoEmbedNode(item.geometry, item.style, video, preview)
+        : math
+          ? preview
+            ? mathTextPreviewNode(item.geometry, item.style)
+            : mathTextNode(item.geometry, item.style, onTextSize)
+          : textNode(item.geometry, item.style);
+      leaf = !video && (!math || preview);
       break;
     }
     case "sticky":
-      node = stickyNode(item.geometry, item.style);
+      node = stickyNode(item.geometry, item.style, preview);
       break;
     case "stamp":
       node = stampNode(item.geometry, item.style);
@@ -1189,21 +1393,31 @@ function itemNode(
       node = imageNode(item.id, item.geometry, item.style, loadImageAsset);
       break;
     case "table":
-      node = tableNode(item.id, item.geometry, item.style);
+      node = tableNode(item.id, item.geometry, item.style, preview);
       break;
     case "zone":
-      node = zoneNode(item.id, item.geometry, item.style);
+      node = zoneNode(item.id, item.geometry, item.style, preview);
       break;
+  }
+  if (marked && leaf) {
+    const group = svgElement("g");
+    group.append(node);
+    node = group;
   }
   node.dataset.itemId = item.id;
   node.dataset.z = String(item.z);
   node.classList.add("board-item", `board-item-${item.kind}`);
   node.setAttribute("transform", matrixAttribute(item.transform));
-  if (
-    creatorName?.trim() &&
-    (item.kind === "sticky" || item.kind === "image" || item.kind === "stamp")
-  ) {
-    appendCreatorAttribution(node, item, creatorName.trim());
+  if (badged) {
+    appendCreatorAttribution(node, item, creatorName);
+  } else if (marked) {
+    mark = assistanceMark(item);
+    node.append(mark);
+    node.dataset.assistedBy = "ai";
+    node.setAttribute("aria-description", assistanceLabel(creatorName));
+    // A moved video card is laid out in place rather than rebuilt, so it must move its mark.
+    const videoParts = videoEmbedParts.get(node);
+    if (videoParts) videoParts.assistanceMark = mark;
   }
   return node;
 }
@@ -1267,6 +1481,337 @@ export function textNode(geometry: TextGeometry, style: TextStyle): SVGTextEleme
   return text;
 }
 
+function mathTextPreviewNode(geometry: TextGeometry, style: TextStyle): SVGTextElement {
+  const preview = textNode(geometry, style);
+  preview.classList.add("board-math-preview");
+  preview.setAttribute("aria-hidden", "true");
+  return preview;
+}
+
+function mathTextNode(
+  geometry: TextGeometry,
+  style: TextStyle,
+  onSize?: (width: number, height: number) => void,
+): SVGGElement {
+  const lines = geometry.text.split("\n");
+  const estimatedWidth =
+    Math.max(1, ...lines.map((line) => [...line].length)) * style.fontSize * 0.7;
+  const width = Math.max(180, Math.min(MAX_MATH_TEXT_WIDTH, estimatedWidth));
+  const height = Math.max(style.fontSize * 2.2, lines.length * style.fontSize * 1.5);
+  const node = svgElement("g");
+  node.classList.add("board-math-text");
+  node.append(
+    mathForeignObject(
+      geometry.x,
+      geometry.y - style.fontSize,
+      width,
+      height,
+      geometry.text,
+      style,
+      "board-math-content",
+      { fitContent: true, opacity: style.opacity, onSize },
+    ),
+  );
+  return node;
+}
+
+/**
+ * Positioned parts of a rendered video card, kept so a moved or remotely updated item can be
+ * repositioned in place. Rebuilding or re-inserting the node would detach its iframe, which
+ * reloads the player and restarts playback at the beginning for everyone watching.
+ */
+type VideoEmbedParts = {
+  video: VideoEmbed;
+  preview: boolean;
+  foreign: SVGForeignObjectElement;
+  dragFrame?: SVGRectElement;
+  border: SVGRectElement;
+  handleSurface?: SVGRectElement;
+  handleGrip?: SVGTextElement;
+  assistanceMark?: SVGGElement;
+};
+
+const videoEmbedParts = new WeakMap<Element, VideoEmbedParts>();
+
+function layoutVideoEmbedNode(
+  node: SVGGElement,
+  parts: VideoEmbedParts,
+  geometry: TextGeometry,
+  style: TextStyle,
+): void {
+  const x = geometry.x;
+  const y = geometry.y - style.fontSize;
+  node.setAttribute("opacity", String(style.opacity));
+  for (const box of [parts.foreign, parts.dragFrame, parts.border]) {
+    if (!box) continue;
+    box.setAttribute("x", String(x));
+    box.setAttribute("y", String(y));
+  }
+  const handleX = x + VIDEO_EMBED_WIDTH - 34;
+  const handleY = y + 4;
+  parts.handleSurface?.setAttribute("x", String(handleX));
+  parts.handleSurface?.setAttribute("y", String(handleY));
+  parts.handleGrip?.setAttribute("x", String(handleX + 15));
+  parts.handleGrip?.setAttribute("y", String(handleY + 15));
+  if (parts.assistanceMark) {
+    positionAssistanceMark(parts.assistanceMark, videoAssistanceMarkAnchor(geometry, style));
+  }
+}
+
+/**
+ * Repositions an already rendered video card when it still shows the same video, so the live
+ * player keeps playing. Returns false when the node must be rebuilt instead.
+ */
+function updateVideoEmbedNode(
+  node: SVGGraphicsElement,
+  geometry: TextGeometry,
+  style: TextStyle,
+  video: VideoEmbed,
+  preview: boolean,
+): boolean {
+  const parts = videoEmbedParts.get(node);
+  if (
+    parts === undefined ||
+    parts.preview !== preview ||
+    parts.video.provider !== video.provider ||
+    parts.video.embedUrl !== video.embedUrl ||
+    parts.video.sourceUrl !== video.sourceUrl ||
+    parts.video.title !== video.title
+  ) {
+    return false;
+  }
+  layoutVideoEmbedNode(node as SVGGElement, parts, geometry, style);
+  return true;
+}
+
+function videoEmbedNode(
+  geometry: TextGeometry,
+  style: TextStyle,
+  video: VideoEmbed,
+  preview: boolean,
+): SVGGElement {
+  const node = svgElement("g");
+  node.classList.add("video-embed-item");
+  if (preview) node.classList.add("video-embed-preview-item");
+  node.dataset.videoProvider = video.provider;
+  node.setAttribute("role", "group");
+  node.setAttribute("aria-label", video.title);
+
+  const foreign = svgElement("foreignObject");
+  foreign.setAttribute("width", String(VIDEO_EMBED_WIDTH));
+  foreign.setAttribute("height", String(VIDEO_EMBED_HEIGHT));
+
+  const card = document.createElement("div");
+  card.className = "video-embed-card";
+  if (preview) {
+    const heading = document.createElement("div");
+    heading.className = "video-embed-heading";
+    heading.textContent = video.title;
+    const placeholder = document.createElement("div");
+    placeholder.className = "video-embed-preview";
+    placeholder.setAttribute("aria-hidden", "true");
+    placeholder.textContent = "Video preview";
+    card.append(heading, placeholder);
+  } else {
+    const heading = document.createElement("a");
+    heading.className = "video-embed-heading";
+    heading.dataset.boardLink = "true";
+    heading.href = video.sourceUrl;
+    heading.target = "_blank";
+    heading.rel = "noopener noreferrer";
+    heading.referrerPolicy = "no-referrer";
+    heading.textContent = `${video.title} · open in new tab`;
+    const frame = document.createElement("iframe");
+    frame.className = "video-embed-frame";
+    frame.src = video.embedUrl;
+    frame.title = video.title;
+    frame.loading = "lazy";
+    frame.referrerPolicy = "strict-origin-when-cross-origin";
+    frame.allow =
+      "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share";
+    frame.allowFullscreen = true;
+    card.append(heading, frame);
+  }
+  foreign.append(card);
+
+  const border = svgElement("rect");
+  border.classList.add("video-embed-border");
+  border.setAttribute("width", String(VIDEO_EMBED_WIDTH));
+  border.setAttribute("height", String(VIDEO_EMBED_HEIGHT));
+  border.setAttribute("rx", "12");
+  border.setAttribute("pointer-events", "none");
+  const dragFrame = preview ? undefined : svgElement("rect");
+  if (dragFrame) {
+    dragFrame.classList.add("video-embed-drag-frame");
+    dragFrame.dataset.videoDragFrame = "true";
+    dragFrame.setAttribute("width", String(VIDEO_EMBED_WIDTH));
+    dragFrame.setAttribute("height", String(VIDEO_EMBED_HEIGHT));
+    dragFrame.setAttribute("rx", "12");
+  }
+  node.append(foreign, ...(dragFrame ? [dragFrame] : []), border);
+  const handle = preview ? undefined : videoDragHandleNode();
+  if (handle) node.append(handle.node);
+  const parts: VideoEmbedParts = {
+    video,
+    preview,
+    foreign,
+    ...(dragFrame ? { dragFrame } : {}),
+    border,
+    ...(handle ? { handleSurface: handle.surface, handleGrip: handle.grip } : {}),
+  };
+  videoEmbedParts.set(node, parts);
+  layoutVideoEmbedNode(node, parts, geometry, style);
+  return node;
+}
+
+function videoDragHandleNode(): {
+  node: SVGGElement;
+  surface: SVGRectElement;
+  grip: SVGTextElement;
+} {
+  const handle = svgElement("g");
+  handle.classList.add("video-embed-drag-handle");
+  handle.dataset.videoDragHandle = "true";
+
+  const surface = svgElement("rect");
+  surface.classList.add("video-embed-drag-surface");
+  surface.setAttribute("width", "30");
+  surface.setAttribute("height", "22");
+  surface.setAttribute("rx", "7");
+
+  const grip = svgElement("text");
+  grip.classList.add("video-embed-drag-grip");
+  grip.setAttribute("text-anchor", "middle");
+  grip.setAttribute("pointer-events", "none");
+  grip.textContent = "⠿";
+  handle.append(surface, grip);
+  return { node: handle, surface, grip };
+}
+
+type MathForeignObjectOptions = {
+  defaultWeight?: string;
+  fitContent?: boolean;
+  opacity?: number;
+  onSize?: (width: number, height: number) => void;
+};
+
+function appendLinkifiedHtml(container: HTMLElement, value: string): void {
+  for (const segment of splitMathMarkup(value)) {
+    if (segment.kind === "math") {
+      container.append(segment.text);
+      continue;
+    }
+    for (const token of tokenizeSafeLinks(segment.text)) {
+      if (token.kind === "text") {
+        container.append(token.text);
+        continue;
+      }
+      container.classList.add("has-board-text-link");
+      const anchor = document.createElement("a");
+      anchor.classList.add("board-text-link");
+      anchor.dataset.boardLink = "true";
+      anchor.href = token.href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.referrerPolicy = "no-referrer";
+      anchor.textContent = token.text;
+      container.append(anchor);
+    }
+  }
+}
+
+/**
+ * Slack added to a measured formula box. Layout widths come back as whole pixels, and italic math
+ * overhangs its own advance width, so a box measured exactly cuts the last glyph.
+ */
+const MATH_FIT_PADDING = 3;
+
+/**
+ * How far the content sits below the top of its box, in board units. Both rectangles come back in
+ * screen pixels, so they are converted through the element's own scale rather than by asking the
+ * viewport, which keeps this correct at any zoom.
+ */
+function verticalOffsetWithin(box: SVGForeignObjectElement, content: HTMLElement): number {
+  const contentRect = content.getBoundingClientRect();
+  const scale = contentRect.height > 0 ? contentRect.height / Math.max(1, content.offsetHeight) : 0;
+  if (!(scale > 0)) return 0;
+  return Math.max(0, (contentRect.top - box.getBoundingClientRect().top) / scale);
+}
+
+function mathForeignObject(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  value: string,
+  style: TextStyle | StickyStyle | TableStyle | ZoneStyle,
+  className: string,
+  options: MathForeignObjectOptions = {},
+): SVGForeignObjectElement {
+  const foreign = svgElement("foreignObject");
+  foreign.setAttribute("x", String(x));
+  foreign.setAttribute("y", String(y));
+  foreign.setAttribute("width", String(Math.max(1, width)));
+  foreign.setAttribute("height", String(Math.max(1, height)));
+  const content = document.createElement("div");
+  content.className = className;
+  appendLinkifiedHtml(content, value);
+  if (options.opacity !== undefined) content.style.opacity = String(options.opacity);
+  content.style.color = "color" in style ? style.color : style.textColor;
+  content.style.fontSize = `${style.fontSize}px`;
+  content.style.fontFamily = textFontStack(style.fontFamily ?? "sans");
+  content.style.fontWeight = resolveTextFontWeight(style.fontWeight, options.defaultWeight);
+  content.style.fontStyle = style.fontStyle ?? "normal";
+  content.style.textDecoration = style.textDecoration ?? "none";
+  if (options.fitContent) {
+    content.style.width = "max-content";
+    content.style.maxWidth = `${MAX_MATH_TEXT_WIDTH}px`;
+    content.style.minHeight = "0";
+  }
+  foreign.append(content);
+  const fitToTypesetMath = (): void => {
+    if (!options.fitContent || !foreign.isConnected) return;
+    // Measure at full width. The box was sized from an estimate of the source text, and a formula
+    // typesets wider than its source, so measuring inside the old box would report the width the
+    // foreignObject had already clipped it to and keep that clip forever.
+    foreign.setAttribute("width", String(MAX_MATH_TEXT_WIDTH));
+    const measured = Math.max(1, content.scrollWidth) + MATH_FIT_PADDING;
+    const renderedWidth = Math.ceil(Math.min(MAX_MATH_TEXT_WIDTH, measured));
+    // scrollHeight is the content's own height and says nothing about where the content sits. A
+    // margin on the typeset maths shifts it down inside the box, and a box sized from that height
+    // alone ends below the glyphs, which is what sliced them. Measure the offset too.
+    const renderedHeight = Math.ceil(
+      Math.max(1, content.scrollHeight) + verticalOffsetWithin(foreign, content),
+    );
+    foreign.setAttribute("width", String(renderedWidth));
+    foreign.setAttribute("height", String(renderedHeight));
+    options.onSize?.(renderedWidth, renderedHeight);
+  };
+
+  typesetMath(content, {
+    onReady: () => {
+      fitToTypesetMath();
+      // MathJax sizes its output in ex units, which resolve against the font actually in use, so
+      // a box measured before the maths font is ready comes out short and clips the last glyph.
+      // Measuring again once the fonts have settled is what makes the fit final.
+      const remeasure = (): void => {
+        requestAnimationFrame(() => fitToTypesetMath());
+      };
+      if (typeof document !== "undefined" && document.fonts?.ready) {
+        void document.fonts.ready.then(remeasure, remeasure);
+      } else {
+        remeasure();
+      }
+    },
+    // Falling back to plain text would flatten the safe-link anchors, so rebuild them.
+    restore: (target) => {
+      target.replaceChildren();
+      appendLinkifiedHtml(target, value);
+    },
+  });
+  return foreign;
+}
+
 export function creatorInitials(displayName: string): string {
   const words = displayName.trim().split(/\s+/u).filter(Boolean);
   if (words.length === 0) return "?";
@@ -1276,17 +1821,30 @@ export function creatorInitials(displayName: string): string {
   return `${first}${last}`.toLocaleUpperCase();
 }
 
+const BADGE_FONT_FAMILY = "Rubik Variable, Rubik, ui-sans-serif, system-ui, sans-serif";
+const ASSISTANCE_MARK_FILL = "#2d2240";
+const ASSISTANCE_MARK_WIDTH = 14;
+const ASSISTANCE_MARK_HEIGHT = 10;
+
+function assistanceLabel(displayName: string): string {
+  return displayName
+    ? `Created by ${displayName} with AI assistance`
+    : "Created with AI assistance";
+}
+
 function appendCreatorAttribution(
   node: SVGGraphicsElement,
   item: AttributedItem,
   displayName: string,
 ): void {
-  const label = `Created by ${displayName}`;
+  const assisted = item.assistedBy === "ai";
+  const label = assisted ? assistanceLabel(displayName) : `Created by ${displayName}`;
   const title = svgElement("title");
   title.textContent = label;
   node.prepend(title);
   node.setAttribute("aria-description", label);
   node.dataset.creatorInitials = creatorInitials(displayName);
+  if (assisted) node.dataset.assistedBy = "ai";
   node.classList.add("has-creator-badge");
   node.append(creatorBadge(item, displayName));
 }
@@ -1329,14 +1887,182 @@ export function creatorBadge(item: AttributedItem, displayName: string): SVGGEle
   text.setAttribute("text-anchor", "middle");
   text.setAttribute("fill", "#ffffff");
   text.setAttribute("font-size", String(Math.max(7, radius * 0.92)));
-  text.setAttribute("font-family", "Inter, ui-sans-serif, system-ui, sans-serif");
+  text.setAttribute("font-family", BADGE_FONT_FAMILY);
   text.setAttribute("font-weight", "800");
   text.textContent = creatorInitials(displayName);
   badge.append(background, text);
+
+  if (item.assistedBy === "ai") {
+    // The responsible participant keeps their initials; a smaller "AI" disc overlaps the
+    // top-left so a reader can tell tool-written content from typed content at a glance.
+    badge.classList.add("creator-badge-ai");
+    const markRadius = Math.max(5, radius * 0.6);
+    const markX = x - radius * 0.9;
+    const markY = y - radius * 0.9;
+    const markBackground = svgElement("circle");
+    markBackground.setAttribute("cx", String(markX));
+    markBackground.setAttribute("cy", String(markY));
+    markBackground.setAttribute("r", String(markRadius));
+    markBackground.setAttribute("fill", ASSISTANCE_MARK_FILL);
+    markBackground.setAttribute("stroke", "#ffffff");
+    markBackground.setAttribute("stroke-width", "1.5");
+    markBackground.setAttribute("vector-effect", "non-scaling-stroke");
+    const markText = svgElement("text");
+    markText.setAttribute("x", String(markX));
+    markText.setAttribute("y", String(markY + markRadius * 0.34));
+    markText.setAttribute("text-anchor", "middle");
+    markText.setAttribute("fill", "#ffffff");
+    markText.setAttribute("font-size", String(Math.max(6, radius * 0.6)));
+    markText.setAttribute("font-family", BADGE_FONT_FAMILY);
+    markText.setAttribute("font-weight", "800");
+    markText.textContent = "AI";
+    badge.append(markBackground, markText);
+  }
   return badge;
 }
 
-export function zoneNode(itemId: string, geometry: ZoneGeometry, style: ZoneStyle): SVGGElement {
+/** Top-right corner, in the node's local coordinates, that the assistance mark hangs from. */
+function assistanceMarkAnchor(item: BoardItem): Point {
+  const width = ASSISTANCE_MARK_WIDTH;
+  const height = ASSISTANCE_MARK_HEIGHT;
+  switch (item.kind) {
+    case "pencil":
+      return outlineAssistanceMarkAnchor(
+        visibleOutlinePaths("pencil", item.geometry),
+        item.geometry.points,
+      );
+    case "line":
+      return outlineAssistanceMarkAnchor(visibleOutlinePaths("line", item.geometry), [
+        [item.geometry.x1, item.geometry.y1],
+        [item.geometry.x2, item.geometry.y2],
+      ]);
+    case "rectangle":
+    case "ellipse":
+    case "polygon":
+    case "image":
+      return [item.geometry.x + item.geometry.width - width - 4, item.geometry.y + 4];
+    case "protractor":
+      return [item.geometry.radius - width, -item.geometry.radius];
+    case "text":
+      if (item.geometry.embed === "video" && videoEmbedFromText(item.geometry.text)) {
+        return videoAssistanceMarkAnchor(item.geometry, item.style);
+      }
+      return textAssistanceMarkAnchor(
+        item.geometry,
+        item.style,
+        estimatedTextWidth(item.geometry, item.style),
+      );
+    case "sticky":
+      // Sticky content lives in a nested <svg>, so its local origin is the card's corner.
+      return [item.geometry.width - width - 4, 4];
+    case "stamp":
+      return [
+        item.geometry.x + item.geometry.size / 2 - width,
+        item.geometry.y - item.geometry.size / 2,
+      ];
+    case "table":
+      return [
+        item.geometry.x +
+          item.geometry.columnWidths.reduce((total, column) => total + column, 0) -
+          width -
+          3,
+        item.geometry.y + 3,
+      ];
+    case "zone": {
+      const band = Math.min(item.geometry.height, zoneTitleBandHeight(item.style.fontSize));
+      // The lock badge owns the title bar's right end on locked sections.
+      const inset = item.geometry.locked === true ? 32 : ZONE_TITLE_PADDING;
+      return [
+        item.geometry.x + item.geometry.width - inset - width,
+        item.geometry.y + Math.max(2, (band - height) / 2),
+      ];
+    }
+  }
+}
+
+function outlineAssistanceMarkAnchor(
+  paths: readonly (readonly Point[])[],
+  fallback: readonly Point[],
+): Point {
+  const visible = paths.flat();
+  const points = visible.length > 0 ? visible : fallback;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  for (const [x, y] of points) {
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+  }
+  if (!Number.isFinite(maxX) || !Number.isFinite(minY)) return [0, -ASSISTANCE_MARK_HEIGHT];
+  // Strokes have no interior to sit in, so the mark hangs just outside their top-right point.
+  return [maxX + 2, minY - ASSISTANCE_MARK_HEIGHT - 2];
+}
+
+function estimatedTextWidth(geometry: TextGeometry, style: TextStyle): number {
+  const lines = textLayoutEstimateSource(geometry.text, style.fontSize).split("\n");
+  return Math.max(1, ...lines.map((line) => [...line].length)) * style.fontSize * 0.61;
+}
+
+function textAssistanceMarkAnchor(geometry: TextGeometry, style: TextStyle, width: number): Point {
+  // Above the first line's right end, so the mark never covers glyphs.
+  return [
+    geometry.x + width - ASSISTANCE_MARK_WIDTH,
+    geometry.y - style.fontSize - ASSISTANCE_MARK_HEIGHT - 2,
+  ];
+}
+
+function videoAssistanceMarkAnchor(geometry: TextGeometry, style: TextStyle): Point {
+  // Left of the drag handle, which owns the card's top-right corner.
+  return [
+    geometry.x + VIDEO_EMBED_WIDTH - 34 - 4 - ASSISTANCE_MARK_WIDTH,
+    geometry.y - style.fontSize + 4,
+  ];
+}
+
+function positionAssistanceMark(mark: SVGGElement, anchor: Point): void {
+  mark.setAttribute("transform", `translate(${anchor[0]} ${anchor[1]})`);
+}
+
+/**
+ * The standalone "AI" pill for kinds that carry no creator badge. Decorative only: the
+ * accessible sentence lives in the item's aria-description.
+ */
+export function assistanceMark(item: BoardItem): SVGGElement {
+  const mark = svgElement("g");
+  mark.classList.add("assistance-mark");
+  mark.setAttribute("aria-hidden", "true");
+  mark.setAttribute("pointer-events", "none");
+  positionAssistanceMark(mark, assistanceMarkAnchor(item));
+
+  const background = svgElement("rect");
+  background.setAttribute("x", "0");
+  background.setAttribute("y", "0");
+  background.setAttribute("width", String(ASSISTANCE_MARK_WIDTH));
+  background.setAttribute("height", String(ASSISTANCE_MARK_HEIGHT));
+  background.setAttribute("rx", "3");
+  background.setAttribute("fill", ASSISTANCE_MARK_FILL);
+  background.setAttribute("stroke", "#ffffff");
+  background.setAttribute("stroke-width", "1");
+  background.setAttribute("vector-effect", "non-scaling-stroke");
+
+  const text = svgElement("text");
+  text.setAttribute("x", String(ASSISTANCE_MARK_WIDTH / 2));
+  text.setAttribute("y", String(ASSISTANCE_MARK_HEIGHT * 0.78));
+  text.setAttribute("text-anchor", "middle");
+  text.setAttribute("fill", "#ffffff");
+  text.setAttribute("font-size", "7");
+  text.setAttribute("font-family", BADGE_FONT_FAMILY);
+  text.setAttribute("font-weight", "800");
+  text.textContent = "AI";
+  mark.append(background, text);
+  return mark;
+}
+
+export function zoneNode(
+  itemId: string,
+  geometry: ZoneGeometry,
+  style: ZoneStyle,
+  preview = false,
+): SVGGElement {
   const node = svgElement("g");
   node.classList.add("zone-item");
   node.dataset.zoneTitle = geometry.title;
@@ -1386,20 +2112,37 @@ export function zoneNode(itemId: string, geometry: ZoneGeometry, style: ZoneStyl
   border.setAttribute("stroke-width", "1.5");
   border.setAttribute("vector-effect", "non-scaling-stroke");
 
-  const title = svgElement("text");
+  const normalizedTitle = geometry.title.replace(/\r\n?|\n/gu, " ");
+  const mathTitle = containsMathMarkup(normalizedTitle);
+  const typesetMathTitle = mathTitle && !preview;
+  const title = typesetMathTitle
+    ? mathForeignObject(
+        geometry.x + ZONE_TITLE_PADDING,
+        geometry.y + ZONE_TITLE_PADDING,
+        geometry.width - ZONE_TITLE_PADDING * 2,
+        titleBandHeight - ZONE_TITLE_PADDING,
+        normalizedTitle,
+        style,
+        "zone-math-content",
+        { defaultWeight: "700" },
+      )
+    : svgElement("text");
   title.classList.add("zone-title");
-  title.setAttribute("x", String(geometry.x + ZONE_TITLE_PADDING));
-  title.setAttribute("y", String(geometry.y + ZONE_TITLE_PADDING + style.fontSize));
-  title.setAttribute("fill", style.textColor);
-  title.setAttribute("font-size", String(style.fontSize));
-  applyTypography(title, style, "700");
-  title.setAttribute("clip-path", `url(#${titleClipId})`);
-  title.setAttribute("xml:space", "preserve");
-  appendLinkifiedLine(
-    title,
-    geometry.title.replace(/\r\n?|\n/gu, " "),
-    geometry.x + ZONE_TITLE_PADDING,
-  );
+  if (!typesetMathTitle) {
+    const plainTitle = title as SVGTextElement;
+    if (mathTitle) {
+      plainTitle.classList.add("zone-math-preview");
+      plainTitle.setAttribute("aria-hidden", "true");
+    }
+    plainTitle.setAttribute("x", String(geometry.x + ZONE_TITLE_PADDING));
+    plainTitle.setAttribute("y", String(geometry.y + ZONE_TITLE_PADDING + style.fontSize));
+    plainTitle.setAttribute("fill", style.textColor);
+    plainTitle.setAttribute("font-size", String(style.fontSize));
+    applyTypography(plainTitle, style, "700");
+    plainTitle.setAttribute("clip-path", `url(#${titleClipId})`);
+    plainTitle.setAttribute("xml:space", "preserve");
+    appendLinkifiedLine(plainTitle, normalizedTitle, geometry.x + ZONE_TITLE_PADDING);
+  }
 
   const lockBadge = svgElement("g");
   lockBadge.classList.add("zone-lock-badge");
@@ -1450,7 +2193,12 @@ export function zoneNode(itemId: string, geometry: ZoneGeometry, style: ZoneStyl
   return node;
 }
 
-export function tableNode(itemId: string, geometry: TableGeometry, style: TableStyle): SVGGElement {
+export function tableNode(
+  itemId: string,
+  geometry: TableGeometry,
+  style: TableStyle,
+  preview = false,
+): SVGGElement {
   const node = svgElement("g");
   const rowCount = geometry.rowHeights.length;
   const columnCount = geometry.columnWidths.length;
@@ -1517,9 +2265,27 @@ export function tableNode(itemId: string, geometry: TableGeometry, style: TableS
       cell.append(background);
 
       const lines = wrapTableCellText(value, columnWidth, rowHeight, style.fontSize);
-      if (lines.length > 0) {
+      const mathValue = value.length > 0 && containsMathMarkup(value);
+      if (mathValue && !preview) {
+        const math = mathForeignObject(
+          x + TABLE_CELL_PADDING,
+          y + TABLE_CELL_PADDING,
+          columnWidth - TABLE_CELL_PADDING * 2,
+          rowHeight - TABLE_CELL_PADDING * 2,
+          value,
+          style,
+          "table-math-content",
+          { defaultWeight: isHeader ? "700" : "500" },
+        );
+        math.setAttribute("clip-path", `url(#${clipId})`);
+        cell.append(math);
+      } else if (lines.length > 0) {
         const text = svgElement("text");
         text.classList.add("table-cell-text");
+        if (mathValue) {
+          text.classList.add("table-math-preview");
+          text.setAttribute("aria-hidden", "true");
+        }
         text.setAttribute("x", String(x + TABLE_CELL_PADDING));
         text.setAttribute("y", String(y + TABLE_CELL_PADDING + style.fontSize));
         text.setAttribute("fill", style.textColor);
@@ -1698,7 +2464,7 @@ function imageNode(
   return node;
 }
 
-function stickyNode(geometry: StickyGeometry, style: StickyStyle): SVGSVGElement {
+function stickyNode(geometry: StickyGeometry, style: StickyStyle, preview = false): SVGSVGElement {
   const node = svgElement("svg");
   node.setAttribute("x", String(geometry.x));
   node.setAttribute("y", String(geometry.y));
@@ -1716,26 +2482,45 @@ function stickyNode(geometry: StickyGeometry, style: StickyStyle): SVGSVGElement
   background.setAttribute("rx", String(STICKY_CORNER_RADIUS));
   background.setAttribute("fill", style.fill);
 
-  const text = svgElement("text");
+  const mathText = containsMathMarkup(geometry.text);
+  const typesetMathText = mathText && !preview;
+  const text = typesetMathText
+    ? mathForeignObject(
+        STICKY_PADDING,
+        STICKY_PADDING,
+        geometry.width - STICKY_PADDING * 2,
+        geometry.height - STICKY_PADDING * 2,
+        geometry.text,
+        style,
+        "sticky-text sticky-math-content",
+      )
+    : svgElement("text");
   text.classList.add("sticky-text");
-  text.setAttribute("x", String(STICKY_PADDING));
-  text.setAttribute("y", String(STICKY_PADDING + style.fontSize));
-  text.setAttribute("fill", style.textColor);
-  text.setAttribute("font-size", String(style.fontSize));
-  applyTypography(text, style);
-  text.setAttribute("xml:space", "preserve");
-  for (const [index, line] of wrapStickyText(
-    geometry.text,
-    geometry.width,
-    geometry.height,
-    style.fontSize,
-  ).entries()) {
-    appendLinkifiedLine(
-      text,
-      line,
-      STICKY_PADDING,
-      index > 0 ? `${STICKY_LINE_HEIGHT}em` : undefined,
-    );
+  if (!typesetMathText) {
+    const plainText = text as SVGTextElement;
+    if (mathText) {
+      plainText.classList.add("sticky-math-preview");
+      plainText.setAttribute("aria-hidden", "true");
+    }
+    plainText.setAttribute("x", String(STICKY_PADDING));
+    plainText.setAttribute("y", String(STICKY_PADDING + style.fontSize));
+    plainText.setAttribute("fill", style.textColor);
+    plainText.setAttribute("font-size", String(style.fontSize));
+    applyTypography(plainText, style);
+    plainText.setAttribute("xml:space", "preserve");
+    for (const [index, line] of wrapStickyText(
+      geometry.text,
+      geometry.width,
+      geometry.height,
+      style.fontSize,
+    ).entries()) {
+      appendLinkifiedLine(
+        plainText,
+        line,
+        STICKY_PADDING,
+        index > 0 ? `${STICKY_LINE_HEIGHT}em` : undefined,
+      );
+    }
   }
   node.setAttribute("opacity", String(style.opacity));
   node.append(background, text);

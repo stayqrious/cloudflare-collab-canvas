@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { createBoard, waitForBoard } from "./helpers";
+import { chooseMoreTool, createBoard, waitForBoard } from "./helpers";
 
 async function dragHandle(
   page: Page,
@@ -53,7 +53,7 @@ test("tables and zones resize overall, with table row and column controls", asyn
   page.on("pageerror", (error) => consoleErrors.push(error.message));
 
   await createBoard(page, "Structured resize lab");
-  await page.getByTestId("tool-table").click();
+  await chooseMoreTool(page, "tool-table");
   const picker = page.getByRole("dialog", { name: "Choose a table size" });
   await picker.getByRole("button", { name: "Choose placement" }).click();
 

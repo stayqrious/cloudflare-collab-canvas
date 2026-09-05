@@ -29,7 +29,7 @@ export default defineConfig({
     : [
         {
           command:
-            "npx wrangler dev --env development --local --env-file .dev.vars.example --ip 127.0.0.1 --port 8787 --local-protocol https",
+            "npm run config:setup -- --env development && npx wrangler dev --config .generated/wrangler.development.jsonc --local --ip 127.0.0.1 --port 8787 --local-protocol https",
           cwd: repositoryRoot,
           url: `${localBaseUrl}/healthz`,
           ignoreHTTPSErrors: true,
@@ -46,15 +46,24 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"], extraHTTPHeaders: localProjectHeaders(1) },
+      use: {
+        ...devices["Desktop Chrome"],
+        extraHTTPHeaders: localProjectHeaders(1),
+      },
     },
     {
       name: "firefox",
-      use: { ...devices["Desktop Firefox"], extraHTTPHeaders: localProjectHeaders(2) },
+      use: {
+        ...devices["Desktop Firefox"],
+        extraHTTPHeaders: localProjectHeaders(2),
+      },
     },
     {
       name: "webkit",
-      use: { ...devices["Desktop Safari"], extraHTTPHeaders: localProjectHeaders(3) },
+      use: {
+        ...devices["Desktop Safari"],
+        extraHTTPHeaders: localProjectHeaders(3),
+      },
     },
     {
       name: "mobile-chromium",
@@ -62,7 +71,10 @@ export default defineConfig({
     },
     {
       name: "ipad-webkit",
-      use: { ...devices["iPad Pro 11"], extraHTTPHeaders: localProjectHeaders(5) },
+      use: {
+        ...devices["iPad Pro 11"],
+        extraHTTPHeaders: localProjectHeaders(5),
+      },
     },
   ],
 });

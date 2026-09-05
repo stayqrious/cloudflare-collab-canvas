@@ -1,6 +1,7 @@
 import {
   type BrowserContextOptions,
   expect,
+  type Frame,
   type Locator,
   type Page,
   type TestInfo,
@@ -69,6 +70,39 @@ export async function openInvite(page: Page, inviteUrl: string): Promise<void> {
   await waitForBoard(page);
 }
 
+type BoardSurface = Page | Frame;
+
+export async function openMoreTools(surface: BoardSurface): Promise<void> {
+  const menu = surface.getByTestId("tools-menu");
+  if (!(await menu.isVisible())) {
+    await surface.getByTestId("tool-more").click();
+  }
+  await expect(menu).toBeVisible();
+}
+
+export async function chooseMoreTool(surface: BoardSurface, testId: string): Promise<void> {
+  await openMoreTools(surface);
+  await surface.getByTestId(testId).click();
+}
+
+export async function openSettingsDrawer(surface: BoardSurface): Promise<Locator> {
+  const drawer = surface.getByTestId("settings-drawer");
+  if (!(await drawer.isVisible())) {
+    await surface.getByTestId("settings-button").click();
+  }
+  await expect(drawer).toBeVisible();
+  return drawer;
+}
+
+export async function expandToolPermissions(surface: BoardSurface): Promise<void> {
+  const drawer = await openSettingsDrawer(surface);
+  const details = drawer.locator("details.settings-collapsible");
+  if (!(await details.evaluate((node) => (node as HTMLDetailsElement).open))) {
+    await details.locator("summary").click();
+  }
+  await expect(details).toHaveAttribute("open", "");
+}
+
 export async function canvasPoint(
   page: Page,
   horizontal: number,
@@ -121,7 +155,10 @@ export async function drawShape(
   const before = await items.count();
   const shapeVariant =
     toolName === "Ellipse" ? "circle" : toolName.toLocaleLowerCase().replaceAll(" ", "-");
-  if (
+  if (shapeVariant === "straight-line") {
+    await page.getByTestId("tool-rectangle").click();
+    await page.getByTestId("tool-line").click();
+  } else if (
     ["square", "rectangle", "triangle", "rhombus", "pentagon", "hexagon", "circle"].includes(
       shapeVariant,
     )

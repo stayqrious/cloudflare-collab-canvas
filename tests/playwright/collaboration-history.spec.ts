@@ -8,6 +8,7 @@ import {
   isolatedContextOptions,
   moveItem,
   openInvite,
+  openSettingsDrawer,
   waitForBoard,
 } from "./helpers";
 
@@ -24,26 +25,29 @@ test("a collaborator edit produces an undo conflict without changing authoritati
   const collaborator = await collaboratorContext.newPage();
   try {
     await openInvite(collaborator, inviteUrl);
-    const start = await canvasPoint(page, 0.34, 0.36);
-    const ownerItem = await drawShape(page, "Rectangle", start, {
+    // Editors may only move their own work, so the collaborator draws the item and
+    // the owner (who may move anything) changes it before the collaborator undoes.
+    const start = await canvasPoint(collaborator, 0.34, 0.36);
+    const collaboratorItem = await drawShape(collaborator, "Rectangle", start, {
       x: start.x + 110,
       y: start.y + 70,
     });
-    const itemId = await ownerItem.getAttribute("data-item-id");
+    const itemId = await collaboratorItem.getAttribute("data-item-id");
     expect(itemId).toBeTruthy();
-    const collaboratorItem = collaborator.locator(`#drawing-area [data-item-id="${itemId}"]`);
-    await expect(collaboratorItem).toHaveCount(1);
-    const movedTransform = await moveItem(collaborator, collaboratorItem, 48, 26);
-    await expect(ownerItem).toHaveAttribute("transform", movedTransform);
+    const ownerItem = page.locator(`#drawing-area [data-item-id="${itemId}"]`);
+    await expect(ownerItem).toHaveCount(1);
+    const movedTransform = await moveItem(page, ownerItem, 48, 26);
+    await expect(collaboratorItem).toHaveAttribute("transform", movedTransform);
 
-    const undo = page.getByTestId("undo-button");
+    await openSettingsDrawer(collaborator);
+    const undo = collaborator.getByTestId("undo-button");
     await expect(undo).toBeEnabled();
     await undo.click();
-    await expect(page.getByTestId("toast-region")).toContainText(
+    await expect(collaborator.getByTestId("toast-region")).toContainText(
       "Undo stopped because a collaborator changed that item.",
     );
-    await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
-    await expect(page.getByTestId("save-status")).toContainText("Saved · 2");
+    await expect(collaborator.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+    await expect(collaborator.getByTestId("save-status")).toContainText("Saved");
     await expect(ownerItem).toHaveAttribute("transform", movedTransform);
     await expect(collaboratorItem).toHaveAttribute("transform", movedTransform);
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(1);
@@ -64,6 +68,8 @@ test("two tabs share history state and a new action invalidates redo everywhere"
   try {
     await second.goto(boardUrl);
     await waitForBoard(second);
+    await openSettingsDrawer(page);
+    await openSettingsDrawer(second);
     await expect(page.getByTestId("undo-button")).toBeDisabled();
     await expect(second.getByTestId("undo-button")).toBeDisabled();
 
@@ -81,8 +87,8 @@ test("two tabs share history state and a new action invalidates redo everywhere"
     await expect(second.locator("#drawing-area [data-item-id]")).toHaveCount(0);
     await expect(page.getByTestId("redo-button")).toBeEnabled();
     await expect(second.getByTestId("redo-button")).toBeEnabled();
-    await expect(page.getByTestId("save-status")).toContainText("Saved · 2");
-    await expect(second.getByTestId("save-status")).toContainText("Saved · 2");
+    await expect(page.getByTestId("save-status")).toContainText("Saved");
+    await expect(second.getByTestId("save-status")).toContainText("Saved");
 
     const ellipseStart = await canvasPoint(page, 0.55, 0.42);
     await drawShape(page, "Ellipse", ellipseStart, {
@@ -96,6 +102,50 @@ test("two tabs share history state and a new action invalidates redo everywhere"
     await expect(second.getByTestId("undo-button")).toBeEnabled();
   } finally {
     await second.close();
+  }
+});
+
+test("an owner switches a connected participant role from the Participants drawer", async ({
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Live role switching runs in Chromium.");
+
+  await createBoard(page, "Participant roles");
+  await expect(page.getByTestId("participants-button")).toHaveAccessibleName("1 person here");
+  const inviteUrl = await createInvite(page);
+  const collaboratorContext = await browser.newContext(isolatedContextOptions(testInfo, 25));
+  const collaborator = await collaboratorContext.newPage();
+  try {
+    await openInvite(collaborator, inviteUrl);
+    await closeAccessDrawer(page);
+    await expect(page.getByTestId("participants-button")).toContainText("2");
+    await expect(page.getByTestId("participants-button")).toHaveAccessibleName("2 people here");
+
+    await page.getByTestId("participants-button").click();
+    const ownerDrawer = page.getByTestId("participant-drawer");
+    await expect(ownerDrawer).toBeVisible();
+    const roleSelect = ownerDrawer.getByRole("combobox", { name: /^Role for /u });
+    await expect(roleSelect).toHaveCount(1);
+    await expect(roleSelect).toHaveValue("editor");
+
+    await roleSelect.selectOption("viewer");
+    await expect(roleSelect).toHaveValue("viewer");
+    await expect(collaborator.getByTestId("save-status")).toContainText("Read only");
+    await expect(collaborator.getByRole("button", { name: /^Pencil/u })).toBeDisabled();
+
+    await collaborator.getByTestId("participants-button").click();
+    const collaboratorDrawer = collaborator.getByTestId("participant-drawer");
+    await expect(collaboratorDrawer).toBeVisible();
+    await expect(collaboratorDrawer.getByRole("combobox", { name: /^Role for /u })).toHaveCount(0);
+    await expect(collaboratorDrawer).toContainText(/viewer · you/iu);
+
+    await roleSelect.selectOption("editor");
+    await expect(roleSelect).toHaveValue("editor");
+    await expect(collaborator.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+    await expect(collaborator.getByRole("button", { name: /^Pencil/u })).toBeEnabled();
+  } finally {
+    await collaboratorContext.close();
   }
 });
 

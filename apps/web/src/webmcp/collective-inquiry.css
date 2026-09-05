@@ -1,0 +1,559 @@
+.webmcp-dialog {
+  width: min(590px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #d8cdf0;
+  border-radius: 20px;
+  background: #fdfcff;
+  box-shadow: 0 28px 80px rgb(45 28 79 / 25%);
+}
+
+.webmcp-dialog > form {
+  display: grid;
+  gap: 12px;
+  padding: 26px;
+}
+
+.webmcp-dialog h2 {
+  margin: 0;
+  color: #2d2240;
+  font:
+    650 25px / 1.15 "Rubik Variable",
+    serif;
+}
+
+.webmcp-dialog > form > p {
+  margin: 0;
+  color: #665c73;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.webmcp-dialog.webmcp-visual-review-dialog {
+  width: min(1040px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+}
+
+.webmcp-visual-review-dialog::backdrop {
+  background: #f7f4fb;
+  backdrop-filter: none;
+}
+
+.webmcp-visual-review-dialog > form {
+  max-height: calc(100vh - 32px);
+  grid-template-rows: auto minmax(260px, 1fr) auto auto;
+  overflow: auto;
+}
+
+.webmcp-visual-review-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.webmcp-visual-review-heading > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.webmcp-visual-review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.webmcp-dialog .webmcp-visual-review-meta span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #f0ebf9;
+  color: #5f477f;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.webmcp-visual-surface {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #ddd6e8;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgb(104 64 168 / 4%);
+}
+
+.webmcp-visual-surface > img {
+  width: 100%;
+  height: 100%;
+  max-height: min(64vh, 680px);
+  display: block;
+  object-fit: contain;
+}
+
+.webmcp-privacy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f0ebf9;
+  color: #5f477f;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.webmcp-primary-button {
+  background: #6840a8;
+  border-color: #6840a8;
+}
+
+@media (max-width: 900px) {
+  .webmcp-visual-review-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .webmcp-visual-review-meta {
+    justify-content: flex-start;
+  }
+}
+
+/* Board-side AI assist: only present while a WebMCP problem-step watch is live. */
+.ai-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #2d2240;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+/* The four-point glitter mark: the conventional "ask the AI" icon. It sits calm until the pointer
+   lands, then the core tilts and the small sparks twinkle, so the hover reads as an invitation. */
+.ai-sparkle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* On the dark selection bar the mark rides on currentColor; light surfaces get the assistant's purple. */
+.tool-rail button[data-ai-share] .ai-sparkle,
+.ai-share-menu .ai-sparkle {
+  color: #6840a8;
+}
+
+.ai-sparkle svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  overflow: visible;
+}
+
+.ai-sparkle-core,
+.ai-sparkle-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    transform 200ms ease,
+    opacity 200ms ease;
+}
+
+.ai-sparkle-spark {
+  opacity: 0.5;
+}
+
+button:is(:hover, :focus-visible) .ai-sparkle-core {
+  transform: rotate(18deg) scale(1.08);
+}
+
+button:is(:hover, :focus-visible) .ai-sparkle-spark {
+  opacity: 1;
+  animation: ai-sparkle-twinkle 1000ms ease-in-out infinite;
+}
+
+button:is(:hover, :focus-visible) .ai-sparkle-spark-late {
+  animation-delay: 300ms;
+}
+
+.ai-sparkle-menu svg {
+  width: 19px;
+  height: 19px;
+}
+
+@keyframes ai-sparkle-twinkle {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-sparkle-core,
+  .ai-sparkle-spark {
+    transition: none;
+  }
+
+  button:is(:hover, :focus-visible) .ai-sparkle-core {
+    transform: none;
+  }
+
+  button:is(:hover, :focus-visible) .ai-sparkle-spark {
+    opacity: 1;
+    animation: none;
+  }
+}
+
+.selection-ai-wrap {
+  position: relative;
+}
+
+.selection-actions button[data-selection-ai] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.selection-actions button[data-selection-ai] .ai-sparkle {
+  color: #c9a7ff;
+  filter: drop-shadow(0 0 5px rgb(174 118 255 / 48%));
+}
+
+.ai-assist-menu {
+  width: 244px;
+}
+
+.ai-assist-note {
+  display: grid;
+  gap: 3px;
+  padding: 6px 9px 2px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ai-assist-note input {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.ai-assist-menu-note {
+  margin: 0;
+  padding: 4px 9px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.assistance-tag {
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #2d2240;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.mcp-status-wrap {
+  display: flex;
+}
+
+.topbar .mcp-status-wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  translate: -50% -50%;
+}
+
+/* Compact site-tool indicator: white at rest, green while watching, blue during a call. */
+.webmcp-status {
+  appearance: none;
+  min-width: 58px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px 0 7px;
+  border: 1px solid #d8d5cd;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow:
+    0 0 0 3px rgb(255 255 255 / 88%),
+    0 2px 9px rgb(38 37 34 / 12%);
+  color: #4f4c47;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.webmcp-status-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  line-height: 1;
+  text-align: left;
+}
+
+.webmcp-status-time {
+  overflow: hidden;
+  max-width: 48px;
+  opacity: 0.76;
+  font-size: 8px;
+  font-weight: 540;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.webmcp-status:hover {
+  border-color: #b9b5ab;
+  background: #fbfaf8;
+}
+
+.webmcp-status:focus-visible {
+  outline: 2px solid #3e63dd;
+  outline-offset: 2px;
+}
+
+.webmcp-status-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.webmcp-status-icon path:first-child {
+  fill: currentcolor;
+}
+
+.webmcp-status-icon path:last-child {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+}
+
+.webmcp-status[data-state="watch"] {
+  border-color: #6dce8c;
+  background: #effcf3;
+  box-shadow:
+    0 0 0 3px rgb(71 185 107 / 13%),
+    0 0 16px rgb(50 168 90 / 34%);
+  color: #18794e;
+}
+
+.webmcp-status[data-state="active"] {
+  border-color: #7aa2f7;
+  background: #eef4ff;
+  box-shadow:
+    0 0 0 3px rgb(62 99 221 / 14%),
+    0 0 17px rgb(62 99 221 / 40%);
+  color: #2b50c7;
+  animation: mcp-active-pulse 1.25s ease-in-out infinite;
+}
+
+@keyframes mcp-active-pulse {
+  50% {
+    box-shadow:
+      0 0 0 4px rgb(62 99 221 / 18%),
+      0 0 22px rgb(62 99 221 / 52%);
+  }
+}
+
+.mcp-activity-menu {
+  top: 43px;
+  right: 0;
+  width: min(360px, calc(100vw - 16px));
+  max-height: min(460px, calc(100dvh - 72px));
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.mcp-activity-menu[hidden] {
+  display: none;
+}
+
+.mcp-activity-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcp-activity-heading > span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.mcp-activity-heading strong {
+  font-size: 12px;
+}
+
+.mcp-activity-heading small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 520;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-activity-live,
+.mcp-call-marker {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #aaa69d;
+}
+
+.mcp-activity-menu[data-state="watch"] .mcp-activity-live {
+  background: #32a85a;
+  box-shadow: 0 0 0 4px rgb(50 168 90 / 13%);
+}
+
+.mcp-activity-menu[data-state="active"] .mcp-activity-live {
+  background: #3e63dd;
+  box-shadow: 0 0 0 4px rgb(62 99 221 / 13%);
+}
+
+.mcp-activity-empty {
+  margin: 0;
+  padding: 22px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.mcp-activity-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 6px 0 0;
+  list-style: none;
+}
+
+.mcp-activity-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border-radius: 10px;
+}
+
+.mcp-activity-row:hover {
+  background: #f6f4ef;
+}
+
+.mcp-activity-row[data-state="active"] .mcp-call-marker {
+  background: #3e63dd;
+  box-shadow: 0 0 0 3px rgb(62 99 221 / 12%);
+}
+
+.mcp-activity-row[data-state="succeeded"] .mcp-call-marker {
+  background: #32a85a;
+}
+
+.mcp-activity-row[data-state="failed"] .mcp-call-marker {
+  background: #d0443e;
+}
+
+.mcp-call-details {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.mcp-call-details strong {
+  overflow: hidden;
+  font:
+    10px / 1.25 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-call-details small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.tool-rail button[data-ai-share] .ai-sparkle svg {
+  width: 22px;
+  height: 22px;
+}
+
+.ai-share-heading {
+  margin: 0 0 6px;
+  padding: 2px 3px 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.shape-menu-grid.ai-share-grid {
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+}
+
+.ai-share-menu .ai-assist-note {
+  padding-inline: 3px;
+}
+
+@media (max-width: 650px) {
+  .mcp-activity-menu {
+    position: fixed;
+    top: 58px;
+    right: 8px;
+    width: min(360px, calc(100vw - 16px));
+    max-height: calc(100dvh - 66px);
+  }
+}
