@@ -123,22 +123,19 @@ export function deploymentConfigurationFromEnvironment(
 
   const deploymentName = optionalValue(values.DEPLOYMENT_NAME);
   const configuredHostname = optionalValue(values.APP_HOSTNAME);
-  const legacyMappings = [
-    "R2_BUCKET_NAME",
-    "R2_ASSET_BUCKET_NAME",
-    "CLOUDFLARE_WORKER_NAME",
-  ].filter((name) => optionalValue(values[name]) !== undefined);
   const requiredDetails = [
     ...(deploymentName ? [] : ["DEPLOYMENT_NAME"]),
     ...(configuredHostname ? [] : ["APP_HOSTNAME"]),
-    ...legacyMappings,
   ];
-  if (!deploymentName || !configuredHostname || legacyMappings.length > 0) {
+  if (!deploymentName || !configuredHostname) {
     throw new DeploymentConfigurationError(requiredDetails);
   }
 
   const hostname = normalizeHostname(configuredHostname);
-  const resourceNames = derivedResourceNames(deploymentName, environment);
+  const resourceNames = overriddenResourceNames(
+    derivedResourceNames(deploymentName, environment),
+    values,
+  );
   const jurisdiction = optionalValue(values.R2_BUCKET_JURISDICTION) ?? "default";
   const turnstileEnabled = booleanValue(values.TURNSTILE_ENABLED, environment === "production");
   const boardCreationEnabled = booleanValue(values.BOARD_CREATION_ENABLED, true);
@@ -186,6 +183,8 @@ export function writeGeneratedWranglerConfig(configuration: DeploymentConfigurat
 function wranglerConfiguration(configuration: DeploymentConfiguration): Record<string, unknown> {
   const local = configuration.environment === "development";
   const workersDev = local || configuration.hostname.endsWith(".workers.dev");
+  const jurisdiction =
+    configuration.jurisdiction === "default" ? {} : { jurisdiction: configuration.jurisdiction };
   return {
     $schema: "../node_modules/wrangler/config-schema.json",
     name: configuration.workerName,
@@ -193,7 +192,13 @@ function wranglerConfiguration(configuration: DeploymentConfiguration): Record<s
     compatibility_date: "2026-08-04",
     compatibility_flags: ["nodejs_compat"],
     workers_dev: workersDev,
-    ...(local || workersDev ? { routes: [] } : {}),
+    // Variables set on the Worker itself (Cloudflare dashboard, Workers Builds)
+    // are preserved: without this Wrangler deletes every var before applying the
+    // ones below.
+    keep_vars: true,
+    ...(local || workersDev
+      ? { routes: [] }
+      : { routes: [{ pattern: configuration.hostname, custom_domain: true }] }),
     assets: {
       directory: "../apps/web/dist",
       binding: "ASSETS",
@@ -210,15 +215,20 @@ function wranglerConfiguration(configuration: DeploymentConfiguration): Record<s
       BoardRoom: { type: "durable-object", storage: "sqlite" },
       OrganisationRoom: { type: "durable-object", storage: "sqlite" },
     },
+    // The jurisdiction must ride along with the binding: Wrangler resolves a
+    // bucket in the default jurisdiction when the field is absent, which cannot
+    // reach the buckets bootstrap provisions under `eu` or `fedramp`.
     r2_buckets: [
-      { binding: "BOARD_SNAPSHOTS", bucket_name: configuration.bucketName },
-      { binding: "BOARD_ASSETS", bucket_name: configuration.assetBucketName },
+      { binding: "BOARD_SNAPSHOTS", bucket_name: configuration.bucketName, ...jurisdiction },
+      { binding: "BOARD_ASSETS", bucket_name: configuration.assetBucketName, ...jurisdiction },
     ],
     vars: {
       APP_HOSTNAME: configuration.hostname,
       BOARD_CREATION_ENABLED: String(configuration.boardCreationEnabled),
-      ALLOWED_ORIGINS: configuration.allowedOrigins,
-      WEBHOOK_ALLOWED_ORIGINS: configuration.webhookAllowedOrigins,
+      ...(configuration.allowedOrigins ? { ALLOWED_ORIGINS: configuration.allowedOrigins } : {}),
+      ...(configuration.webhookAllowedOrigins
+        ? { WEBHOOK_ALLOWED_ORIGINS: configuration.webhookAllowedOrigins }
+        : {}),
       TURNSTILE_ENABLED: String(configuration.turnstileEnabled),
       ENVIRONMENT: configuration.environment,
       ...(configuration.turnstileSiteKey
@@ -275,6 +285,38 @@ function normalizeHostname(value: string): string {
     throw new DeploymentConfigurationError();
   }
   return url.hostname;
+}
+
+/**
+ * Applies explicit resource-name overrides over the derived defaults. An
+ * installation that predates name derivation keeps its existing Worker and
+ * buckets - and therefore its Durable Objects and stored objects - by naming
+ * them here instead of being renamed into a fresh, empty namespace.
+ */
+export function overriddenResourceNames(
+  derived: Pick<DeploymentConfiguration, "workerName" | "bucketName" | "assetBucketName">,
+  values: NodeJS.ProcessEnv,
+): Pick<DeploymentConfiguration, "workerName" | "bucketName" | "assetBucketName"> {
+  const workerName = optionalValue(values.CLOUDFLARE_WORKER_NAME) ?? derived.workerName;
+  const bucketName = optionalValue(values.R2_BUCKET_NAME) ?? derived.bucketName;
+  const assetBucketName = optionalValue(values.R2_ASSET_BUCKET_NAME) ?? derived.assetBucketName;
+  if (
+    !validDeploymentName(workerName) ||
+    !validBucketName(bucketName) ||
+    !validBucketName(assetBucketName) ||
+    bucketName === assetBucketName
+  ) {
+    throw new DeploymentConfigurationError([
+      "CLOUDFLARE_WORKER_NAME",
+      "R2_BUCKET_NAME",
+      "R2_ASSET_BUCKET_NAME",
+    ]);
+  }
+  return { workerName, bucketName, assetBucketName };
+}
+
+export function validBucketName(value: string): boolean {
+  return /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(value);
 }
 
 export function derivedResourceNames(

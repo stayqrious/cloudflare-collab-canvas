@@ -18,8 +18,13 @@ if (!readme.includes("## Cloudflare setup")) errors.push("README lacks a Cloudfl
 for (const requiredIgnore of [".env", ".env.*", "!.env.sample", ".dev.vars", ".generated/"]) {
   if (!gitignoreLines.includes(requiredIgnore)) errors.push(`${requiredIgnore} is not ignored`);
 }
-if (existsSync("wrangler.jsonc")) {
-  errors.push("wrangler.jsonc must be generated during setup, not committed");
+// The committed Wrangler configuration is what Cloudflare Workers Builds deploys
+// from its connected branch. It must keep Worker-level variables, which is the
+// only thing standing between a deployment and every dashboard-set var.
+if (!existsSync("wrangler.jsonc")) {
+  errors.push("wrangler.jsonc must stay committed for the connected deployment");
+} else if (!readFileSync("wrangler.jsonc", "utf8").includes('"keep_vars": true')) {
+  errors.push("wrangler.jsonc must set keep_vars so dashboard variables survive a deploy");
 }
 if (existsSync("config/environments.json")) {
   errors.push("config/environments.json must not contain committed deployment mappings");
@@ -39,13 +44,15 @@ for (const name of ["DEPLOYMENT_NAME", "APP_HOSTNAME"]) {
     errors.push(`${name} must use a non-deployable placeholder in .env.sample`);
   }
 }
-for (const removedMapping of [
-  "R2_BUCKET_NAME=",
-  "R2_ASSET_BUCKET_NAME=",
-  "CLOUDFLARE_WORKER_NAME=",
-]) {
-  if (sample.includes(removedMapping)) {
-    errors.push(`.env.sample still asks for derived mapping ${removedMapping.slice(0, -1)}`);
+// Explicit resource names are optional overrides for an installation that
+// predates name derivation. They must be documented, and blank by default so a
+// new installation takes the derived names.
+for (const override of ["R2_BUCKET_NAME", "R2_ASSET_BUCKET_NAME", "CLOUDFLARE_WORKER_NAME"]) {
+  if (!keys.includes(override)) {
+    errors.push(`.env.sample does not document the ${override} override`);
+  }
+  if (sampleValues[override]) {
+    errors.push(`${override} must be blank in .env.sample so derived names stay the default`);
   }
 }
 if (!packageManifest.includes('"deployment:init"')) {

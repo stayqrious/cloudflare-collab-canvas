@@ -1,0 +1,169 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cloudflare-collab-canvas",
+  "main": "apps/edge/src/gateway.ts",
+  "compatibility_date": "2026-08-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "keep_vars": true,
+  "routes": [{ "pattern": "spacescale.net", "custom_domain": true }],
+  "assets": {
+    "directory": "apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BOARD_ROOMS",
+        "class_name": "BoardRoom"
+      },
+      {
+        "name": "ORGANISATION_ROOMS",
+        "class_name": "OrganisationRoom"
+      }
+    ]
+  },
+  "exports": {
+    "BoardRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "OrganisationRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "r2_buckets": [
+    {
+      "binding": "BOARD_SNAPSHOTS",
+      "bucket_name": "collab-canvas-snapshots"
+    },
+    {
+      "binding": "BOARD_ASSETS",
+      "bucket_name": "collab-canvas-assets"
+    }
+  ],
+  "vars": {
+    "APP_HOSTNAME": "spacescale.net",
+    "BOARD_CREATION_ENABLED": "true",
+    "TURNSTILE_ENABLED": "true",
+    "ENVIRONMENT": "production"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "version_metadata": {
+    "binding": "WORKER_VERSION"
+  },
+  "env": {
+    "development": {
+      "name": "cloudflare-collab-canvas-development",
+      "workers_dev": true,
+      "routes": [],
+      "assets": {
+        "directory": "apps/web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": true
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "BOARD_ROOMS",
+            "class_name": "BoardRoom"
+          },
+          {
+            "name": "ORGANISATION_ROOMS",
+            "class_name": "OrganisationRoom"
+          }
+        ]
+      },
+      "exports": {
+        "BoardRoom": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        },
+        "OrganisationRoom": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        }
+      },
+      "r2_buckets": [
+        {
+          "binding": "BOARD_SNAPSHOTS",
+          "bucket_name": "cloudflare-collab-canvas-dev-snapshots"
+        },
+        {
+          "binding": "BOARD_ASSETS",
+          "bucket_name": "cloudflare-collab-canvas-dev-assets"
+        }
+      ],
+      "version_metadata": {
+        "binding": "WORKER_VERSION"
+      },
+      "vars": {
+        "APP_HOSTNAME": "localhost",
+        "BOARD_CREATION_ENABLED": "true",
+        "ALLOWED_ORIGINS": "http://localhost,http://localhost:3000,http://localhost:4173,http://localhost:5173,https://127.0.0.1:8787",
+        "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+        "TURNSTILE_ENABLED": "false",
+        "ENVIRONMENT": "development"
+      }
+    },
+    "staging": {
+      "name": "cloudflare-collab-canvas-staging",
+      "workers_dev": false,
+      "routes": [{ "pattern": "staging-cloud-collab.spacescale.net", "custom_domain": true }],
+      "assets": {
+        "directory": "apps/web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": true
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "BOARD_ROOMS",
+            "class_name": "BoardRoom"
+          },
+          {
+            "name": "ORGANISATION_ROOMS",
+            "class_name": "OrganisationRoom"
+          }
+        ]
+      },
+      "exports": {
+        "BoardRoom": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        },
+        "OrganisationRoom": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        }
+      },
+      "r2_buckets": [
+        {
+          "binding": "BOARD_SNAPSHOTS",
+          "bucket_name": "staging-cloud-collab"
+        },
+        {
+          "binding": "BOARD_ASSETS",
+          "bucket_name": "staging-cloud-collab-assets"
+        }
+      ],
+      "version_metadata": {
+        "binding": "WORKER_VERSION"
+      },
+      "vars": {
+        "APP_HOSTNAME": "staging-cloud-collab.spacescale.net",
+        "BOARD_CREATION_ENABLED": "true",
+        "TURNSTILE_ENABLED": "false",
+        "ENVIRONMENT": "staging"
+      }
+    }
+  }
+}

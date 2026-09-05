@@ -20,7 +20,7 @@
     "deployment:secrets:init": "tsx scripts/initialize-deployment-secrets.ts",
     "dev": "npm run build:web && npm run config:setup -- --env development && wrangler dev --config .generated/wrangler.development.jsonc --local",
     "dev:web": "vite --config apps/web/vite.config.ts",
-    "build": "npm run config:setup -- --env production --dry-run && npm run build:web && wrangler deploy --dry-run --config .generated/wrangler.production.jsonc --outdir dist/worker",
+    "build": "npm run build:web && wrangler deploy --dry-run --env= --outdir dist/worker",
     "build:web": "vite build --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p tsconfig.edge.json",
     "lint": "biome check .",

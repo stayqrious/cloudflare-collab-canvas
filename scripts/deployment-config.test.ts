@@ -49,20 +49,47 @@ describe("setup-time deployment configuration", () => {
     expect(configuration.assetBucketName).toBe("example-canvas-production-assets");
   });
 
-  it("rejects legacy manual resource mappings without exposing their values", () => {
-    const legacyBucket = "legacy-private-bucket-value";
+  it("keeps an existing installation on its own Worker and bucket names", () => {
+    const configuration = deploymentConfigurationFromEnvironment("production", {
+      DEPLOYMENT_NAME: "example-canvas",
+      APP_HOSTNAME: "canvas.example.test",
+      TURNSTILE_SITE_KEY: "configured-site-key",
+      CLOUDFLARE_WORKER_NAME: "existing-canvas",
+      R2_BUCKET_NAME: "existing-canvas-snapshots",
+      R2_ASSET_BUCKET_NAME: "existing-canvas-assets",
+    });
+
+    expect(configuration.workerName).toBe("existing-canvas");
+    expect(configuration.bucketName).toBe("existing-canvas-snapshots");
+    expect(configuration.assetBucketName).toBe("existing-canvas-assets");
+  });
+
+  it("rejects an invalid override without exposing its value", () => {
+    const invalidBucket = "Invalid_Private_Bucket_Value";
     try {
       deploymentConfigurationFromEnvironment("staging", {
         DEPLOYMENT_NAME: "example-canvas",
         APP_HOSTNAME: "staging.example.test",
-        R2_BUCKET_NAME: legacyBucket,
+        R2_BUCKET_NAME: invalidBucket,
         TURNSTILE_ENABLED: "false",
       });
-      throw new Error("Expected legacy mapping rejection");
+      throw new Error("Expected override rejection");
     } catch (error) {
       expect(String(error)).toContain("R2_BUCKET_NAME");
-      expect(String(error)).not.toContain(legacyBucket);
+      expect(String(error)).not.toContain(invalidBucket);
     }
+  });
+
+  it("refuses to point both buckets at one name", () => {
+    expect(() =>
+      deploymentConfigurationFromEnvironment("staging", {
+        DEPLOYMENT_NAME: "example-canvas",
+        APP_HOSTNAME: "staging.example.test",
+        R2_BUCKET_NAME: "one-bucket",
+        R2_ASSET_BUCKET_NAME: "one-bucket",
+        TURNSTILE_ENABLED: "false",
+      }),
+    ).toThrow();
   });
 
   it("keeps staging and production resource mappings separate", () => {
@@ -94,11 +121,16 @@ describe("setup-time deployment configuration", () => {
     const path = writeGeneratedWranglerConfig(configuration);
     expect(path).toBe(generatedWranglerConfigPath("staging"));
     const written = readFileSync(path, "utf8");
-    const parsed = JSON.parse(written) as { routes?: unknown; workers_dev?: unknown };
+    const parsed = JSON.parse(written) as {
+      routes?: unknown;
+      workers_dev?: unknown;
+      keep_vars?: unknown;
+    };
     expect(written).toContain("example-canvas-staging-snapshots");
     expect(written).toContain("example-canvas-staging-assets");
-    expect(parsed.routes).toBeUndefined();
+    expect(parsed.routes).toEqual([{ pattern: "staging.example.test", custom_domain: true }]);
     expect(parsed.workers_dev).toBe(false);
+    expect(parsed.keep_vars).toBe(true);
     expect(statSync(path).mode & 0o077).toBe(0);
   });
 });

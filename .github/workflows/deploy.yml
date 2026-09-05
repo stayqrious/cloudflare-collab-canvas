@@ -1,8 +1,16 @@
 name: Deploy
 
+# Cloudflare Workers Builds deploys this repository directly from its connected
+# branch. Two deployers pointed at one Worker race each other, so this workflow
+# is dispatch-only until that connection is removed.
 on:
-  push:
-    branches: [staging, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        type: choice
+        options: [staging, production]
 
 concurrency:
   group: cloudflare-collab-canvas-${{ github.ref }}-deploy
@@ -17,7 +25,7 @@ env:
 
 jobs:
   staging:
-    if: github.ref == 'refs/heads/staging'
+    if: inputs.environment == 'staging'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
@@ -114,7 +122,7 @@ jobs:
           exit 1
 
   production:
-    if: github.ref == 'refs/heads/main'
+    if: inputs.environment == 'production'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:

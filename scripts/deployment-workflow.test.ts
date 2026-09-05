@@ -25,12 +25,13 @@ describe("deployment and CI workflows", () => {
     expect(ci).toContain("npm run test:e2e");
   });
 
-  it("deploys only direct staging and main pushes at their exact SHA", () => {
-    expect(deploy).toContain("branches: [staging, main]");
+  it("deploys only on explicit dispatch, so it cannot race Workers Builds", () => {
+    expect(deploy).not.toContain("branches: [staging, main]");
     expect(deploy).not.toContain("workflow_run");
+    expect(deploy).toContain("workflow_dispatch:");
     expect(occurrences(deploy, "ref: $" + "{{ github.sha }}")).toBe(2);
-    expect(deploy).toContain("if: github.ref == 'refs/heads/staging'");
-    expect(deploy).toContain("if: github.ref == 'refs/heads/main'");
+    expect(deploy).toContain("if: inputs.environment == 'staging'");
+    expect(deploy).toContain("if: inputs.environment == 'production'");
   });
 
   it("provisions private buckets and deploys each uploaded version directly at 100%", () => {

@@ -330,6 +330,9 @@ Cloudflare deployment API.
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DEPLOYMENT_NAME`              | Required lowercase installation name, 3–42 characters using letters, numbers, and internal hyphens. Initialization combines it with the selected environment to derive every Worker and bucket name.                                                 |
 | `R2_BUCKET_JURISDICTION`       | Optional R2 jurisdiction: `default`, `eu`, or `fedramp`.                                                                                                                                                                                             |
+| `CLOUDFLARE_WORKER_NAME`       | Optional explicit Worker name. Blank derives it from `DEPLOYMENT_NAME`; set it to keep an existing Worker and its Durable Objects.                                                                                                                     |
+| `R2_BUCKET_NAME`               | Optional explicit snapshot bucket name. Blank derives it; set it to keep an existing bucket.                                                                                                                                                          |
+| `R2_ASSET_BUCKET_NAME`         | Optional explicit asset bucket name. Blank derives it; set it to keep an existing bucket.                                                                                                                                                             |
 | `TURNSTILE_SITE_KEY`           | Production public site key from **Cloudflare Dashboard → Turnstile → widget → Site Key**. It may be exposed to the browser. Staging deliberately omits it because Turnstile is disabled there for browser automation.                                |
 | `SESSION_SIGNING_KEY_CURRENT`  | Secret HMAC key for device sessions. Generate independently per environment with `openssl rand -base64 32`.                                                                                                                                          |
 | `SESSION_SIGNING_KEY_PREVIOUS` | Optional prior session key, accepted only during rotation. Leave empty on a new installation.                                                                                                                                                        |
@@ -505,10 +508,11 @@ npx wrangler secret put ORGANISATION_SIGNING_KEYS --config .generated/wrangler.s
 
 Before initialization, provide the selected environment's deployment name,
 hostname, switches, and credentials through ignored environment files or CI
-variables. Bucket and Worker names are not inputs; they are always derived from
-`DEPLOYMENT_NAME` and `--env`. Remove legacy `R2_BUCKET_NAME`,
-`R2_ASSET_BUCKET_NAME`, and `CLOUDFLARE_WORKER_NAME` variables; initialization
-rejects them so an existing manual mapping cannot be reused accidentally.
+variables. A new installation leaves the Worker and bucket names to be derived
+from `DEPLOYMENT_NAME` and `--env`. An installation that predates derivation
+sets `CLOUDFLARE_WORKER_NAME`, `R2_BUCKET_NAME`, and `R2_ASSET_BUCKET_NAME` to
+the names it already runs: renaming a Worker moves it to a new Durable Object
+namespace, so every existing board would be left behind in the old one.
 
 During signing-key rotation, install `SESSION_SIGNING_KEY_PREVIOUS`, deploy code
 that accepts both keys, rotate the current key, wait past the session window,

@@ -21,7 +21,7 @@ describe("local development configuration", () => {
     expect(manifest.scripts?.dev).toContain(localOnlyCommand);
     expect(playwright).toContain(localOnlyCommand);
     expect(manifest.scripts?.dev).toContain("config:setup -- --env development");
-    expect(manifest.scripts?.build).toContain("config:setup -- --env production --dry-run");
+    expect(manifest.scripts?.build).toContain("wrangler deploy --dry-run --env=");
     expect(manifest.scripts?.["cf:types"]).toContain("--env-file .dev.vars.example");
     expect(playwright).toContain("config:setup -- --env development");
     expect(playwright).toContain("cwd: repositoryRoot");
