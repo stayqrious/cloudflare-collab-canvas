@@ -3897,7 +3897,7 @@ button:disabled {
   text-underline-offset: 0.12em;
 }
 
-/* The input rectangle is device-local; its SVG coordinates always describe one A5 page. */
+/* The calibration surface covers the whole client viewport, including its top edge. */
 .smart-note-dialog {
   position: fixed;
   inset: 0;
@@ -3908,106 +3908,147 @@ button:disabled {
   margin: 0;
   padding: 0;
   border: 0;
+  overflow: hidden;
   color: var(--ink);
   background: #eceeea;
-}
-.smart-note-dialog[open] {
-  display: flex;
-  flex-direction: column;
-}
-.smart-note-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px;
-  background: white;
-  border-bottom: 1px solid var(--line);
-}
-/* Save-state text must not reflow the calibrated surface while writing. */
-.smart-note-header > div {
-  width: 320px;
-  max-width: 100%;
-}
-.smart-note-header strong {
-  font-size: 18px;
-}
-.smart-note-header span {
-  display: block;
-  font-size: 12px;
-  margin-top: 4px;
-  color: #626a61;
-}
-.smart-note-header nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.smart-note-header button {
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: white;
-  cursor: pointer;
-}
-.smart-note-header button[aria-pressed="true"] {
-  background: #e5efd9;
-  border-color: #708d4b;
-}
-.smart-note-status {
-  margin: 0;
-  padding: 12px 20px;
-  height: 84px;
-  flex-shrink: 0;
-  overflow: auto;
-  background: #f8faf5;
-  font-size: 14px;
+  touch-action: none;
 }
 .smart-note-stage {
-  position: relative;
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   touch-action: none;
 }
 .smart-note-guide {
   position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  padding: 24px;
-  text-align: center;
+  z-index: 2;
+  right: 24px;
+  top: 24px;
+  width: 280px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 190px);
+  overflow: auto;
+  padding: 20px;
+  background: #fffffff2;
+  border: 1px solid #d5decd;
+  border-radius: 16px;
+  box-shadow: 0 8px 28px #26351b0d;
   pointer-events: none;
-  color: #56604e;
 }
-.smart-note-guide strong {
-  font-size: 24px;
+.smart-note-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #637057;
 }
-.smart-note-guide p {
-  max-width: 560px;
-  line-height: 1.6;
+.smart-note-guide h2 {
+  margin: 8px 0 12px;
+  font-size: 22px;
+}
+.smart-note-status {
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 64px;
+  margin: 0;
+}
+.smart-note-illustration {
+  display: block;
+  width: 180px;
+  max-height: 31vh;
+  margin: 12px auto;
+}
+.smart-note-illustration circle {
+  fill: #dfe7d8;
+  stroke: #879a78;
+  stroke-width: 2;
+}
+.smart-note-illustration text {
+  font-family: inherit;
+}
+.smart-note-illustration [data-done="true"] circle {
+  fill: #26351b;
+}
+.smart-note-illustration [data-current="true"] circle {
+  fill: #6fa53f;
+  stroke: #375822;
+  animation: smart-note-blink 1s ease-in-out infinite;
+}
+@keyframes smart-note-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .smart-note-illustration [data-current="true"] circle {
+    animation: none;
+    stroke-width: 5;
+  }
+}
+.smart-note-help {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #58654e;
+  margin: 0;
 }
 .smart-note-dialog[data-state="active"] .smart-note-guide {
   display: none;
 }
+.smart-note-controls {
+  position: absolute;
+  z-index: 3;
+  right: 20px;
+  bottom: 20px;
+  width: 280px;
+  max-width: calc(100% - 40px);
+  padding: 12px;
+  background: #fffffff5;
+  border: 1px solid #d5decd;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px #26351b16;
+}
+.smart-note-save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+.smart-note-controls nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.smart-note-controls button {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+.smart-note-controls button[aria-pressed="true"] {
+  background: #e5efd9;
+  border-color: #708d4b;
+}
+.smart-note-dialog[data-pen="true"] .smart-note-controls {
+  opacity: 0.12;
+  pointer-events: none;
+}
 .smart-note-marker {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 8px;
+  height: 8px;
   transform: translate(-50%, -50%);
-  border: 2px solid #55773c;
-  background: #d7e9c8;
+  background: #26351b;
   border-radius: 50%;
   pointer-events: none;
 }
 .smart-note-stage .board-canvas {
   inset: auto;
+  transform-origin: 0 0;
   background: white;
   overflow: hidden;
-  outline: 2px solid #81986b;
+  outline: 1px solid #81986b;
   box-shadow: 0 8px 30px #26351b24;
 }
 .smart-note-stage .canvas-background {
