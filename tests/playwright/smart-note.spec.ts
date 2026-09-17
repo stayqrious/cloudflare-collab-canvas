@@ -10,6 +10,16 @@ import {
   waitForBoard,
 } from "./helpers";
 
+async function enableSmartNote(page: Page): Promise<void> {
+  await expect(page.getByRole("button", { name: "Smart Note", exact: true })).toBeHidden();
+  await page.getByTestId("settings-button").click();
+  const drawer = page.getByTestId("settings-drawer");
+  await drawer.getByRole("checkbox", { name: "Enable Smart Note", exact: true }).check();
+  await expect(page.getByRole("button", { name: "Smart Note", exact: true })).toBeVisible();
+  await page.getByTestId("settings-button").click();
+  await expect(drawer).toBeHidden();
+}
+
 async function calibrateNote(page: Page, horizontal: number, vertical: number) {
   await page.getByRole("button", { name: "Smart Note", exact: true }).click();
   const stage = await page.getByTestId("smart-note-stage").boundingBox();
@@ -43,6 +53,7 @@ test("Smart Note maps two students' different screens to identical shared stroke
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await createBoard(page, "Smart Note shared A5");
+  await enableSmartNote(page);
   const invitation = await createInvite(page);
   await closeAccessDrawer(page);
   const context = await browser.newContext({
@@ -80,6 +91,14 @@ test("Smart Note maps two students' different screens to identical shared stroke
     await page.setViewportSize({ width: 1100, height: 800 });
     await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
     await expect(page.getByRole("button", { name: "Use saved calibration" })).toBeDisabled();
+    await page.getByRole("button", { name: "Exit Smart Note" }).click();
+    await page.getByTestId("settings-button").click();
+    await page.getByRole("checkbox", { name: "Enable Smart Note", exact: true }).uncheck();
+    await expect(student.locator(".smart-note-dialog")).not.toBeVisible();
+    await expect(student.getByRole("button", { name: "Smart Note", exact: true })).toBeHidden();
+    await page.reload();
+    await waitForBoard(page);
+    await expect(page.getByRole("button", { name: "Smart Note", exact: true })).toBeHidden();
   } finally {
     await context.close();
   }
@@ -95,6 +114,7 @@ test("Smart Note rejects invalid corners, ignores palms and ends strokes at the 
   });
   await page.setViewportSize({ width: 1100, height: 800 });
   await createBoard(page, "Smart Note boundaries");
+  await enableSmartNote(page);
   await expect(page).toHaveTitle(/Smart Note boundaries/);
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   await page.getByRole("button", { name: "Smart Note", exact: true }).click();

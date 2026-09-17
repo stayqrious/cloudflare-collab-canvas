@@ -46,7 +46,7 @@ function request(path: string, method = "GET", body?: unknown): Request {
 function legacyBoardFeatures(): Record<string, boolean> {
   return Object.fromEntries(
     Object.entries(DEFAULT_BOARD_FEATURES).filter(
-      ([key]) => key !== "objectTransforms" && key !== "grouping",
+      ([key]) => key !== "objectTransforms" && key !== "grouping" && key !== "smartNote",
     ),
   );
 }
