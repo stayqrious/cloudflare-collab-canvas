@@ -26,6 +26,7 @@ export class SmartNoteMode {
   private calibration: Calibration | null = null;
   private pendingMouse: PointerEvent | null = null;
   private suppressMouseClick = false;
+  private warnedOutsidePage = false;
   private savedView: SpotlightViewState | null = null;
   private savedTool: ToolName = "pencil";
   private corners: Point[] = [];
@@ -39,6 +40,7 @@ export class SmartNoteMode {
     private readonly tools: ToolController,
     disableForEveryone: () => void,
     private readonly onStateChanged: () => void,
+    private readonly notify: (message: string) => void,
   ) {
     this.workspace = renderer.svg.closest<HTMLElement>(".workspace") as HTMLElement;
     this.paper.className = "smart-note-paper";
@@ -75,15 +77,6 @@ export class SmartNoteMode {
     this.element("[data-note-disable]").addEventListener("click", disableForEveryone);
     this.element("[data-note-calibrate]").addEventListener("click", () => this.startCalibration());
     this.element("[data-note-fullscreen]").addEventListener("click", () => void this.fullscreen());
-    this.dialog.addEventListener("pointerdown", this.onTapDown, true);
-    this.dialog.addEventListener("pointerup", this.onTapUp, true);
-    this.dialog.addEventListener(
-      "pointercancel",
-      (event) => {
-        if (this.pendingTap?.id === event.pointerId) this.pendingTap = null;
-      },
-      true,
-    );
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"])
       window.addEventListener(type, this.onDrawingPointer, true);
     window.addEventListener("click", this.onPenClick, true);
@@ -194,6 +187,7 @@ export class SmartNoteMode {
     this.calibration = null;
     this.pendingMouse = null;
     this.suppressMouseClick = false;
+    this.warnedOutsidePage = false;
     this.paper.hidden = true;
     for (const property of ["left", "top", "width", "height", "transform"])
       this.renderer.svg.style.removeProperty(property);
@@ -216,7 +210,9 @@ export class SmartNoteMode {
     this.stage.replaceChildren();
     this.corners = [];
     this.pendingTap = null;
-    if (!this.dialog.open) this.dialog.showModal();
+    // Keep calibration in the same document/input context as ordinary writing.
+    // A top-layer modal and a transformed SVG must not define different targets.
+    if (!this.dialog.open) this.dialog.show();
     this.dialog.dataset.state = "calibrating";
     this.workspace.dataset.smartNote = this.dialog.dataset.state;
     this.element("[data-note-fullscreen]").hidden = Boolean(document.fullscreenElement);
@@ -248,7 +244,9 @@ export class SmartNoteMode {
       event.stopImmediatePropagation();
       return;
     }
-    if (!this.enabled || !(event instanceof PointerEvent) || event.pointerType !== "pen") return;
+    if (!this.enabled) return;
+    if (!this.dialog.open && (!(event instanceof PointerEvent) || event.pointerType !== "pen"))
+      return;
     if (
       this.dialog.open &&
       event.target instanceof Element &&
@@ -260,7 +258,34 @@ export class SmartNoteMode {
   };
 
   private readonly onDrawingPointer = (event: Event): void => {
-    if (!(event instanceof PointerEvent) || !this.calibration || this.checkEnvironment()) return;
+    if (!(event instanceof PointerEvent) || !this.enabled) return;
+    if (this.dialog.open) {
+      if (event.type === "pointerdown") this.onTapDown(event);
+      else if (event.type === "pointerup") this.onTapUp(event);
+      else if (event.type === "pointercancel" && this.pendingTap?.id === event.pointerId) {
+        this.pendingTap = null;
+        if (document.documentElement.hasPointerCapture(event.pointerId))
+          document.documentElement.releasePointerCapture(event.pointerId);
+      }
+      // No ink, selection, or panning can start behind the calibration guide.
+      if (event.type === "pointermove") event.stopImmediatePropagation();
+      return;
+    }
+    if (!this.calibration || this.checkEnvironment()) return;
+    if (
+      event.type === "pointerdown" &&
+      event.pointerType === "pen" &&
+      event.button === 0 &&
+      !this.warnedOutsidePage
+    ) {
+      const [x, y] = toPage(this.calibration, event.clientX, event.clientY);
+      if (x < 0 || y < 0 || x > A5_PAGE.width || y > A5_PAGE.height) {
+        this.warnedOutsidePage = true;
+        this.notify(
+          "That pen mark is outside the calibrated A5 page and was not saved. Use Recalibrate and tap the four existing ink dots on your paper.",
+        );
+      }
+    }
     const target = event.target;
     if (event.pointerType === "touch") return;
     const control =
@@ -298,7 +323,7 @@ export class SmartNoteMode {
         this.suppressMouseClick = true;
         this.tools.handleFixedPageInput(down);
       }
-      if (control && !this.renderer.svg.hasPointerCapture(event.pointerId)) return;
+      if (control && !document.documentElement.hasPointerCapture(event.pointerId)) return;
     }
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -321,7 +346,7 @@ export class SmartNoteMode {
     event.preventDefault();
     event.stopImmediatePropagation();
     this.pendingTap = { id: event.pointerId, point: [event.clientX, event.clientY] };
-    this.dialog.setPointerCapture(event.pointerId);
+    document.documentElement.setPointerCapture(event.pointerId);
   };
 
   private readonly onTapUp = (event: PointerEvent): void => {
@@ -334,8 +359,8 @@ export class SmartNoteMode {
     this.pendingTap = null;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (this.dialog.hasPointerCapture(event.pointerId))
-      this.dialog.releasePointerCapture(event.pointerId);
+    if (document.documentElement.hasPointerCapture(event.pointerId))
+      document.documentElement.releasePointerCapture(event.pointerId);
     const error = validateCorner(this.corners, tap.point, this.available());
     if (error) {
       this.rejectMark(error);

@@ -274,3 +274,93 @@ test("four skewed screen marks stay pinned without reparenting the regular canva
     expect(dot.y + dot.height / 2).toBeCloseTo(point[1], 0);
   }
 });
+
+test("seven rows at the top of a skewed page are painted, not just present in the DOM", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "CDP pen input requires Chromium");
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.addInitScript(() => {
+    window.addEventListener(
+      "pointerdown",
+      (event) => {
+        document.documentElement.dataset.lastTestPointer = String(event.pointerId);
+      },
+      true,
+    );
+  });
+  await createBoard(page, "Skewed upper handwriting");
+  await enableSmartNote(page);
+  const corners = [
+    [35, 82],
+    [475, 60],
+    [435, 730],
+    [20, 780],
+  ] as const;
+  const { calibrate, toClient } = await import("../../apps/web/src/smart-note/calibration");
+  const mapping = calibrate(corners, { left: 0, top: 0, width: 1100, height: 900 });
+  if (!mapping) throw new Error("Invalid fixture");
+  const pen = await penInput(page);
+  for (const [x, y] of corners) {
+    await pen("mousePressed", x, y);
+    expect(
+      await page.evaluate(() =>
+        document.documentElement.hasPointerCapture(
+          Number(document.documentElement.dataset.lastTestPointer),
+        ),
+      ),
+    ).toBe(true);
+    await pen("mouseReleased", x, y);
+  }
+  await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
+  const samples: { x: number; y: number }[] = [];
+  for (let row = 0; row < 7; row++) {
+    const left = toClient(mapping, [280, 12 + row * 24]);
+    const middle = toClient(mapping, [310, 12 + row * 24]);
+    const right = toClient(mapping, [340, 12 + row * 24]);
+    await pen("mousePressed", ...left);
+    expect(
+      await page.evaluate(() =>
+        document.documentElement.hasPointerCapture(
+          Number(document.documentElement.dataset.lastTestPointer),
+        ),
+      ),
+    ).toBe(true);
+    await pen("mouseMoved", ...middle);
+    await pen("mouseReleased", ...right);
+    samples.push({ x: middle[0], y: middle[1] });
+  }
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(7);
+  const screenshot = await page.screenshot({ path: "/tmp/smart-note-seven-skewed-rows.png" });
+  const painted = await page.evaluate(
+    async ({ png, samples }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${png}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Missing context");
+      ctx.drawImage(image, 0, 0);
+      return samples.map(({ x, y }) => {
+        const pixels = ctx.getImageData(Math.round(x) - 2, Math.round(y) - 2, 5, 5).data;
+        for (let i = 0; i < pixels.length; i += 4)
+          if (
+            (pixels[i] ?? 255) < 100 &&
+            (pixels[i + 1] ?? 255) < 100 &&
+            (pixels[i + 2] ?? 255) < 100
+          )
+            return true;
+        return false;
+      });
+    },
+    { png: screenshot.toString("base64"), samples },
+  );
+  expect(painted).toEqual([true, true, true, true, true, true, true]);
+  await pen("mousePressed", 250, 20);
+  await pen("mouseReleased", 250, 20);
+  await expect(page.getByTestId("toast-region")).toContainText("outside the calibrated A5 page");
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(7);
+});
