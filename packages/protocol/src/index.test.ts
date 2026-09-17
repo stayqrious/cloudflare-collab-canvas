@@ -795,7 +795,11 @@ describe("durable operation validation", () => {
   });
 
   it("normalizes an exact, complete board feature map with safe image defaults", () => {
-    expect(BOARD_FEATURE_KEYS).toHaveLength(25);
+    expect(BOARD_FEATURE_KEYS).toHaveLength(26);
+    expect(DEFAULT_BOARD_FEATURES.smartNote).toBe(false);
+    expect(normalizeBoardFeatures({ ...DEFAULT_BOARD_FEATURES, smartNote: true }).smartNote).toBe(
+      true,
+    );
     expect(DEFAULT_BOARD_FEATURES.images).toBe(false);
     expect(normalizeBoardFeatures(DEFAULT_BOARD_FEATURES)).toEqual(DEFAULT_BOARD_FEATURES);
     expect(() => normalizeBoardFeatures({ ...DEFAULT_BOARD_FEATURES, protractor: "yes" })).toThrow(

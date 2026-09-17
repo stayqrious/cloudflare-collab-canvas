@@ -16,6 +16,7 @@ export function normalizePersistedBoardFeatures(value: unknown): BoardFeatures {
   }
   return normalizeBoardFeatures({
     ...value,
+    ...(Object.hasOwn(value, "smartNote") ? {} : { smartNote: DEFAULT_BOARD_FEATURES.smartNote }),
     ...(Object.hasOwn(value, "objectTransforms")
       ? {}
       : { objectTransforms: DEFAULT_BOARD_FEATURES.objectTransforms }),

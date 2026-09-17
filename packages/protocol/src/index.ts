@@ -143,6 +143,7 @@ export const BOARD_FEATURE_KEYS = [
   "organisationTemplates",
   "voting",
   "spotlight",
+  "smartNote",
 ] as const;
 
 export type BoardFeatureKey = (typeof BOARD_FEATURE_KEYS)[number];
@@ -174,6 +175,7 @@ export const DEFAULT_BOARD_FEATURES: BoardFeatures = {
   organisationTemplates: true,
   voting: true,
   spotlight: true,
+  smartNote: false,
 };
 
 export const ITEM_KINDS = [

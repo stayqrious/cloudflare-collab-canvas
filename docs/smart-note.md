@@ -1,6 +1,13 @@
 # Smart Note prototype
 
-Use **Smart Note** in the board header. Calibrate the top-left and bottom-right
+The owner enables this opt-in feature in **Space settings → Features → Enable
+Smart Note**. It defaults to off for new and existing boards. The persisted
+`features.smartNote` boolean is also accepted in the board settings API and
+organisation launch configuration. Changes apply live to all participants;
+disabling it closes any active Smart Note session without removing saved work
+or local calibration.
+
+Once enabled, use **Smart Note** in the board header. Calibrate the top-left and bottom-right
 corners by tapping them on the physical paper with the tablet pen. Mouse clicks
 are also accepted for testing or manually marking known mapped screen positions.
 Use Pen, Eraser and Undo in the mode’s toolbar; Exit Smart Note (or Escape) returns
@@ -51,7 +58,9 @@ proportions before calibration. Uniform letterboxing would break exact mapping
 to both marked edges; a separate undistorted preview is a possible later feature.
 
 The existing operation, preview, persistence, permissions and collaboration
-paths are reused. There is no protocol or storage-schema migration. SVG clipping
+paths are reused. The feature map adds `smartNote`; persisted older maps default it to false,
+without a database-schema migration. Existing open clients should refresh after
+the deployment to load the updated feature map. SVG clipping
 limits visible content to the page. Out-of-bounds pointer samples end a stroke
 at its last in-bounds sample, so outside movement and re-entry do not draw a
 connecting line or smear points along the edge. Lift and touch down to resume.
