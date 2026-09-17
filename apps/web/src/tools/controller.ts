@@ -1129,6 +1129,7 @@ export class ToolController {
     svg.addEventListener("pointerup", this.onPointerUp);
     svg.addEventListener("pointercancel", this.onPointerCancel);
     svg.addEventListener("lostpointercapture", this.onLostPointerCapture);
+    document.documentElement.addEventListener("lostpointercapture", this.onPageLostPointerCapture);
     svg.addEventListener("wheel", this.onWheel, { passive: false });
     svg.addEventListener("contextmenu", this.onContextMenu);
     window.addEventListener("keydown", this.onKeyDown);
@@ -1324,13 +1325,29 @@ export class ToolController {
     svg.removeEventListener("pointerup", this.onPointerUp);
     svg.removeEventListener("pointercancel", this.onPointerCancel);
     svg.removeEventListener("lostpointercapture", this.onLostPointerCapture);
+    document.documentElement.removeEventListener(
+      "lostpointercapture",
+      this.onPageLostPointerCapture,
+    );
     svg.removeEventListener("wheel", this.onWheel);
     svg.removeEventListener("contextmenu", this.onContextMenu);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
   }
 
-  /** Smart Note owns pen contact across the entire modal, including floating controls. */
+  private get captureTarget(): Element {
+    // Calibration uses the same untransformed root. Never capture handwriting
+    // on the perspective-transformed SVG, whose bounds change with calibration.
+    return this.options.renderer.viewport.fixedPage
+      ? document.documentElement
+      : this.options.renderer.svg;
+  }
+
+  private readonly onPageLostPointerCapture = (event: PointerEvent): void => {
+    if (event.target === document.documentElement) this.onLostPointerCapture(event);
+  };
+
+  /** Smart Note owns input across the measured viewport, including the header. */
   handleFixedPageInput(event: PointerEvent): void {
     if (!this.options.renderer.viewport.fixedPage) return;
     switch (event.type) {
@@ -1369,7 +1386,7 @@ export class ToolController {
     }
     this.options.renderer.svg.focus({ preventScroll: true });
     this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
-    this.options.renderer.svg.setPointerCapture(event.pointerId);
+    this.captureTarget.setPointerCapture(event.pointerId);
 
     if (event.pointerType === "touch" && this.pointers.size === 2) {
       this.cancelGesture();
@@ -1847,13 +1864,13 @@ export class ToolController {
     this.pointers.delete(event.pointerId);
     if (this.pinch) {
       if (this.pinch.pointerIds.includes(event.pointerId)) this.pinch = null;
-      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      safeReleaseCapture(this.captureTarget, event.pointerId);
       event.preventDefault();
       return;
     }
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) {
-      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      safeReleaseCapture(this.captureTarget, event.pointerId);
       return;
     }
     const tapPoint = boardPoint(event, this.options.renderer);
@@ -1921,13 +1938,13 @@ export class ToolController {
       delete gesture.endAnchor;
       this.gesture = null;
       this.pendingLine = gesture;
-      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      safeReleaseCapture(this.captureTarget, event.pointerId);
       this.renderShapeGesture(gesture, true);
       event.preventDefault();
       return;
     }
     this.gesture = null;
-    safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+    safeReleaseCapture(this.captureTarget, event.pointerId);
     const adjustedMovePoint =
       gesture.kind === "move"
         ? tapAdjustedMovePoint(
@@ -1964,7 +1981,7 @@ export class ToolController {
     if (!gesture || gesture.pointerId !== pointerId) return;
     this.gesture = null;
     this.pointers.delete(pointerId);
-    safeReleaseCapture(this.options.renderer.svg, pointerId);
+    safeReleaseCapture(this.captureTarget, pointerId);
     void this.finishGesture(gesture);
   }
 
@@ -1972,7 +1989,7 @@ export class ToolController {
     this.pointers.delete(event.pointerId);
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.pinch = null;
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
-    safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+    safeReleaseCapture(this.captureTarget, event.pointerId);
   };
 
   private readonly onLostPointerCapture = (event: PointerEvent): void => {

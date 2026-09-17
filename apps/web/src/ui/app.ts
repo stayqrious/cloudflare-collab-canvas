@@ -1136,6 +1136,7 @@ export class BoardApp {
         this.closeDrawers();
         this.updatePermissions();
       },
+      (message) => this.notify(message, "warning"),
     );
     query(this.root, "[data-smart-note-open]", HTMLButtonElement).addEventListener("click", () => {
       if (!this.bootstrap.board.features.smartNote || this.phase === "archived") return;

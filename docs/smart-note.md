@@ -32,7 +32,8 @@ from each participant; ordinary board exports do not currently include them.
 
 The calibration surface covers the entire browser client viewport. Instructions
 and tools float over it; they do not reserve any strip at the top or change the
-paper origin. The calibration dialog closes after the fourth mark. The canvas
+paper origin. The calibration guide is a normal document overlay, not a top-layer
+modal. It closes after the fourth mark. The canvas
 stays in its original board container, with the regular header, drawing toolbar,
 colour controls, undo and save status. Other drawing tools and zoom controls are
 visible but disabled; the normal Pencil tool is selected. The header’s
@@ -41,8 +42,10 @@ visible but disabled; the normal Pencil tool is selected. The header’s
 Calibration and writing use the same viewport coordinates. The calibrated SVG
 is fixed to the viewport rather than offset by the board header or its canvas
 container. Its ink layer paints above the header so the top strip is visible too;
-the white paper background stays behind the regular UI. Input is handled at the
-window before SVG hit testing, so the transformed SVG or a toolbar cannot exclude
+the white paper background stays behind the regular UI. Both calibration and
+handwriting are captured on the same untransformed document root. Neither the
+calibration guide nor the perspective-transformed SVG becomes the pointer-capture
+target. Input is handled at the window before SVG hit testing, so the transformed SVG or a toolbar cannot exclude
 part of the calibrated page. Native pen input writes through the regular header
 and controls without requiring a hover event. Mouse-emulating drivers can also
 start handwriting there: a drag becomes ink from the original down position,
@@ -94,7 +97,9 @@ Mouse input can also draw for drivers that expose the tablet as a mouse.
 The SVG is clipped to the page. Out-of-bounds pointer samples end a stroke at its
 last in-bounds sample; outside movement and re-entry do not draw a connecting line
 or smear points along an edge. Lift and touch down to resume. Pan, wheel zoom,
-pinch, and Follow me cannot change the writing area.
+pinch, and Follow me cannot change the writing area. A pen-down outside the page
+shows a warning once per calibration, explaining that the mark was not saved and
+asking the writer to recalibrate using the existing corner dots.
 
 The environment fingerprint includes viewport bounds, window position, screen
 size, device pixel ratio, orientation, and the visual viewport. It is checked
@@ -122,3 +127,7 @@ bounds, undo, immediate invalid-mark feedback, centered instructions, pen-only
 tool selection, regular toolbar access, mouse-emulated handwriting over the header,
 and trusted browser pen input at the top edge, within the header strip and at the
 bottom of the page. Fullscreen is optional and changes require recalibration.
+
+The skewed-page browser regression checks seven rasterized upper-page rows, not
+just DOM bounds, and asserts the same capture target during calibration and ink.
+These browser checks do not substitute for physical tablet validation.
