@@ -1331,8 +1331,8 @@ export class ToolController {
   }
 
   /** Smart Note owns pen contact across the entire modal, including floating controls. */
-  handleFixedPagePen(event: PointerEvent): void {
-    if (!this.options.renderer.viewport.fixedPage || event.pointerType !== "pen") return;
+  handleFixedPageInput(event: PointerEvent): void {
+    if (!this.options.renderer.viewport.fixedPage) return;
     switch (event.type) {
       case "pointerdown":
         this.onPointerDown(event);

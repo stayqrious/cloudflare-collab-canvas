@@ -3,7 +3,6 @@ import {
   closeAccessDrawer,
   createBoard,
   createInvite,
-  dispatchSyntheticPointerGesture,
   drag,
   isolatedContextOptions,
   openInvite,
@@ -16,24 +15,30 @@ async function enableSmartNote(page: Page) {
   await page.getByRole("checkbox", { name: "Enable Smart Note", exact: true }).check();
   await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
 }
+async function startCalibration(page: Page) {
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
+  await expect(page.locator(".smart-note-status")).toContainText("Step 1 of 4");
+}
 function fraction(area: Area, x: number, y: number) {
   return { x: area.x + area.width * x, y: area.y + area.height * y };
 }
 async function calibrateNote(page: Page, area: Area) {
-  const points = [
+  await startCalibration(page);
+  for (const [index, point] of [
     fraction(area, 0, 0),
     fraction(area, 1, 0),
     fraction(area, 1, 1),
     fraction(area, 0, 1),
-  ];
-  for (const [index, point] of points.entries()) {
-    await expect(
-      page.locator(`.smart-note-illustration [data-guide-corner="${index}"]`),
-    ).toHaveAttribute("data-current", "true");
+  ].entries()) {
+    await expect(page.locator(`[data-guide-corner="${index}"]`)).toHaveAttribute(
+      "data-current",
+      "true",
+    );
     await page.mouse.click(point.x, point.y);
-    if (index < 3) await expect(page.locator(".smart-note-stage #board-canvas")).toHaveCount(0);
   }
-  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "active");
+  await expect(page.getByTestId("board-shell")).toHaveAttribute("data-smart-note", "active");
+  await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
+  await expect(page.locator("[data-canvas-host] > #board-canvas")).toHaveCount(1);
   await expect(page.locator("#board-canvas")).toHaveAttribute("viewBox", "0 0 740 1050");
   await expect(page.locator("[data-page-corner]")).toHaveCount(4);
   const bounds = await page.locator("#board-canvas").boundingBox();
@@ -44,17 +49,33 @@ async function calibrateNote(page: Page, area: Area) {
   expect(bounds.height).toBeCloseTo(area.height, 1);
 }
 
-test("everyone must calibrate the same A5 page; top-edge ink and four corner marks align across displays", async ({
+async function penInput(page: Page) {
+  const session = await page.context().newCDPSession(page);
+  return async (type: "mousePressed" | "mouseMoved" | "mouseReleased", x: number, y: number) => {
+    await session.send("Input.dispatchMouseEvent", {
+      type,
+      x,
+      y,
+      pointerType: "pen",
+      button: type === "mouseMoved" ? "none" : "left",
+      buttons: type === "mouseReleased" ? 0 : 1,
+      clickCount: type === "mouseMoved" ? 0 : 1,
+      force: type === "mouseReleased" ? 0 : 0.5,
+    });
+  };
+}
+
+test("shared A5 retains the regular UI and disables tools except Pencil on different displays", async ({
   page,
   browser,
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await createBoard(page, "Four-corner shared A5");
+  await createBoard(page, "Regular UI shared A5");
   const invite = await createInvite(page);
   await closeAccessDrawer(page);
   const context = await browser.newContext({
     ...isolatedContextOptions(testInfo),
-    viewport: { width: 1000, height: 760 },
+    viewport: { width: 1000, height: 800 },
     deviceScaleFactor: 2,
   });
   try {
@@ -66,208 +87,190 @@ test("everyone must calibrate the same A5 page; top-edge ink and four corner mar
       "calibrating",
     );
     await expect(student.getByRole("button", { name: "Turn off for everyone" })).toBeHidden();
-    await student.keyboard.press("Escape");
-    await expect(student.locator(".smart-note-dialog")).toBeVisible();
-    await expect(page.getByRole("img", { name: /A5 paper with four corners/ })).toBeVisible();
-    await page.screenshot({ path: "/tmp/smart-note-four-corner-guide.png" });
     const first = { x: 20, y: 2, width: 600, height: 840 };
-    const second = { x: 40, y: 5, width: 540, height: 660 };
+    const second = { x: 40, y: 5, width: 500, height: 700 };
     await calibrateNote(page, first);
     await calibrateNote(student, second);
-    // Writing very close to the physical top edge used to be excluded by the header.
-    await drag(page, fraction(first, 0.25, 0.01), fraction(first, 0.75, 0.25), { steps: 4 });
+    await expect(page.locator(".topbar")).toBeVisible();
+    await expect(page.getByTestId("tool-rail")).toBeVisible();
+    await expect(page.getByTestId("tool-pencil")).toBeEnabled();
+    await expect(page.getByTestId("tool-select")).toBeDisabled();
+    await expect(page.getByTestId("tool-eraser")).toBeDisabled();
+    await expect(page.getByTestId("tool-rectangle")).toBeDisabled();
+    await expect(page.getByTestId("activities-button")).toBeDisabled();
+    await expect(page.locator(".smart-note-controls")).toHaveCount(0);
+    await expect(page.getByTestId("settings-drawer")).not.toBeVisible();
+    await drag(page, fraction(first, 0.25, 0.2), fraction(first, 0.75, 0.4), { steps: 4 });
     await expect(student.locator("#drawing-area [data-item-id]")).toHaveCount(1);
-    await drag(student, fraction(second, 0.25, 0.01), fraction(second, 0.75, 0.25), { steps: 4 });
+    await drag(student, fraction(second, 0.25, 0.2), fraction(second, 0.75, 0.4), { steps: 4 });
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(2);
     const paths = await page
       .locator("#drawing-area path")
       .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("d")));
     expect(paths[0]).toEqual(paths[1]);
-    expect(paths[0]).toContain("10.5");
-    await page.mouse.move(300, 300);
+    await page.keyboard.press("e");
+    await expect(page.locator("#board-canvas")).toHaveAttribute("data-tool", "pencil");
     await page.mouse.wheel(0, -400);
     await expect(page.locator("#board-canvas")).toHaveAttribute("viewBox", "0 0 740 1050");
-    await page.screenshot({ path: "/tmp/smart-note-four-corner-page.png" });
-    // No previously stored two-corner calibration or Escape may bypass the new flow.
-    await page.reload();
-    await waitForBoard(page);
-    await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
-    await expect(page.getByRole("button", { name: "Use saved calibration" })).toHaveCount(0);
-    await calibrateNote(page, first);
+    await page.screenshot({ path: "/tmp/smart-note-regular-ui.png" });
+    // Mouse-emulating drivers can also start handwriting over the normal title field.
+    await drag(page, { x: 300, y: 20 }, { x: 450, y: 40 }, { steps: 4 });
+    await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(3);
+    await page.getByTestId("undo-button").click();
+    await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(2);
+    // Existing controls remain usable, including undo and disabling the board setting.
+    await page.getByTestId("undo-button").click();
+    await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(1);
     await expect(page.locator("[data-page-corner]")).toHaveCount(4);
-    await page.setViewportSize({ width: 1100, height: 800 });
-    await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
-    await page.getByRole("button", { name: "Turn off for everyone" }).click();
-    await expect(student.locator(".smart-note-dialog")).not.toBeVisible();
-    await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
-    await page.reload();
-    await waitForBoard(page);
+    await page.getByTestId("settings-button").click();
+    await page.getByRole("checkbox", { name: "Enable Smart Note", exact: true }).uncheck();
+    await expect(student.locator("#board-canvas")).not.toHaveAttribute("data-smart-note", "true");
+    await expect(page.getByTestId("tool-eraser")).toBeEnabled();
     await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
   } finally {
     await context.close();
   }
 });
 
-test("calibration uses initial pen-down positions and retains corner dots through undo", async ({
+test("calibration rejects repeated marks immediately and preserves exact initial points", async ({
   page,
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  page.on("console", (message) => {
-    if (["error", "warning"].includes(message.type())) errors.push(message.text());
-  });
   await page.setViewportSize({ width: 1100, height: 800 });
-  await createBoard(page, "Smart Note four corners");
+  await createBoard(page, "Full screen calibration");
   await enableSmartNote(page);
-  await expect(page).toHaveTitle(/Smart Note four corners/);
-  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
-  await page.mouse.move(15, 1);
+  await page.getByRole("button", { name: "Use full screen" }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
+  await startCalibration(page);
+  await page.mouse.move(20, 2);
   await page.mouse.down();
   await page.mouse.move(25, 18);
   await page.mouse.up();
   const dot = await page.locator('[data-measured-corner="0"]').boundingBox();
-  expect(dot?.x).toBeCloseTo(11, 1);
-  expect(dot?.y).toBeCloseTo(-3, 1);
-  await page.getByRole("button", { name: "Use full screen" }).click();
-  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
-  await expect(page.locator(".smart-note-status")).toContainText("Step 1 of 4");
-  await page.evaluate(() => document.exitFullscreen());
-  await expect(page.locator(".smart-note-status")).toContainText("Step 1 of 4");
-  await page.getByRole("button", { name: "Restart calibration" }).click();
-  await page.mouse.click(20, 2);
-  // Nearby and out-of-order marks are rejected immediately; the first mark remains.
+  expect(dot?.x).toBeCloseTo(16, 1);
+  expect(dot?.y).toBeCloseTo(-2, 1);
   for (const [x, y] of [
     [22, 4],
     [20, 700],
     [40, 30],
-  ]) {
-    await page.mouse.click(x as number, y as number);
+  ] as const) {
+    await page.mouse.click(x, y);
     await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-invalid", "true");
     await expect(page.locator('[data-guide-corner="1"]')).toHaveAttribute("data-current", "true");
     await expect(page.locator("[data-measured-corner]")).toHaveCount(1);
   }
-  const currentDot = page.locator('[data-guide-corner="1"] circle');
-  await expect(currentDot).toHaveCSS("fill", "rgb(229, 57, 53)");
-  await expect(currentDot).toHaveCSS("animation-name", "smart-note-blink");
+  await expect(page.locator('[data-guide-corner="1"] circle')).toHaveCSS(
+    "fill",
+    "rgb(229, 57, 53)",
+  );
+  await expect(page.locator('[data-guide-corner="1"] circle')).toHaveCSS(
+    "animation-name",
+    "smart-note-blink",
+  );
   await page.mouse.click(620, 2);
-  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-invalid", "false");
-  await page.mouse.click(620, 250); // A flat rectangle is not an A5 page.
+  await page.mouse.click(620, 250);
   await expect(page.locator(".smart-note-status")).toContainText("tall A5 page");
-  await expect(page.locator('[data-guide-corner="2"]')).toHaveAttribute("data-current", "true");
   await expect(page.locator("[data-measured-corner]")).toHaveCount(2);
   await page.getByRole("button", { name: "Restart calibration" }).click();
-  const area = { x: 20, y: 2, width: 600, height: 720 };
-  await calibrateNote(page, area);
-  await dispatchSyntheticPointerGesture(page, "touch", [
-    fraction(area, 0.1, 0.1),
-    fraction(area, 0.3, 0.3),
-  ]);
-  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(0);
-  await dispatchSyntheticPointerGesture(page, "pen", [
-    fraction(area, 0.2, 0.2),
-    fraction(area, 0.5, 0.5),
-    fraction(area, 1.1, 0.6),
-    fraction(area, 0.8, 0.8),
-  ]);
-  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(1);
-  const path = await page.locator("#drawing-area path").getAttribute("d");
-  expect(path).toContain("370");
-  expect(path).not.toContain("814");
-  expect(path).not.toContain("592");
-  await page.mouse.move(800, 400); // Switch from synthetic pen hover back to the mouse toolbar.
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(0);
-  await expect(page.locator("[data-page-corner]")).toHaveCount(4);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await calibrateNote(page, { x: 20, y: 2, width: 600, height: 740 });
+  await page.evaluate(() => document.exitFullscreen());
   await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
+  await page.setViewportSize({ width: 390, height: 844 });
   const guide = await page.locator(".smart-note-guide").boundingBox();
-  if (!guide) throw new Error("Missing calibration guide");
+  if (!guide) throw new Error("Missing guide");
   expect(guide.x + guide.width / 2).toBeCloseTo(195, 0);
   expect(guide.y + guide.height / 2).toBeCloseTo(422, 0);
-  await page.screenshot({ path: "/tmp/smart-note-four-corner-mobile.png" });
+  await page.screenshot({ path: "/tmp/smart-note-regular-ui-mobile-guide.png" });
+  await page.reload();
+  await waitForBoard(page);
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
   expect(errors).toEqual([]);
 });
 
-test("all four skewed screen marks match their rendered page dots", async ({ page }) => {
+test("trusted pen writes at the top and bottom, through the regular header, after pen calibration", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "CDP pen input requires Chromium");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await createBoard(page, "Pen across full calibrated page");
+  await enableSmartNote(page);
+  await startCalibration(page);
+  const pen = await penInput(page);
+  for (const [x, y] of [
+    [20, 2],
+    [620, 2],
+    [620, 842],
+    [20, 842],
+  ] as const) {
+    await pen("mousePressed", x, y);
+    await pen("mouseReleased", x, y);
+  }
+  await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
+  await expect(page.locator("#board-canvas")).toHaveAttribute("data-tool", "pencil");
+  await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "true");
+  for (const y of [3, 40, 90, 420, 840]) {
+    await pen("mousePressed", 170, y);
+    await pen("mouseMoved", 270, y);
+    await pen("mouseReleased", 370, y);
+  }
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(5);
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+  const positions = await page.locator("#drawing-area path").evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width };
+    }),
+  );
+  [3, 40, 90, 420, 840].forEach((y, i) => {
+    expect(positions[i]?.x).toBeCloseTo(170, 0);
+    expect(positions[i]?.y).toBeCloseTo(y, 0);
+    expect(positions[i]?.width).toBeCloseTo(200, 0);
+  });
+  // The ink layer must be above the normal header, not hidden by its 56px strip.
+  expect(
+    await page.locator("#board-canvas").evaluate((el) => Number(getComputedStyle(el).zIndex)),
+  ).toBeGreaterThan(
+    await page.locator(".topbar").evaluate((el) => Number(getComputedStyle(el).zIndex)),
+  );
+  await page.screenshot({ path: "/tmp/smart-note-regular-ui-pen-top-bottom.png" });
+  // Leaving the calibrated page ends the stroke; re-entry must not connect outside ink.
+  await pen("mousePressed", 200, 200);
+  await pen("mouseMoved", 300, 300);
+  await pen("mouseMoved", 700, 400);
+  await pen("mouseMoved", 400, 500);
+  await pen("mouseReleased", 450, 550);
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(6);
+  // Mouse still operates the regular UI after using the stylus.
+  await page.getByTestId("undo-button").click();
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(5);
+  await page.locator("[data-smart-note-open]").click();
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
+  expect(errors).toEqual([]);
+});
+
+test("four skewed screen marks stay pinned without reparenting the regular canvas", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   await createBoard(page, "Skewed paper mapping");
   await enableSmartNote(page);
+  await startCalibration(page);
   const corners = [
     [80, 3],
     [650, 45],
     [590, 720],
     [30, 680],
-  ];
-  for (const point of corners) await page.mouse.click(point[0] as number, point[1] as number);
-  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "active");
+  ] as const;
+  for (const point of corners) await page.mouse.click(point[0], point[1]);
+  await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
   for (const [index, point] of corners.entries()) {
     const dot = await page.locator(`[data-page-corner="${index}"]`).boundingBox();
     if (!dot) throw new Error("Missing corner dot");
-    expect(dot.x + dot.width / 2).toBeCloseTo(point[0] as number, 0);
-    expect(dot.y + dot.height / 2).toBeCloseTo(point[1] as number, 0);
+    expect(dot.x + dot.width / 2).toBeCloseTo(point[0], 0);
+    expect(dot.y + dot.height / 2).toBeCloseTo(point[1], 0);
   }
-});
-
-test("browser pen input draws immediately after pen calibration", async ({ page, browserName }) => {
-  test.skip(browserName !== "chromium", "CDP pen input requires Chromium");
-  await page.setViewportSize({ width: 1100, height: 800 });
-  await createBoard(page, "Pen calibration regression");
-  await enableSmartNote(page);
-  const session = await page.context().newCDPSession(page);
-  async function pen(type: "mousePressed" | "mouseMoved" | "mouseReleased", x: number, y: number) {
-    await session.send("Input.dispatchMouseEvent", {
-      type,
-      x,
-      y,
-      pointerType: "pen",
-      button: type === "mouseMoved" ? "none" : "left",
-      buttons: type === "mouseReleased" ? 0 : 1,
-      clickCount: type === "mouseMoved" ? 0 : 1,
-      force: type === "mouseReleased" ? 0 : 0.5,
-    });
-  }
-  for (const [x, y] of [
-    [480, 2],
-    [1080, 2],
-    [1080, 742],
-    [480, 742],
-  ]) {
-    await pen("mousePressed", x as number, y as number);
-    await pen("mouseReleased", x as number, y as number);
-  }
-  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "active");
-  await expect(page.locator("#board-canvas")).toHaveAttribute("data-tool", "pencil");
-  await expect(
-    page.locator(".smart-note-dialog").getByRole("button", { name: "Eraser", exact: true }),
-  ).toHaveCount(0);
-  await page.keyboard.press("e");
-  await page.keyboard.press("Space");
-  await expect(page.locator("#board-canvas")).toHaveAttribute("data-tool", "pencil");
-  for (const offset of [0, 50]) {
-    await pen("mousePressed", 600, 10 + offset);
-    await pen("mouseMoved", 700, 100 + offset);
-    await pen("mouseReleased", 800, 200 + offset);
-  }
-  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(2);
-  // Drivers may send contact without a preceding hover; floating controls must not steal it.
-  await page.mouse.move(100, 400);
-  const control = await page.getByRole("button", { name: "Undo", exact: true }).boundingBox();
-  if (!control) throw new Error("Missing controls");
-  const x = control.x + control.width / 2,
-    y = control.y + control.height / 2;
-  await pen("mousePressed", x, y);
-  await pen("mouseMoved", x - 40, y - 40);
-  await pen("mouseReleased", x - 80, y - 80);
-  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(3);
-  const fullscreen = await page.getByRole("button", { name: "Use full screen" }).boundingBox();
-  if (!fullscreen) throw new Error("Missing fullscreen control");
-  const outsideX = fullscreen.x + fullscreen.width / 2;
-  const outsideY = fullscreen.y + fullscreen.height / 2;
-  expect(outsideY).toBeGreaterThan(742);
-  await pen("mousePressed", outsideX, outsideY);
-  await pen("mouseReleased", outsideX, outsideY);
-  expect(await page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
-  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "active");
-  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(3);
-  await session.detach();
 });

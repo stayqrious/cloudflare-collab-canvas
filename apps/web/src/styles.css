@@ -3910,7 +3910,7 @@ button:disabled {
   border: 0;
   overflow: hidden;
   color: var(--ink);
-  background: #eceeea;
+  background: #ffffff40;
   touch-action: none;
 }
 .smart-note-stage {
@@ -3927,7 +3927,7 @@ button:disabled {
   transform: translate(-50%, -50%);
   width: 280px;
   max-width: calc(100% - 48px);
-  max-height: calc(100% - 190px);
+  max-height: calc(100% - 40px);
   overflow: auto;
   padding: 20px;
   background: #fffffff2;
@@ -3997,50 +3997,19 @@ button:disabled {
   color: #58654e;
   margin: 0;
 }
-.smart-note-dialog[data-state="active"] .smart-note-guide {
-  display: none;
-}
-.smart-note-controls {
-  position: absolute;
-  z-index: 3;
-  right: 20px;
-  bottom: 20px;
-  width: 280px;
-  max-width: calc(100% - 40px);
-  padding: 12px;
-  background: #fffffff5;
-  border: 1px solid #d5decd;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px #26351b16;
-}
-.smart-note-save {
+.smart-note-calibration-actions {
+  margin-top: 16px;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  justify-content: space-between;
-  font-size: 11px;
-  margin-bottom: 10px;
+  justify-content: center;
+  gap: 8px;
 }
-.smart-note-controls nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.smart-note-controls button {
-  padding: 7px 9px;
+.smart-note-calibration-actions button {
+  pointer-events: auto;
+  padding: 10px 14px;
   border: 1px solid var(--line);
-  border-radius: 7px;
-  background: white;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 12px;
-}
-.smart-note-controls button[aria-pressed="true"] {
-  background: #e5efd9;
-  border-color: #708d4b;
-}
-.smart-note-dialog[data-pen="true"] .smart-note-controls {
-  opacity: 0.12;
-  pointer-events: none;
 }
 .smart-note-marker {
   position: absolute;
@@ -4051,14 +4020,35 @@ button:disabled {
   border-radius: 50%;
   pointer-events: none;
 }
-.smart-note-stage .board-canvas {
+/* Keep the regular board UI. Paper is behind it; ink can reach the measured
+   top edge above the header, without making header space an input dead zone. */
+.smart-note-paper,
+.board-canvas[data-smart-note="true"] {
+  position: fixed;
   inset: auto;
+  left: 0;
+  top: 0;
+  width: 740px;
+  height: 1050px;
   transform-origin: 0 0;
+  pointer-events: none;
+}
+.smart-note-paper {
   background: white;
-  overflow: hidden;
   outline: 1px solid #81986b;
   box-shadow: 0 8px 30px #26351b24;
 }
-.smart-note-stage .canvas-background {
+.board-canvas[data-smart-note="true"] {
+  z-index: 41;
+  background: transparent;
+  overflow: hidden;
+}
+#board-canvas[data-smart-note="true"] * {
+  pointer-events: none;
+}
+.board-canvas[data-smart-note="true"] .canvas-background {
+  display: none;
+}
+.workspace[data-smart-note] .canvas-hint {
   display: none;
 }
