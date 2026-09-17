@@ -168,6 +168,7 @@ export const BOARD_FEATURE_KEYS = [
   "spotlight",
   "videos",
   "aiTools",
+  "smartNote",
 ] as const;
 
 export type BoardFeatureKey = (typeof BOARD_FEATURE_KEYS)[number];
@@ -202,6 +203,7 @@ export const DEFAULT_BOARD_FEATURES: BoardFeatures = {
   videos: true,
   // Browser AI tools (WebMCP) stay off until an owner or partner launch turns them on.
   aiTools: false,
+  smartNote: false,
 };
 
 export const ITEM_KINDS = [

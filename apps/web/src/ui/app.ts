@@ -276,6 +276,7 @@ const FEATURE_LABELS: Readonly<Record<BoardFeatureKey, { label: string; detail: 
     label: "AI tools",
     detail: "Let browser AI assistants (WebMCP) read and add to this Space",
   },
+  smartNote: { label: "Smart Note", detail: "Calibrate a tablet to a shared A5 page" },
 };
 
 /**
@@ -1636,6 +1637,7 @@ export class BoardApp {
 
     this.smartNote = new SmartNoteMode(this.renderer, this.tools, () => void this.undo());
     query(this.root, "[data-smart-note-open]", HTMLButtonElement).addEventListener("click", () => {
+      if (!this.bootstrap.board.features.smartNote || this.phase === "archived") return;
       this.stopBroadcastingSpotlight();
       this.stopFollowingSpotlight();
       this.smartNote.open();
@@ -1776,7 +1778,7 @@ export class BoardApp {
                 </section>
               </div>
             </div>
-            <button class="topbar-button" type="button" data-smart-note-open>Smart Note</button>
+            <button class="topbar-button" type="button" data-smart-note-open hidden>Smart Note</button>
             <button class="topbar-button people-button" type="button" data-testid="participants-button" aria-label="1 person here" aria-controls="participant-drawer" aria-expanded="false" title="1 person here">
               <span class="avatar-stack" aria-hidden="true"><i></i><i></i></span>
               <span data-participant-count>1</span>
@@ -7393,6 +7395,9 @@ export class BoardApp {
     if (!this.bootstrap.board.features.spotlight && this.followedSpotlight) {
       this.clearFollowingSpotlight();
     }
+    const smartNoteEnabled = this.bootstrap.board.features.smartNote && !archived;
+    query(this.root, "[data-smart-note-open]", HTMLButtonElement).hidden = !smartNoteEnabled;
+    if (!smartNoteEnabled && this.smartNote.isOpen) this.smartNote.close();
     this.spotlightToggle.hidden =
       !roleCanBroadcast || archived || !this.bootstrap.board.features.spotlight;
     this.spotlightToggle.disabled = this.phase !== "ready" || archived;
