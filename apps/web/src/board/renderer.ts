@@ -1231,6 +1231,11 @@ async function staticDisplayBlob(blob: Blob): Promise<Blob> {
   }
 }
 
+export type FixedPageMapping = {
+  toBoard: (clientX: number, clientY: number) => Point;
+  toClient: (point: Point) => Point;
+};
+
 export class CanvasViewport {
   private x = 0;
   private y = 0;
@@ -1238,6 +1243,7 @@ export class CanvasViewport {
   private height = 1;
   private zoomValue = 1;
   private page: { width: number; height: number } | null = null;
+  private pageMapping: FixedPageMapping | null = null;
   private readonly resizeObserver: ResizeObserver;
   private readonly listeners = new Set<(zoom: number) => void>();
   private readonly viewListeners = new Set<(state: SpotlightViewState) => void>();
@@ -1252,8 +1258,9 @@ export class CanvasViewport {
     return this.page;
   }
 
-  setFixedPage(page: { width: number; height: number } | null): void {
+  setFixedPage(page: { width: number; height: number } | null, mapping?: FixedPageMapping): void {
     this.page = page;
+    this.pageMapping = page ? (mapping ?? null) : null;
     this.svg.setAttribute("preserveAspectRatio", page ? "none" : "xMidYMid meet");
     this.resize();
   }
@@ -1309,6 +1316,7 @@ export class CanvasViewport {
   }
 
   clientToBoard(clientX: number, clientY: number): Point {
+    if (this.pageMapping) return this.pageMapping.toBoard(clientX, clientY);
     const rect = this.svg.getBoundingClientRect();
     if (this.page)
       return [
@@ -1322,6 +1330,7 @@ export class CanvasViewport {
   }
 
   boardToClient(point: Point): Point {
+    if (this.pageMapping) return this.pageMapping.toClient(point);
     const rect = this.svg.getBoundingClientRect();
     if (this.page)
       return [
