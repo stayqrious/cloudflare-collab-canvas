@@ -15,9 +15,15 @@ import {
 } from "./calibration";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const pointerPosition = (event: PointerEvent) => ({
+  client: [event.clientX, event.clientY],
+  screen: [event.screenX, event.screenY],
+  pointerType: event.pointerType,
+});
+type PointerPosition = ReturnType<typeof pointerPosition>;
 
 export class SmartNoteMode {
-  private readonly dialog = document.createElement("dialog");
+  private readonly dialog = document.createElement("div");
   private readonly stage: HTMLElement;
   private readonly status: HTMLElement;
   private readonly workspace: HTMLElement;
@@ -30,10 +36,24 @@ export class SmartNoteMode {
   private savedView: SpotlightViewState | null = null;
   private savedTool: ToolName = "pencil";
   private corners: Point[] = [];
-  private pendingTap: { id: number; point: Point } | null = null;
+  private pendingTap: {
+    id: number;
+    point: Point;
+    down: PointerPosition;
+    lastMove?: PointerPosition;
+  } | null = null;
   private environment = "";
   private timer: number | null = null;
   private ownsFullscreen = false;
+  private verificationRound = 0;
+  private readonly measurements: { phase: string; corners: Point[]; maximumShift?: number }[] = [];
+  private readonly contacts: {
+    phase: string;
+    down: PointerPosition;
+    lastMove?: PointerPosition;
+    up: PointerPosition;
+  }[] = [];
+  private renderedCorners: Point[] = [];
 
   constructor(
     private readonly renderer: BoardRenderer,
@@ -47,6 +67,8 @@ export class SmartNoteMode {
     this.paper.hidden = true;
     renderer.svg.before(this.paper);
     this.dialog.className = "smart-note-dialog";
+    this.dialog.hidden = true;
+    this.dialog.setAttribute("role", "dialog");
     this.dialog.setAttribute("aria-labelledby", "smart-note-title");
     this.dialog.innerHTML = `
       <div class="smart-note-stage" data-testid="smart-note-stage"></div>
@@ -54,6 +76,12 @@ export class SmartNoteMode {
         <span class="smart-note-eyebrow">SHARED A5 PAGE · 148 × 210 mm</span>
         <h2 id="smart-note-title">Calibrate your paper</h2>
         <p class="smart-note-status" role="status" aria-live="polite"></p>
+      <div class="smart-note-calibration-actions" data-note-controls>
+        <button class="primary-button" type="button" data-note-fullscreen>Use full screen</button>
+        <button type="button" data-note-calibrate>Restart calibration</button>
+        <button type="button" data-note-details>Copy calibration details</button>
+        <button type="button" data-note-disable hidden>Turn off for everyone</button>
+      </div>
         <svg class="smart-note-illustration" viewBox="0 0 220 300" role="img" aria-label="A5 paper with four corners. Tap top-left, top-right, bottom-right, then bottom-left on your physical paper.">
           <rect x="22" y="15" width="176" height="255" rx="4" fill="#e3e9db"/>
           <rect x="28" y="20" width="164" height="244" fill="white" stroke="#8a9980"/>
@@ -66,33 +94,36 @@ export class SmartNoteMode {
           <text x="110" y="290" text-anchor="middle" fill="#647157" font-size="11">Tap the paper, not this picture</text>
         </svg>
         <p class="smart-note-help">Use full screen if your pen maps to the whole display. Every corner must land inside this window. Your four ink dots will stay on the shared page.</p>
-      <div class="smart-note-calibration-actions" data-note-controls>
-        <button class="primary-button" type="button" data-note-fullscreen>Use full screen</button>
-        <button type="button" data-note-calibrate>Restart calibration</button>
-        <button type="button" data-note-disable hidden>Turn off for everyone</button>
-      </div>
       </aside>`;
     this.stage = this.element<HTMLElement>(".smart-note-stage");
     this.status = this.element<HTMLElement>(".smart-note-status");
     this.element("[data-note-disable]").addEventListener("click", disableForEveryone);
     this.element("[data-note-calibrate]").addEventListener("click", () => this.startCalibration());
     this.element("[data-note-fullscreen]").addEventListener("click", () => void this.fullscreen());
+    this.element("[data-note-details]").addEventListener("click", () => {
+      void navigator.clipboard
+        .writeText(
+          JSON.stringify(
+            {
+              environment: JSON.parse(this.fingerprint()),
+              measurements: this.measurements,
+              contacts: this.contacts,
+              renderedCorners: this.renderedCorners,
+              corners: this.calibration?.corners,
+            },
+            null,
+            2,
+          ),
+        )
+        .then(
+          () => this.notify("Calibration details copied."),
+          () => this.notify("Could not copy calibration details. Check clipboard permission."),
+        );
+    });
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"])
       window.addEventListener(type, this.onDrawingPointer, true);
     window.addEventListener("click", this.onPenClick, true);
-    this.dialog.addEventListener("keydown", (event) => {
-      if (
-        this.dialog.dataset.state === "calibrating" &&
-        (event.ctrlKey || event.metaKey) &&
-        ["z", "y"].includes(event.key.toLowerCase())
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    });
-    this.dialog.addEventListener("cancel", (event) => {
-      event.preventDefault(); // A participant cannot bypass the shared mode with Escape.
-    });
+    window.addEventListener("keydown", this.onCalibrationKeyDown, true);
     document.body.append(this.dialog);
   }
 
@@ -125,7 +156,7 @@ export class SmartNoteMode {
   close(): void {
     this.enabled = false;
     this.restore();
-    this.dialog.close();
+    this.dialog.hidden = true;
     delete this.workspace.dataset.smartNote;
     if (this.ownsFullscreen && document.fullscreenElement)
       void document.exitFullscreen().catch(() => {});
@@ -136,6 +167,7 @@ export class SmartNoteMode {
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"])
       window.removeEventListener(type, this.onDrawingPointer, true);
     window.removeEventListener("click", this.onPenClick, true);
+    window.removeEventListener("keydown", this.onCalibrationKeyDown, true);
     this.dialog.remove();
     this.paper.remove();
   }
@@ -210,9 +242,10 @@ export class SmartNoteMode {
     this.stage.replaceChildren();
     this.corners = [];
     this.pendingTap = null;
-    // Keep calibration in the same document/input context as ordinary writing.
-    // A top-layer modal and a transformed SVG must not define different targets.
-    if (!this.dialog.open) this.dialog.show();
+    this.verificationRound = 0;
+    // This overlay never takes or restores focus. Verification and writing keep
+    // the rendered page, its focus, and the pointer capture target unchanged.
+    this.dialog.hidden = false;
     this.dialog.dataset.state = "calibrating";
     this.workspace.dataset.smartNote = this.dialog.dataset.state;
     this.element("[data-note-fullscreen]").hidden = Boolean(document.fullscreenElement);
@@ -224,7 +257,13 @@ export class SmartNoteMode {
 
   private showStep(): void {
     this.dialog.dataset.invalid = "false";
-    this.status.textContent = `Step ${this.corners.length + 1} of 4: Tap the ${CORNER_NAMES[this.corners.length]} corner on your paper. Lift the pen after each dot.`;
+    const verifying = this.dialog.dataset.state === "verifying";
+    this.element("#smart-note-title").textContent = verifying
+      ? "Check the paper alignment"
+      : "Calibrate your paper";
+    this.status.textContent = verifying
+      ? `${this.verificationRound > 1 ? "The pen positions shifted, so the page has been remapped. " : "The page is now in writing mode. "}Check ${this.corners.length + 1} of 4: Tap the same ${CORNER_NAMES[this.corners.length]} ink dot on your paper again. Do not aim for the screen corner.`
+      : `Step ${this.corners.length + 1} of 4: Tap the ${CORNER_NAMES[this.corners.length]} corner on your paper. Lift the pen after each dot.`;
     for (const dot of this.dialog.querySelectorAll<SVGGElement>("[data-guide-corner]")) {
       const index = Number(dot.dataset.guideCorner);
       dot.dataset.current = String(index === this.corners.length);
@@ -237,6 +276,24 @@ export class SmartNoteMode {
     this.status.textContent = `${message} Tap the ${CORNER_NAMES[this.corners.length]} corner on your physical paper. The red dot shows which corner to mark.`;
   }
 
+  private readonly onCalibrationKeyDown = (event: KeyboardEvent): void => {
+    if (this.dialog.hidden) return;
+    // Focus stays on the canvas during verification; board shortcuts must not
+    // mutate drawings while the guide is up. Preserve setup-button activation,
+    // keyboard navigation, and browser shortcuts such as F11/reload.
+    event.stopImmediatePropagation();
+    const control = event.target instanceof Element && event.target.closest("[data-note-controls]");
+    if (
+      ((event.ctrlKey || event.metaKey) && ["z", "y"].includes(event.key.toLowerCase())) ||
+      (!control &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !["Tab", "F11"].includes(event.key))
+    )
+      event.preventDefault();
+  };
+
   private readonly onPenClick = (event: MouseEvent): void => {
     if (this.suppressMouseClick) {
       this.suppressMouseClick = false;
@@ -245,10 +302,10 @@ export class SmartNoteMode {
       return;
     }
     if (!this.enabled) return;
-    if (!this.dialog.open && (!(event instanceof PointerEvent) || event.pointerType !== "pen"))
+    if (this.dialog.hidden && (!(event instanceof PointerEvent) || event.pointerType !== "pen"))
       return;
     if (
-      this.dialog.open &&
+      !this.dialog.hidden &&
       event.target instanceof Element &&
       event.target.closest("[data-note-controls]")
     )
@@ -259,7 +316,7 @@ export class SmartNoteMode {
 
   private readonly onDrawingPointer = (event: Event): void => {
     if (!(event instanceof PointerEvent) || !this.enabled) return;
-    if (this.dialog.open) {
+    if (!this.dialog.hidden) {
       if (event.type === "pointerdown") this.onTapDown(event);
       else if (event.type === "pointerup") this.onTapUp(event);
       else if (event.type === "pointercancel" && this.pendingTap?.id === event.pointerId) {
@@ -268,7 +325,11 @@ export class SmartNoteMode {
           document.documentElement.releasePointerCapture(event.pointerId);
       }
       // No ink, selection, or panning can start behind the calibration guide.
-      if (event.type === "pointermove") event.stopImmediatePropagation();
+      if (event.type === "pointermove") {
+        if (this.pendingTap?.id === event.pointerId)
+          this.pendingTap.lastMove = pointerPosition(event);
+        event.stopImmediatePropagation();
+      }
       return;
     }
     if (!this.calibration || this.checkEnvironment()) return;
@@ -335,7 +396,7 @@ export class SmartNoteMode {
       event.stopImmediatePropagation();
       return;
     }
-    if (this.dialog.dataset.state !== "calibrating") return;
+    if (this.dialog.hidden) return;
     if (event.button !== 0 || event.pointerType === "touch" || this.pendingTap) return;
     if (
       event.pointerType !== "pen" &&
@@ -345,7 +406,12 @@ export class SmartNoteMode {
       return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    this.pendingTap = { id: event.pointerId, point: [event.clientX, event.clientY] };
+    this.renderer.svg.focus({ preventScroll: true });
+    this.pendingTap = {
+      id: event.pointerId,
+      point: [event.clientX, event.clientY],
+      down: pointerPosition(event),
+    };
     document.documentElement.setPointerCapture(event.pointerId);
   };
 
@@ -355,8 +421,15 @@ export class SmartNoteMode {
       return;
     }
     const tap = this.pendingTap;
-    if (!tap || tap.id !== event.pointerId || this.dialog.dataset.state !== "calibrating") return;
+    if (!tap || tap.id !== event.pointerId || this.dialog.hidden) return;
     this.pendingTap = null;
+    this.contacts.push({
+      phase: this.dialog.dataset.state ?? "",
+      down: tap.down,
+      lastMove: tap.lastMove,
+      up: pointerPosition(event),
+    });
+    if (this.contacts.length > 48) this.contacts.shift();
     event.preventDefault();
     event.stopImmediatePropagation();
     if (document.documentElement.hasPointerCapture(event.pointerId))
@@ -384,16 +457,44 @@ export class SmartNoteMode {
       this.showStep();
       return;
     }
-    if (calibration) this.activate(calibration);
+    if (!calibration) return;
+    const previous = this.calibration;
+    const maximumShift = previous
+      ? Math.max(
+          ...calibration.corners.map(([x, y], index) => {
+            const point = previous.corners[index] as Point;
+            return Math.hypot(x - point[0], y - point[1]);
+          }),
+        )
+      : undefined;
+    this.measurements.push({
+      phase: this.dialog.dataset.state ?? "",
+      corners: calibration.corners,
+      maximumShift,
+    });
+    if (this.measurements.length > 12) this.measurements.shift();
+    // Four independently repeated marks must agree with the displayed page.
+    // Do not trim input against unverified bounds or guess a toolbar offset.
+    if (maximumShift !== undefined && maximumShift <= 6) {
+      this.dialog.hidden = true;
+      this.dialog.dataset.state = "complete";
+      this.workspace.dataset.smartNote = "active";
+      this.onStateChanged();
+      return;
+    }
+    this.activate(calibration);
+    this.verificationRound++;
+    this.corners = [];
+    this.stage.replaceChildren();
+    this.dialog.dataset.state = "verifying";
+    this.showStep();
   };
 
   private activate(calibration: Calibration): void {
     this.tools.cancelActiveGesture();
     this.tools.selectOnly([]);
-    this.workspace.dataset.smartNote = "active";
+    this.workspace.dataset.smartNote = "verifying";
     this.calibration = calibration;
-    this.dialog.close();
-    this.dialog.dataset.state = "complete";
     this.dialog.dataset.invalid = "false";
     const { svg } = this.renderer;
     svg.dataset.smartNote = "true";
@@ -409,6 +510,7 @@ export class SmartNoteMode {
       toBoard: (x, y) => toPage(calibration, x, y),
       toClient: (point) => toClient(calibration, point),
     });
+    svg.querySelector("[data-page-corners]")?.remove();
     const marks = document.createElementNS(SVG_NS, "g");
     marks.dataset.pageCorners = "true";
     marks.setAttribute("aria-label", "Four inked paper corners");
@@ -423,6 +525,10 @@ export class SmartNoteMode {
       marks.append(dot);
     }
     svg.append(marks);
+    this.renderedCorners = [...marks.children].map((dot) => {
+      const rect = dot.getBoundingClientRect();
+      return [rect.x + rect.width / 2, rect.y + rect.height / 2];
+    });
     this.tools.setTool("pencil");
     this.onStateChanged();
     svg.focus({ preventScroll: true });
