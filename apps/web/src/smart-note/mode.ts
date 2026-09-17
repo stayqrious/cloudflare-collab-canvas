@@ -7,10 +7,10 @@ import {
   type Calibration,
   CORNER_NAMES,
   calibrate,
-  containsPoint,
   pageTransform,
   toClient,
   toPage,
+  validateCorner,
   type WritingArea,
 } from "./calibration";
 
@@ -63,7 +63,6 @@ export class SmartNoteMode {
         <div class="smart-note-save"><strong>Smart Note · shared A5</strong><span data-note-save></span></div>
         <nav aria-label="Smart Note tools">
           <button type="button" data-note-pen data-note-active disabled>Pen</button>
-          <button type="button" data-note-eraser data-note-active disabled>Eraser</button>
           <button type="button" data-note-undo data-note-active disabled>Undo</button>
           <button type="button" data-note-calibrate>Restart calibration</button>
           <button type="button" data-note-fullscreen>Use full screen</button>
@@ -76,14 +75,25 @@ export class SmartNoteMode {
     this.element("[data-note-calibrate]").addEventListener("click", () => this.startCalibration());
     this.element("[data-note-fullscreen]").addEventListener("click", () => void this.fullscreen());
     this.element("[data-note-pen]").addEventListener("click", () => this.setTool("pencil"));
-    this.element("[data-note-eraser]").addEventListener("click", () => this.setTool("eraser"));
     this.element("[data-note-undo]").addEventListener("click", undo);
     this.dialog.addEventListener("pointerdown", this.onTapDown, true);
     this.dialog.addEventListener("pointerup", this.onTapUp, true);
     this.dialog.addEventListener(
+      "click",
+      (event) => {
+        // A pen tap outside the page must not activate a toolbar button either.
+        if (event instanceof PointerEvent && event.pointerType === "pen") {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      true,
+    );
+    this.dialog.addEventListener(
       "pointercancel",
-      () => {
-        this.pendingTap = null;
+      (event) => {
+        if (this.pendingTap?.id === event.pointerId) this.pendingTap = null;
+        this.routePen(event);
       },
       true,
     );
@@ -93,6 +103,7 @@ export class SmartNoteMode {
         this.checkEnvironment();
         // A hovering pen can write through the floating mouse controls, including the top edge.
         this.dialog.dataset.pen = String(event.pointerType === "pen");
+        this.routePen(event);
       },
       true,
     );
@@ -237,6 +248,7 @@ export class SmartNoteMode {
   }
 
   private showStep(): void {
+    this.dialog.dataset.invalid = "false";
     this.status.textContent = `Step ${this.corners.length + 1} of 4: Tap the ${CORNER_NAMES[this.corners.length]} corner on your paper. Lift the pen after each dot.`;
     for (const dot of this.dialog.querySelectorAll<SVGGElement>("[data-guide-corner]")) {
       const index = Number(dot.dataset.guideCorner);
@@ -245,12 +257,27 @@ export class SmartNoteMode {
     }
   }
 
+  private rejectMark(message: string): void {
+    this.dialog.dataset.invalid = "true";
+    this.status.textContent = `${message} Tap the ${CORNER_NAMES[this.corners.length]} corner on your physical paper. The red dot shows which corner to mark.`;
+  }
+
+  private routePen(event: PointerEvent): boolean {
+    if (this.dialog.dataset.state !== "active" || event.pointerType !== "pen") return false;
+    // Use the original trusted event even when contact starts on a floating control,
+    // without relying on the driver delivering a hover to change hit testing first.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.tools.handleFixedPagePen(event);
+    return true;
+  }
+
   private readonly onTapDown = (event: PointerEvent): void => {
     if (this.checkEnvironment()) {
       event.stopImmediatePropagation();
       return;
     }
-    if (this.dialog.dataset.state !== "calibrating") return;
+    if (this.routePen(event) || this.dialog.dataset.state !== "calibrating") return;
     if (event.button !== 0 || event.pointerType === "touch" || this.pendingTap) return;
     if (
       event.pointerType !== "pen" &&
@@ -269,6 +296,7 @@ export class SmartNoteMode {
       event.stopImmediatePropagation();
       return;
     }
+    if (this.routePen(event)) return;
     const tap = this.pendingTap;
     if (!tap || tap.id !== event.pointerId || this.dialog.dataset.state !== "calibrating") return;
     this.pendingTap = null;
@@ -276,7 +304,17 @@ export class SmartNoteMode {
     event.stopImmediatePropagation();
     if (this.dialog.hasPointerCapture(event.pointerId))
       this.dialog.releasePointerCapture(event.pointerId);
-    if (!containsPoint(this.available(), ...tap.point)) return;
+    const error = validateCorner(this.corners, tap.point, this.available());
+    if (error) {
+      this.rejectMark(error);
+      return;
+    }
+    const calibration =
+      this.corners.length === 3 ? calibrate([...this.corners, tap.point], this.available()) : null;
+    if (this.corners.length === 3 && !calibration) {
+      this.rejectMark("Those marks do not form a full A5 page.");
+      return;
+    }
     this.corners.push(tap.point);
     const marker = document.createElement("span");
     marker.className = "smart-note-marker";
@@ -289,20 +327,14 @@ export class SmartNoteMode {
       this.showStep();
       return;
     }
-    const calibration = calibrate(this.corners, this.available());
-    if (!calibration) {
-      this.startCalibration();
-      this.status.textContent =
-        "Those corners do not form a full page. Start at top-left, then top-right, bottom-right and bottom-left, at least 80 pixels apart. Check the driver’s portrait orientation.";
-      return;
-    }
-    this.activate(calibration);
+    if (calibration) this.activate(calibration);
   };
 
   private activate(calibration: Calibration): void {
     this.tools.cancelActiveGesture();
     this.tools.selectOnly([]);
     this.dialog.dataset.state = "active";
+    this.dialog.dataset.invalid = "false";
     const { svg } = this.renderer;
     this.stage.replaceChildren(svg);
     svg.dataset.smartNote = "true";
@@ -337,15 +369,11 @@ export class SmartNoteMode {
     svg.focus({ preventScroll: true });
   }
 
-  private setTool(tool: "pencil" | "eraser"): void {
+  private setTool(tool: "pencil"): void {
     this.tools.setTool(tool);
     this.element("[data-note-pen]").setAttribute(
       "aria-pressed",
       String(this.tools.tool === "pencil"),
-    );
-    this.element("[data-note-eraser]").setAttribute(
-      "aria-pressed",
-      String(this.tools.tool === "eraser"),
     );
   }
 

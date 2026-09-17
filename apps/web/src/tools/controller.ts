@@ -1145,7 +1145,7 @@ export class ToolController {
   }
 
   setTool(tool: ToolName): void {
-    if (this.options.renderer.viewport.fixedPage && tool !== "pencil" && tool !== "eraser") return;
+    if (this.options.renderer.viewport.fixedPage && tool !== "pencil") return;
     if (!this.options.canUseTool(tool)) {
       this.options.notify("That tool is disabled in Space settings.", "warning");
       return;
@@ -1330,17 +1330,40 @@ export class ToolController {
     window.removeEventListener("keyup", this.onKeyUp);
   }
 
+  /** Smart Note owns pen contact across the entire modal, including floating controls. */
+  handleFixedPagePen(event: PointerEvent): void {
+    if (!this.options.renderer.viewport.fixedPage || event.pointerType !== "pen") return;
+    switch (event.type) {
+      case "pointerdown":
+        this.onPointerDown(event);
+        break;
+      case "pointermove":
+        this.onPointerMove(event);
+        break;
+      case "pointerup":
+        this.onPointerUp(event);
+        break;
+      case "pointercancel":
+        this.onPointerCancel(event);
+        break;
+    }
+  }
+
   private readonly onPointerDown = (event: PointerEvent): void => {
     if (
       this.options.renderer.viewport.fixedPage &&
       (event.pointerType === "touch" ||
         event.button !== 0 ||
         !this.insideFixedPage(event) ||
-        (this.toolValue !== "pencil" && this.toolValue !== "eraser"))
+        this.toolValue !== "pencil")
     )
       return;
     if (event.button !== 0 && event.button !== 1) return;
-    if (event.target instanceof Element && event.target.closest("[data-board-link]")) {
+    if (
+      !this.options.renderer.viewport.fixedPage &&
+      event.target instanceof Element &&
+      event.target.closest("[data-board-link]")
+    ) {
       event.stopPropagation();
       return;
     }

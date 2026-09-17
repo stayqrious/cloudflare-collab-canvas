@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Point } from "../types";
-import { A5_CORNERS, calibrate, toClient, toPage } from "./calibration";
+import { A5_CORNERS, calibrate, toClient, toPage, validateCorner } from "./calibration";
 
 const available = { left: 0, top: 0, width: 1920, height: 1080 };
 const rectangle: Point[] = [
@@ -11,8 +11,8 @@ const rectangle: Point[] = [
 ];
 const trapezoid: Point[] = [
   [300, 50],
-  [1500, 80],
-  [1400, 950],
+  [900, 80],
+  [840, 950],
   [240, 1000],
 ];
 
@@ -84,6 +84,32 @@ describe("four-corner Smart Note calibration", () => {
       ],
     ];
     for (const corners of invalid) expect(calibrate(corners, available)).toBeNull();
+  });
+  it("rejects nearby marks at every step without consuming previously accepted corners", () => {
+    for (let index = 1; index < 4; index++) {
+      const previous = rectangle.slice(0, index);
+      for (const [x, y] of previous) {
+        expect(validateCorner(previous, [x + 4, y + 4], available)).toContain("too close");
+      }
+      expect(validateCorner(previous, rectangle[index] as Point, available)).toBeNull();
+      expect(previous).toEqual(rectangle.slice(0, index));
+    }
+  });
+  it("rejects wrong directions, flat or narrow pages, and mismatched bottom edges immediately", () => {
+    expect(validateCorner([[20, 2]], [10, 600], available)).toContain("top-right");
+    expect(validateCorner(rectangle.slice(0, 2), [620, 300], available)).toContain("A5");
+    expect(
+      validateCorner(
+        [
+          [20, 2],
+          [200, 2],
+        ],
+        [200, 1000],
+        available,
+      ),
+    ).toContain("A5");
+    expect(validateCorner(rectangle.slice(0, 3), [200, 902], available)).toContain("bottom-left");
+    expect(validateCorner(rectangle.slice(0, 2), [620, 1060], available)).toBeNull();
   });
   it("keeps out-of-bounds samples outside instead of smearing them along an edge", () => {
     const mapping = calibrate(rectangle, available);

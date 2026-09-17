@@ -19,13 +19,60 @@ export function containsPoint(area: WritingArea, x: number, y: number): boolean 
   );
 }
 
+/** Reject a bad mark before advancing, retaining the corners already measured. */
+export function validateCorner(
+  previous: readonly Point[],
+  point: Point,
+  available: WritingArea,
+): string | null {
+  const [x, y] = point;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !containsPoint(available, x, y))
+    return "That mark is outside the window. Use full screen and mark the paper corner.";
+  const minimum = Math.max(80, Math.min(available.width, available.height) * 0.12);
+  if (previous.some(([px, py]) => Math.hypot(x - px, y - py) < minimum))
+    return "That mark is too close to an earlier dot. Mark a different corner of your paper.";
+  const [tl, tr, br] = previous;
+  if (!tl) return null;
+  if (!tr) {
+    if (x - tl[0] < minimum || Math.abs(y - tl[1]) > (x - tl[0]) * 0.25)
+      return "Mark the top-right corner, across the top edge from your first dot.";
+    return null;
+  }
+  const width = Math.hypot(tr[0] - tl[0], tr[1] - tl[1]);
+  const ratio = A5_PAGE.width / A5_PAGE.height;
+  const plausibleSide = (top: Point, bottom: Point): boolean => {
+    const height = bottom[1] - top[1];
+    const aspect = width / Math.hypot(bottom[0] - top[0], height);
+    return (
+      height >= minimum &&
+      Math.abs(bottom[0] - top[0]) <= height * 0.3 &&
+      aspect >= ratio * 0.7 &&
+      aspect <= ratio * 1.3
+    );
+  };
+  if (!plausibleSide(br ? tl : tr, point))
+    return "The marks should outline a tall A5 page. Mark the bottom corner below its top corner; check your tablet’s portrait mapping if needed.";
+  if (br) {
+    const bottomWidth = br[0] - x;
+    const rightHeight = br[1] - tr[1];
+    const leftHeight = y - tl[1];
+    if (
+      bottomWidth < width * 0.75 ||
+      bottomWidth > width * 1.25 ||
+      Math.abs(br[1] - y) > bottomWidth * 0.25 ||
+      leftHeight < rightHeight * 0.75 ||
+      leftHeight > rightHeight * 1.25
+    )
+      return "Mark the bottom-left corner so the four dots outline a roughly rectangular A5 page.";
+  }
+  return null;
+}
+
 /** Maps the four *measured* client positions to the same four logical page corners. */
 export function calibrate(corners: readonly Point[], available: WritingArea): Calibration | null {
   if (
     corners.length !== 4 ||
-    corners.some(
-      ([x, y]) => !Number.isFinite(x) || !Number.isFinite(y) || !containsPoint(available, x, y),
-    )
+    corners.some((point, index) => validateCorner(corners.slice(0, index), point, available))
   )
     return null;
   const [p0, p1, p2, p3] = corners as [Point, Point, Point, Point];

@@ -3922,8 +3922,9 @@ button:disabled {
 .smart-note-guide {
   position: absolute;
   z-index: 2;
-  right: 24px;
-  top: 24px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   width: 280px;
   max-width: calc(100% - 48px);
   max-height: calc(100% - 190px);
@@ -3971,6 +3972,13 @@ button:disabled {
   fill: #6fa53f;
   stroke: #375822;
   animation: smart-note-blink 1s ease-in-out infinite;
+}
+.smart-note-dialog[data-invalid="true"] .smart-note-status {
+  color: #b42318;
+}
+.smart-note-dialog[data-invalid="true"] [data-current="true"] circle {
+  fill: #e53935;
+  stroke: #a01b18;
 }
 @keyframes smart-note-blink {
   50% {
