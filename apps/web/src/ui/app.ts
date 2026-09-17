@@ -1635,7 +1635,14 @@ export class BoardApp {
       onFocusLeft: this.leaveMathField,
     });
 
-    this.smartNote = new SmartNoteMode(this.renderer, this.tools, () => void this.undo());
+    this.smartNote = new SmartNoteMode(
+      this.renderer,
+      this.tools,
+      () => void this.undo(),
+      () => {
+        if (this.bootstrap.actor.role === "owner") void this.setFeature("smartNote", false);
+      },
+    );
     query(this.root, "[data-smart-note-open]", HTMLButtonElement).addEventListener("click", () => {
       if (!this.bootstrap.board.features.smartNote || this.phase === "archived") return;
       this.stopBroadcastingSpotlight();
@@ -7397,7 +7404,11 @@ export class BoardApp {
     }
     const smartNoteEnabled = this.bootstrap.board.features.smartNote && !archived;
     query(this.root, "[data-smart-note-open]", HTMLButtonElement).hidden = !smartNoteEnabled;
-    if (!smartNoteEnabled && this.smartNote.isOpen) this.smartNote.close();
+    if (smartNoteEnabled && !this.smartNote.isOpen) {
+      this.stopBroadcastingSpotlight();
+      this.stopFollowingSpotlight();
+    }
+    this.smartNote.sync(smartNoteEnabled, this.bootstrap.actor.role === "owner");
     this.spotlightToggle.hidden =
       !roleCanBroadcast || archived || !this.bootstrap.board.features.spotlight;
     this.spotlightToggle.disabled = this.phase !== "ready" || archived;
