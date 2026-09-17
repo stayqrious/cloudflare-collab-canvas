@@ -1638,9 +1638,12 @@ export class BoardApp {
     this.smartNote = new SmartNoteMode(
       this.renderer,
       this.tools,
-      () => void this.undo(),
       () => {
         if (this.bootstrap.actor.role === "owner") void this.setFeature("smartNote", false);
+      },
+      () => {
+        this.closeDrawers();
+        this.updatePermissions();
       },
     );
     query(this.root, "[data-smart-note-open]", HTMLButtonElement).addEventListener("click", () => {
@@ -7332,7 +7335,8 @@ export class BoardApp {
       (this.bootstrap.board.features.templates ||
         this.bootstrap.board.features.organisationTemplates);
     this.activitiesButton.hidden = !roleCanAddActivities;
-    this.activitiesButton.disabled = !canEdit || this.activityInsertPending;
+    this.activitiesButton.disabled =
+      !canEdit || this.activityInsertPending || this.bootstrap.board.features.smartNote;
     for (const element of this.activitiesMenu.querySelectorAll<HTMLElement>(
       "[data-built-in-templates]",
     )) {
@@ -7411,7 +7415,7 @@ export class BoardApp {
     this.smartNote.sync(smartNoteEnabled, this.bootstrap.actor.role === "owner");
     this.spotlightToggle.hidden =
       !roleCanBroadcast || archived || !this.bootstrap.board.features.spotlight;
-    this.spotlightToggle.disabled = this.phase !== "ready" || archived;
+    this.spotlightToggle.disabled = this.phase !== "ready" || archived || smartNoteEnabled;
     this.renderSpotlightState();
     if (!canEdit || !this.isToolEnabled(this.tools.tool)) {
       this.tools.setTool("select");
@@ -7432,17 +7436,23 @@ export class BoardApp {
           : this.isToolEnabled(name);
       button.hidden = !enabled;
       button.disabled =
-        DRAW_TOOLS.has(name) &&
-        (!canEdit || !enabled || (name === "image" && this.imageUploadInFlight));
+        (smartNoteEnabled && name !== "pencil") ||
+        (DRAW_TOOLS.has(name) &&
+          (!canEdit || !enabled || (name === "image" && this.imageUploadInFlight)));
     }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>(
+      "[data-zoom-out], [data-zoom-reset], [data-zoom-in], [data-zoom-fit]",
+    ))
+      button.disabled = smartNoteEnabled;
+    query(this.root, "[data-smart-note-open]", HTMLButtonElement).textContent = "Recalibrate";
     const videoButton = query(this.root, "[data-video-embed]", HTMLButtonElement);
     const videoEnabled = this.bootstrap.board.features.text && this.bootstrap.board.features.videos;
     videoButton.hidden = !videoEnabled;
-    videoButton.disabled = !canEdit || !videoEnabled;
+    videoButton.disabled = smartNoteEnabled || !canEdit || !videoEnabled;
     if (videoButton.disabled && this.videoEmbedDialog.open) this.videoEmbedDialog.close();
-    this.setShapeMenuOpen(!this.shapeMenu.hidden);
+    this.setShapeMenuOpen(!this.shapeMenu.hidden && !smartNoteEnabled);
     // Synchronize nested visibility before deciding whether the More trigger itself is useful.
-    this.setToolsMenuOpen(!this.toolsMenu.hidden);
+    this.setToolsMenuOpen(!this.toolsMenu.hidden && !smartNoteEnabled);
     const moreToolsAvailable =
       roleCanBroadcast &&
       !archived &&
@@ -7538,7 +7548,6 @@ export class BoardApp {
     }
     this.saveStatus.dataset.state = state;
     this.saveStatusText.textContent = label;
-    this.smartNote?.updateSaveStatus(label);
     const archiveButton =
       this.settingsBody.querySelector<HTMLButtonElement>("[data-archive-board]");
     if (archiveButton) archiveButton.disabled = !this.canArchiveBoard();
@@ -8582,7 +8591,6 @@ export class BoardApp {
   }
 
   private notify(message: string, kind: "info" | "warning" | "error" = "info"): void {
-    this.smartNote?.notify(message);
     const toast = document.createElement("div");
     toast.className = `toast toast-${kind}`;
     toast.setAttribute("role", kind === "error" ? "alert" : "status");

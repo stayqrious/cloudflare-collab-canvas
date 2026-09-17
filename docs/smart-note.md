@@ -9,7 +9,8 @@ mode. Participants joining later enter that mode automatically too. Each person
 must calibrate their own device before writing. Reloading, rejoining, or changing
 the window/display requires all four corners again. There is no saved-calibration
 bypass and Escape cannot return a participant to the infinite canvas. The owner
-can use **Turn off for everyone** to return the whole board to its ordinary view.
+can disable **Enable Smart Note** in the regular settings, or use **Turn off for
+everyone** during calibration, to restore the infinite canvas.
 Existing drawings are preserved when the mode changes.
 
 ## Visual calibration
@@ -31,9 +32,22 @@ from each participant; ordinary board exports do not currently include them.
 
 The calibration surface covers the entire browser client viewport. Instructions
 and tools float over it; they do not reserve any strip at the top or change the
-paper origin. Pen input is routed directly to the canvas, including contact over
-the floating toolbar without a preceding hover event. Use
-the mouse or keyboard for toolbar controls. Touch input is ignored for calibration
+paper origin. The calibration dialog closes after the fourth mark. The canvas
+stays in its original board container, with the regular header, drawing toolbar,
+colour controls, undo and save status. Other drawing tools and zoom controls are
+visible but disabled; the normal Pencil tool is selected. The header’s
+**Recalibrate** button restarts calibration.
+
+Calibration and writing use the same viewport coordinates. The calibrated SVG
+is fixed to the viewport rather than offset by the board header or its canvas
+container. Its ink layer paints above the header so the top strip is visible too;
+the white paper background stays behind the regular UI. Input is handled at the
+window before SVG hit testing, so the transformed SVG or a toolbar cannot exclude
+part of the calibrated page. Native pen input writes through the regular header
+and controls without requiring a hover event. Mouse-emulating drivers can also
+start handwriting there: a drag becomes ink from the original down position,
+while an ordinary click still operates the UI. Use the mouse or keyboard for
+controls when using a native pen. Touch input is ignored for calibration
 and drawing to reduce palm interference.
 
 Use **Use full screen** before marking if the driver maps the tablet to the whole
@@ -70,7 +84,8 @@ The sides must approximate a portrait A5 rectangle: width/height is allowed with
 30% of 148/210, with modest edge tilt and up to 25% variation between opposite
 sides. This tolerates ordinary calibration error but rejects flat, narrow or folded
 pages. The accepted points are never snapped to a guessed rectangle; the mapping
-still passes through all four measured marks. Two-corner calibration can be considered later; it is not available now.
+still passes through all four measured marks. Two-corner calibration can be
+considered later; it is not available now.
 
 After calibration, **Pen is the only drawing tool**. Eraser, selection, shape tools
 and tool-switching shortcuts cannot replace it. Undo remains available as an action.
@@ -104,4 +119,6 @@ Tests cover corner/interior mappings, top-edge positioning, pen-down capture,
 invalid polygons, automatic entry for all participants, mandatory recalibration,
 different viewport sizes and pixel densities, shared drawing, retained page dots,
 bounds, undo, immediate invalid-mark feedback, centered instructions, pen-only
-tool selection, and trusted browser pen input both on the page and over controls.
+tool selection, regular toolbar access, mouse-emulated handwriting over the header,
+and trusted browser pen input at the top edge, within the header strip and at the
+bottom of the page. Fullscreen is optional and changes require recalibration.
