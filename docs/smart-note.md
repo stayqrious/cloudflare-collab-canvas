@@ -14,7 +14,7 @@ Existing drawings are preserved when the mode changes.
 
 ## Visual calibration
 
-A paper illustration highlights a blinking corner in this order:
+A centered paper illustration highlights a blinking corner in this order:
 
 1. Top-left
 2. Top-right
@@ -31,7 +31,8 @@ from each participant; ordinary board exports do not currently include them.
 
 The calibration surface covers the entire browser client viewport. Instructions
 and tools float over it; they do not reserve any strip at the top or change the
-paper origin. Hovering pen input passes through the floating mouse toolbar. Use
+paper origin. Pen input is routed directly to the canvas, including contact over
+the floating toolbar without a preceding hover event. Use
 the mouse or keyboard for toolbar controls. Touch input is ignored for calibration
 and drawing to reduce palm interference.
 
@@ -59,9 +60,21 @@ approximating them with a bounding rectangle. CSS client coordinates are used
 without adding browser chrome offsets or multiplying by device pixel ratio.
 
 Corners must describe a non-folded clockwise portrait page, in the prompted order,
-with at least 80 pixels of width and height on both sides. Bad ordering, duplicate
-points, nonfinite values, and corners outside the visible client area restart the
-flow. Two-corner calibration can be considered later; it is not available now.
+with distinct corners at least 80 CSS pixels apart (or 12% of the shorter viewport
+side, whichever is larger). Each new mark is validated immediately. Near-duplicate
+marks, wrong directions, nonfinite values and inaccessible corners are rejected
+without advancing or discarding accepted marks. The current corner blinks red and
+the centered instructions ask for that corner again. A valid retry clears the error.
+
+The sides must approximate a portrait A5 rectangle: width/height is allowed within
+30% of 148/210, with modest edge tilt and up to 25% variation between opposite
+sides. This tolerates ordinary calibration error but rejects flat, narrow or folded
+pages. The accepted points are never snapped to a guessed rectangle; the mapping
+still passes through all four measured marks. Two-corner calibration can be considered later; it is not available now.
+
+After calibration, **Pen is the only drawing tool**. Eraser, selection, shape tools
+and tool-switching shortcuts cannot replace it. Undo remains available as an action.
+Mouse input can also draw for drivers that expose the tablet as a mouse.
 
 The SVG is clipped to the page. Out-of-bounds pointer samples end a stroke at its
 last in-bounds sample; outside movement and re-entry do not draw a connecting line
@@ -90,4 +103,5 @@ full-paper coverage, ink nib input, display scaling, and multi-monitor behavior.
 Tests cover corner/interior mappings, top-edge positioning, pen-down capture,
 invalid polygons, automatic entry for all participants, mandatory recalibration,
 different viewport sizes and pixel densities, shared drawing, retained page dots,
-bounds, undo, and the responsive visual guide.
+bounds, undo, immediate invalid-mark feedback, centered instructions, pen-only
+tool selection, and trusted browser pen input both on the page and over controls.
