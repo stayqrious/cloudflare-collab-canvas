@@ -1209,6 +1209,7 @@ export class ToolController {
   }
 
   setTool(tool: ToolName): void {
+    if (this.options.renderer.viewport.fixedPage && tool !== "pencil" && tool !== "eraser") return;
     if (!this.options.canUseTool(tool)) {
       this.options.notify("That tool is disabled in Space settings.", "warning");
       return;
@@ -1248,6 +1249,9 @@ export class ToolController {
 
   cancelActiveGesture(): void {
     this.cancelGesture();
+    this.pointers.clear();
+    this.pinch = null;
+    this.spaceHeld = false;
   }
 
   async deleteSelection(): Promise<void> {
@@ -1394,6 +1398,14 @@ export class ToolController {
   }
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (
+      this.options.renderer.viewport.fixedPage &&
+      (event.pointerType === "touch" ||
+        event.button !== 0 ||
+        !this.insideFixedPage(event) ||
+        (this.toolValue !== "pencil" && this.toolValue !== "eraser"))
+    )
+      return;
     if (event.button !== 0 && event.button !== 1) return;
     if (event.target instanceof Element && event.target.closest("[data-board-link]")) {
       event.stopPropagation();
@@ -1423,7 +1435,10 @@ export class ToolController {
     if (this.pointers.size > 1) return;
 
     const point = boardPoint(event, this.options.renderer);
-    if (event.button === 1 || this.spaceHeld || this.toolValue === "pan") {
+    if (
+      !this.options.renderer.viewport.fixedPage &&
+      (event.button === 1 || this.spaceHeld || this.toolValue === "pan")
+    ) {
       this.gesture = {
         kind: "pan",
         pointerId: event.pointerId,
@@ -1673,6 +1688,11 @@ export class ToolController {
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
+    if (this.options.renderer.viewport.fixedPage && event.pointerType === "touch") return;
+    if (!this.insideFixedPage(event)) {
+      this.finishAtPageEdge(event.pointerId);
+      return;
+    }
     if (this.pointers.has(event.pointerId)) {
       this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
     }
@@ -1728,8 +1748,13 @@ export class ToolController {
     } else if (gesture.kind === "pencil") {
       const events =
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
-      for (const sample of events)
+      for (const sample of [...events, event]) {
+        if (!this.insideFixedPage(sample)) {
+          this.finishAtPageEdge(event.pointerId);
+          return;
+        }
         appendUniquePoint(gesture.points, boardPoint(sample, this.options.renderer));
+      }
       if (gesture.points.length > 10_000) gesture.points.length = 10_000;
       if (gesture.animationFrame === null) {
         gesture.animationFrame = requestAnimationFrame(() => {
@@ -1830,8 +1855,13 @@ export class ToolController {
     } else if (gesture.kind === "eraser") {
       const events =
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
-      for (const sample of events)
+      for (const sample of [...events, event]) {
+        if (!this.insideFixedPage(sample)) {
+          this.finishAtPageEdge(event.pointerId);
+          return;
+        }
         this.collectEraser(boardPoint(sample, this.options.renderer), gesture);
+      }
     } else if (gesture.kind === "zone") {
       gesture.current = boardPoint(event, this.options.renderer);
       this.renderZoneGesture(gesture);
@@ -1842,6 +1872,7 @@ export class ToolController {
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
+    if (!this.insideFixedPage(event)) this.finishAtPageEdge(event.pointerId);
     // End the pinch while both finger positions are still known.
     if (this.pinch?.pointerIds.includes(event.pointerId)) {
       this.endPinch();
@@ -1864,6 +1895,9 @@ export class ToolController {
       return;
     }
     const tapPoint = boardPoint(event, this.options.renderer);
+    if (gesture.kind === "pencil" && this.options.renderer.viewport.fixedPage) {
+      appendUniquePoint(gesture.points, tapPoint);
+    }
     if (gesture.kind === "shape") {
       applyShapePointerState(
         gesture,
@@ -1957,6 +1991,22 @@ export class ToolController {
     else this.lastZoneTap = null;
     event.preventDefault();
   };
+
+  private insideFixedPage(event: PointerEvent): boolean {
+    const page = this.options.renderer.viewport.fixedPage;
+    if (!page) return true;
+    const [x, y] = this.options.renderer.viewport.clientToBoard(event.clientX, event.clientY);
+    return x >= 0 && y >= 0 && x <= page.width && y <= page.height;
+  }
+
+  private finishAtPageEdge(pointerId: number): void {
+    const gesture = this.gesture;
+    if (!gesture || gesture.pointerId !== pointerId) return;
+    this.gesture = null;
+    this.pointers.delete(pointerId);
+    safeReleaseCapture(this.options.renderer.svg, pointerId);
+    void this.finishGesture(gesture);
+  }
 
   private readonly onPointerCancel = (event: PointerEvent): void => {
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
@@ -2502,7 +2552,13 @@ export class ToolController {
       const points = deduplicatePoints(gesture.points).map(
         (point) => [roundBoard(point[0]), roundBoard(point[1])] as Point,
       );
-      if (points.length === 1 && points[0]) points.push([points[0][0] + 0.01, points[0][1] + 0.01]);
+      if (points.length === 1 && points[0]) {
+        const page = this.options.renderer.viewport.fixedPage;
+        points.push([
+          points[0][0] + (page && points[0][0] >= page.width ? -0.01 : 0.01),
+          points[0][1] + (page && points[0][1] >= page.height ? -0.01 : 0.01),
+        ]);
+      }
       if (points.length < 2) {
         this.options.preview(gesture.gestureId, gesture.previewSeq + 1, "gesture.cancel");
         return;
