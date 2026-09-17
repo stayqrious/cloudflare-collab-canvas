@@ -36,6 +36,12 @@ async function calibrateNote(page: Page, area: Area) {
     );
     await page.mouse.click(point.x, point.y);
   }
+  await verifyNote(page, [
+    fraction(area, 0, 0),
+    fraction(area, 1, 0),
+    fraction(area, 1, 1),
+    fraction(area, 0, 1),
+  ]);
   await expect(page.getByTestId("board-shell")).toHaveAttribute("data-smart-note", "active");
   await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
   await expect(page.locator("[data-canvas-host] > #board-canvas")).toHaveCount(1);
@@ -47,6 +53,11 @@ async function calibrateNote(page: Page, area: Area) {
   expect(bounds.y).toBeCloseTo(area.y, 1);
   expect(bounds.width).toBeCloseTo(area.width, 1);
   expect(bounds.height).toBeCloseTo(area.height, 1);
+}
+
+async function verifyNote(page: Page, corners: readonly { x: number; y: number }[]) {
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "verifying");
+  for (const point of corners) await page.mouse.click(point.x, point.y);
 }
 
 async function penInput(page: Page) {
@@ -209,6 +220,16 @@ test("trusted pen writes at the top and bottom, through the regular header, afte
     await pen("mousePressed", x, y);
     await pen("mouseReleased", x, y);
   }
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "verifying");
+  for (const [x, y] of [
+    [20, 2],
+    [620, 2],
+    [620, 842],
+    [20, 842],
+  ]) {
+    await pen("mousePressed", x as number, y as number);
+    await pen("mouseReleased", x as number, y as number);
+  }
   await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
   await expect(page.locator("#board-canvas")).toHaveAttribute("data-tool", "pencil");
   await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "true");
@@ -249,6 +270,20 @@ test("trusted pen writes at the top and bottom, through the regular header, afte
   await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(5);
   await page.locator("[data-smart-note-open]").click();
   await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(5);
+  for (const [x, y] of [
+    [20, 2],
+    [620, 2],
+    [620, 842],
+    [20, 842],
+  ] as const) {
+    await pen("mousePressed", x, y);
+    await pen("mouseReleased", x, y);
+  }
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "verifying");
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(5);
   expect(errors).toEqual([]);
 });
 
@@ -266,6 +301,10 @@ test("four skewed screen marks stay pinned without reparenting the regular canva
     [30, 680],
   ] as const;
   for (const point of corners) await page.mouse.click(point[0], point[1]);
+  await verifyNote(
+    page,
+    corners.map(([x, y]) => ({ x, y })),
+  );
   await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
   for (const [index, point] of corners.entries()) {
     const dot = await page.locator(`[data-page-corner="${index}"]`).boundingBox();
@@ -275,7 +314,7 @@ test("four skewed screen marks stay pinned without reparenting the regular canva
   }
 });
 
-test("seven rows at the top of a skewed page are painted, not just present in the DOM", async ({
+test("shifted top and left calibration is corrected before seven upper rows are painted", async ({
   page,
   browserName,
 }) => {
@@ -302,7 +341,13 @@ test("seven rows at the top of a skewed page are painted, not just present in th
   const mapping = calibrate(corners, { left: 0, top: 0, width: 1100, height: 900 });
   if (!mapping) throw new Error("Invalid fixture");
   const pen = await penInput(page);
-  for (const [x, y] of corners) {
+  // Simulate the user's symptom: the initial top/left positions are inset,
+  // whereas subsequent writing coordinates extend above and left of the page.
+  // Keep the bottom-right fixed, so a constant translation cannot solve it.
+  const initialCorners = corners.map(
+    ([x, y]) => [435 + (x - 435) * 0.8, 730 + (y - 730) * 0.8] as const,
+  );
+  for (const [x, y] of initialCorners) {
     await pen("mousePressed", x, y);
     expect(
       await page.evaluate(() =>
@@ -313,7 +358,29 @@ test("seven rows at the top of a skewed page are painted, not just present in th
     ).toBe(true);
     await pen("mouseReleased", x, y);
   }
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "verifying");
+  await expect(page.locator("#board-canvas")).toBeFocused();
+  // The repeated physical marks land outside the old top/left. They must be
+  // accepted as calibration input, without being clipped by drawing bounds.
+  for (const [x, y] of corners) {
+    await pen("mousePressed", x, y);
+    await pen("mouseReleased", x, y);
+  }
+  await expect(page.locator(".smart-note-status")).toContainText("page has been remapped");
+  await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "verifying");
+  await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(0);
+  for (const [index, [x, y]] of corners.entries()) {
+    const dot = await page.locator(`[data-page-corner="${index}"]`).boundingBox();
+    if (!dot) throw new Error("Missing corrected corner");
+    expect(dot.x + dot.width / 2).toBeCloseTo(x, 0);
+    expect(dot.y + dot.height / 2).toBeCloseTo(y, 0);
+  }
+  for (const [x, y] of corners) {
+    await pen("mousePressed", x, y);
+    await pen("mouseReleased", x, y);
+  }
   await expect(page.locator(".smart-note-dialog")).not.toBeVisible();
+  await expect(page.locator("#board-canvas")).toBeFocused();
   const samples: { x: number; y: number }[] = [];
   for (let row = 0; row < 7; row++) {
     const left = toClient(mapping, [280, 12 + row * 24]);
@@ -363,4 +430,13 @@ test("seven rows at the top of a skewed page are painted, not just present in th
   await pen("mouseReleased", 250, 20);
   await expect(page.getByTestId("toast-region")).toContainText("outside the calibrated A5 page");
   await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(7);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.locator("[data-smart-note-open]").click();
+  await page.getByRole("button", { name: "Copy calibration details" }).click();
+  const details = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+  expect(details.measurements).toHaveLength(3);
+  expect(details.measurements[1].maximumShift).toBeGreaterThan(100);
+  expect(details.measurements[2].maximumShift).toBeLessThan(1);
+  expect(details.contacts).toHaveLength(12);
+  expect(details.renderedCorners).toHaveLength(4);
 });

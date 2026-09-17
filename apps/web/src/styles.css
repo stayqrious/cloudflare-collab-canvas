@@ -3920,6 +3920,10 @@ button:disabled {
   overflow: hidden;
   touch-action: none;
 }
+.smart-note-dialog[data-state="verifying"] {
+  background: transparent;
+  pointer-events: none;
+}
 .smart-note-guide {
   position: absolute;
   z-index: 2;
@@ -3954,8 +3958,8 @@ button:disabled {
 }
 .smart-note-illustration {
   display: block;
-  width: 180px;
-  max-height: 31vh;
+  width: 130px;
+  max-height: 22vh;
   margin: 12px auto;
 }
 .smart-note-illustration circle {

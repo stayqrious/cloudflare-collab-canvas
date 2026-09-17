@@ -33,7 +33,23 @@ from each participant; ordinary board exports do not currently include them.
 The calibration surface covers the entire browser client viewport. Instructions
 and tools float over it; they do not reserve any strip at the top or change the
 paper origin. The calibration guide is a normal document overlay, not a top-layer
-modal. It closes after the fourth mark. The canvas
+modal, and never takes or restores focus. After the fourth mark the app displays
+the mapped page, focuses the canvas, and asks the writer to **tap the same four
+physical ink dots again**. These checks run with the writing geometry already
+active, including for marks above or left of the provisional page. If any corner
+has shifted by more than six CSS pixels, the app recomputes the entire four-corner
+mapping from the new measurements and repeats the check. Writing starts only once
+all four positions agree with the displayed page. Finishing the check only hides
+the guide; it does not change the mapping or canvas focus again. No guessed
+offset, padding, or silent clipping is used to hide a failed check.
+
+The guide's **Copy calibration details** button copies recent measured corner
+sets, maximum differences between passes, and viewport/display measurements. It
+does not copy board drawings or send diagnostics to a server. Reopen **Recalibrate**
+to access these details after writing. This helps investigate a device mapping
+that continues to move; browser tests alone cannot establish its hardware cause.
+
+The canvas
 stays in its original board container, with the regular header, drawing toolbar,
 colour controls, undo and save status. Other drawing tools and zoom controls are
 visible but disabled; the normal Pencil tool is selected. The header’s
@@ -128,6 +144,9 @@ tool selection, regular toolbar access, mouse-emulated handwriting over the head
 and trusted browser pen input at the top edge, within the header strip and at the
 bottom of the page. Fullscreen is optional and changes require recalibration.
 
-The skewed-page browser regression checks seven rasterized upper-page rows, not
-just DOM bounds, and asserts the same capture target during calibration and ink.
+The skewed-page browser regression simulates top/left positions shifting outward
+while the bottom-right stays fixed. It checks that verification remaps all four
+corners and blocks writing until another pass agrees, then checks seven rasterized
+upper-page rows, not just DOM bounds. It also asserts the same capture target
+during calibration and ink and unchanged canvas focus when verification ends.
 These browser checks do not substitute for physical tablet validation.
