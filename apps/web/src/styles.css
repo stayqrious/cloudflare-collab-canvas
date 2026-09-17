@@ -3896,3 +3896,120 @@ button:disabled {
   text-decoration-thickness: 0.08em;
   text-underline-offset: 0.12em;
 }
+
+/* The input rectangle is device-local; its SVG coordinates always describe one A5 page. */
+.smart-note-dialog {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: #eceeea;
+}
+.smart-note-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.smart-note-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  background: white;
+  border-bottom: 1px solid var(--line);
+}
+/* Save-state text must not reflow the calibrated surface while writing. */
+.smart-note-header > div {
+  width: 320px;
+  max-width: 100%;
+}
+.smart-note-header strong {
+  font-size: 18px;
+}
+.smart-note-header span {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+  color: #626a61;
+}
+.smart-note-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.smart-note-header button {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+}
+.smart-note-header button[aria-pressed="true"] {
+  background: #e5efd9;
+  border-color: #708d4b;
+}
+.smart-note-status {
+  margin: 0;
+  padding: 12px 20px;
+  height: 84px;
+  flex-shrink: 0;
+  overflow: auto;
+  background: #f8faf5;
+  font-size: 14px;
+}
+.smart-note-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.smart-note-guide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  text-align: center;
+  pointer-events: none;
+  color: #56604e;
+}
+.smart-note-guide strong {
+  font-size: 24px;
+}
+.smart-note-guide p {
+  max-width: 560px;
+  line-height: 1.6;
+}
+.smart-note-dialog[data-state="active"] .smart-note-guide {
+  display: none;
+}
+.smart-note-marker {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #55773c;
+  background: #d7e9c8;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.smart-note-stage .board-canvas {
+  inset: auto;
+  background: white;
+  overflow: hidden;
+  outline: 2px solid #81986b;
+  box-shadow: 0 8px 30px #26351b24;
+}
+.smart-note-stage .canvas-background {
+  display: none;
+}

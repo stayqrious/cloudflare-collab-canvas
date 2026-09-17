@@ -990,6 +990,7 @@ export class CanvasViewport {
   private width = 1;
   private height = 1;
   private zoomValue = 1;
+  private page: { width: number; height: number } | null = null;
   private readonly resizeObserver: ResizeObserver;
   private readonly listeners = new Set<(zoom: number) => void>();
   private readonly viewListeners = new Set<(state: SpotlightViewState) => void>();
@@ -1000,11 +1001,23 @@ export class CanvasViewport {
     this.resize();
   }
 
+  get fixedPage(): { width: number; height: number } | null {
+    return this.page;
+  }
+
+  setFixedPage(page: { width: number; height: number } | null): void {
+    this.page = page;
+    this.svg.setAttribute("preserveAspectRatio", page ? "none" : "xMidYMid meet");
+    this.resize();
+  }
+
   get zoom(): number {
     return this.zoomValue;
   }
 
   get viewState(): SpotlightViewState {
+    if (this.page)
+      return { center: { x: this.page.width / 2, y: this.page.height / 2 }, zoom: this.zoomValue };
     return {
       center: {
         x: this.x + this.width / this.zoomValue / 2,
@@ -1015,6 +1028,7 @@ export class CanvasViewport {
   }
 
   get viewBounds(): Bounds {
+    if (this.page) return { minX: 0, minY: 0, maxX: this.page.width, maxY: this.page.height };
     return {
       minX: this.x,
       minY: this.y,
@@ -1034,6 +1048,7 @@ export class CanvasViewport {
   }
 
   setViewState(state: SpotlightViewState): void {
+    if (this.page) return;
     const { x, y } = state.center;
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(state.zoom)) {
       throw new RangeError("Viewport center and zoom must be finite.");
@@ -1048,6 +1063,11 @@ export class CanvasViewport {
 
   clientToBoard(clientX: number, clientY: number): Point {
     const rect = this.svg.getBoundingClientRect();
+    if (this.page)
+      return [
+        ((clientX - rect.left) / rect.width) * this.page.width,
+        ((clientY - rect.top) / rect.height) * this.page.height,
+      ];
     return [
       this.x + (clientX - rect.left) / this.zoomValue,
       this.y + (clientY - rect.top) / this.zoomValue,
@@ -1056,6 +1076,11 @@ export class CanvasViewport {
 
   boardToClient(point: Point): Point {
     const rect = this.svg.getBoundingClientRect();
+    if (this.page)
+      return [
+        rect.left + (point[0] / this.page.width) * rect.width,
+        rect.top + (point[1] / this.page.height) * rect.height,
+      ];
     return [
       rect.left + (point[0] - this.x) * this.zoomValue,
       rect.top + (point[1] - this.y) * this.zoomValue,
@@ -1063,6 +1088,7 @@ export class CanvasViewport {
   }
 
   panByPixels(deltaX: number, deltaY: number): void {
+    if (this.page) return;
     this.x -= deltaX / this.zoomValue;
     this.y -= deltaY / this.zoomValue;
     this.update();
@@ -1070,6 +1096,7 @@ export class CanvasViewport {
   }
 
   zoomAt(clientX: number, clientY: number, zoom: number): void {
+    if (this.page) return;
     const anchorBefore = this.clientToBoard(clientX, clientY);
     this.zoomValue = Math.max(0.1, Math.min(8, zoom));
     const anchorAfter = this.clientToBoard(clientX, clientY);
@@ -1081,6 +1108,7 @@ export class CanvasViewport {
   }
 
   reset(): void {
+    if (this.page) return;
     this.x = 0;
     this.y = 0;
     this.zoomValue = 1;
@@ -1090,6 +1118,7 @@ export class CanvasViewport {
   }
 
   fit(bounds: Bounds | undefined, padding = 80): void {
+    if (this.page) return;
     if (!bounds) {
       this.reset();
       return;
@@ -1135,6 +1164,14 @@ export class CanvasViewport {
   }
 
   private update(): void {
+    if (this.page) {
+      this.x = 0;
+      this.y = 0;
+      this.zoomValue = Math.min(this.width / this.page.width, this.height / this.page.height);
+      this.svg.setAttribute("viewBox", `0 0 ${this.page.width} ${this.page.height}`);
+      this.svg.style.setProperty("--board-zoom", String(this.zoomValue));
+      return;
+    }
     this.svg.setAttribute(
       "viewBox",
       `${this.x} ${this.y} ${this.width / this.zoomValue} ${this.height / this.zoomValue}`,

@@ -706,6 +706,43 @@ describe("canvas viewport view state", () => {
     expect(viewListener).toHaveBeenLastCalledWith({ center: { x: 110, y: -25 }, zoom: 2 });
   });
 
+  it("locks a calibrated rectangle to the same A5 page on differently sized screens", () => {
+    for (const rect of [
+      { left: 100, top: 200, width: 400, height: 600 },
+      { left: 200, top: 150, width: 1600, height: 800 },
+    ]) {
+      const attributes = new Map<string, string>();
+      const svg = {
+        dataset: {} as DOMStringMap,
+        style: { setProperty: vi.fn() },
+        getBoundingClientRect: () => rect,
+        setAttribute: (name: string, value: string) => attributes.set(name, value),
+      } as unknown as SVGSVGElement;
+      const viewport = new CanvasViewport(svg);
+      viewport.setFixedPage({ width: 740, height: 1050 });
+      expect(
+        viewport.clientToBoard(rect.left + rect.width / 2, rect.top + rect.height / 2),
+      ).toEqual([370, 525]);
+      expect(viewport.boardToClient([740, 1050])).toEqual([
+        rect.left + rect.width,
+        rect.top + rect.height,
+      ]);
+      viewport.panByPixels(80, 120);
+      viewport.zoomAt(300, 400, 3);
+      viewport.reset();
+      viewport.fit({ minX: -100, minY: -100, maxX: 2000, maxY: 2000 });
+      viewport.setViewState({ center: { x: 2000, y: 3000 }, zoom: 2 });
+      expect(attributes.get("viewBox")).toBe("0 0 740 1050");
+      expect(attributes.get("preserveAspectRatio")).toBe("none");
+      expect(viewport.viewBounds).toEqual({ minX: 0, minY: 0, maxX: 740, maxY: 1050 });
+      viewport.setFixedPage(null);
+      viewport.reset();
+      viewport.panByPixels(20, 30);
+      expect(viewport.clientToBoard(rect.left, rect.top)).toEqual([-20, -30]);
+      viewport.destroy();
+    }
+  });
+
   it("rejects non-finite view state and clamps zoom to the supported range", () => {
     const svg = {
       dataset: {} as DOMStringMap,

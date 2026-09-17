@@ -42,6 +42,7 @@ import {
   OutboxLimitError,
   type OutboxRecoveryMetadata,
 } from "../persistence/outbox";
+import { SmartNoteMode } from "../smart-note/mode";
 import { type ArrangeKind, buildArrangeUpdates } from "../tools/arrange";
 import {
   buildCapturedTextUpdate,
@@ -835,6 +836,7 @@ export class BoardApp {
   private readonly creatorNames = new Map<string, string>();
   private readonly ignoredSpotlightIds = new Set<string>();
   private readonly localSpotlightIds = new Set<string>();
+  private readonly smartNote: SmartNoteMode;
   private broadcastSpotlightId: string | null = null;
   private followedSpotlight: FollowedSpotlight | null = null;
   private spotlightHeartbeatTimer: number | null = null;
@@ -1123,6 +1125,12 @@ export class BoardApp {
       api.embedSessionToken,
     );
 
+    this.smartNote = new SmartNoteMode(this.renderer, this.tools, () => void this.undo());
+    query(this.root, "[data-smart-note-open]", HTMLButtonElement).addEventListener("click", () => {
+      this.stopBroadcastingSpotlight();
+      this.stopFollowingSpotlight();
+      this.smartNote.open();
+    });
     this.bindShellEvents();
     this.model.subscribe(() => {
       this.updateStatus();
@@ -1171,6 +1179,7 @@ export class BoardApp {
     void this.closeTableCellEditor(false);
     void this.closeZoneTitleEditor(false);
     void this.closeTextEditor(false);
+    this.smartNote.destroy();
     this.socket.destroy();
     this.tools.destroy();
     this.renderer.destroy();
@@ -1217,6 +1226,7 @@ export class BoardApp {
                 </section>
               </div>
             </div>
+            <button class="topbar-button" type="button" data-smart-note-open>Smart Note</button>
             <button class="topbar-button spotlight-toggle" type="button" data-testid="spotlight-toggle" aria-label="Start Follow me" aria-pressed="false" hidden>
               <span class="spotlight-toggle-mark" aria-hidden="true"></span>
               <span class="spotlight-toggle-label">Follow me</span>
@@ -3512,6 +3522,7 @@ export class BoardApp {
       }
       return;
     }
+    if (this.smartNote.isOpen) return;
     if (this.localSpotlightIds.has(frame.spotlightId)) return;
     if (this.broadcastSpotlightId) return;
     if (this.followedSpotlight) {
@@ -5234,6 +5245,7 @@ export class BoardApp {
     }
     this.saveStatus.dataset.state = state;
     this.saveStatusText.textContent = label;
+    this.smartNote?.updateSaveStatus(label);
     const archiveButton =
       this.settingsBody.querySelector<HTMLButtonElement>("[data-archive-board]");
     if (archiveButton) archiveButton.disabled = !this.canArchiveBoard();
@@ -5898,6 +5910,7 @@ export class BoardApp {
   }
 
   private notify(message: string, kind: "info" | "warning" | "error" = "info"): void {
+    this.smartNote?.notify(message);
     const toast = document.createElement("div");
     toast.className = `toast toast-${kind}`;
     toast.setAttribute("role", kind === "error" ? "alert" : "status");
