@@ -43,9 +43,20 @@ test("line, text, styles, constrained shapes, eraser, and pen input commit canon
   await page.mouse.click(textPoint.x, textPoint.y);
   const editor = page.getByTestId("canvas-text-editor");
   await expect(editor).toBeVisible();
-  await editor.fill("Shared words");
-  await editor.press("Control+Enter");
   const text = page.locator("#drawing-area .board-item-text");
+  await editor.pressSequentially("Shared");
+  // A pause saves the text in the background without closing or blurring the editor.
+  await expect(text).toContainText("Shared");
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+  await expect(editor).toBeFocused();
+  await editor.pressSequentially(" words");
+  await expect(editor).toHaveValue("Shared words");
+  await expect(text).toContainText("Shared words");
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+  await expect(editor).toBeFocused();
+  await expect(text).toHaveCount(1);
+  await editor.press("Control+Enter");
+  await expect(editor).toHaveCount(0);
   await expect(text).toHaveCount(1);
   await expect(text).toContainText("Shared words");
   await expect(text).toHaveAttribute("fill", "#f24822");
