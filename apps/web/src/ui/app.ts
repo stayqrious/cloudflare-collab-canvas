@@ -3724,6 +3724,16 @@ export class BoardApp {
       this.stopFollowingSpotlight();
       return;
     }
+    // Escape leaves any drawing tool for Select once no menu, dialog or editor consumed it.
+    if (
+      event.key === "Escape" &&
+      !event.defaultPrevented &&
+      !isEditingTarget(event.target) &&
+      !(event.target instanceof Element && event.target.closest("dialog[open]"))
+    ) {
+      if (this.tools.tool !== "select") this.tools.setTool("select");
+      return;
+    }
     if (isEditingTarget(event.target) || !(event.ctrlKey || event.metaKey)) return;
     const key = event.key.toLowerCase();
     if (key === "z") {

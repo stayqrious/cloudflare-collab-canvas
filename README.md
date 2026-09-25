@@ -10,6 +10,10 @@ provide immutable recovery checkpoints and named snapshots.
 
 ## Space collaboration tools
 
+Press `Esc` in any drawing tool to return to **Select**. With **Select**, drag
+on empty space to pan the board, just like the **Hand** tool; tap empty space to
+clear the selection, or hold `Shift` and drag to draw a selection box.
+
 Alongside freehand drawing, shapes, and plain text, the board supports durable
 sticky notes for brainstorming, exit tickets, sorting, and feedback. Choose
 **Sticky note** or press `N`, click the board, and type immediately. A note may

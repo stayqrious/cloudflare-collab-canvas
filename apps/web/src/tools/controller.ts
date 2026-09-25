@@ -956,7 +956,13 @@ export type ToolControllerOptions = {
 };
 
 type Gesture =
-  | { kind: "pan"; pointerId: number; lastClient: Point }
+  | {
+      kind: "pan";
+      pointerId: number;
+      lastClient: Point;
+      /** Set when Select pans from empty space: a tap without movement clears the selection. */
+      selectTap?: { startClient: Point; pointerType: string };
+    }
   | {
       kind: "pencil";
       pointerId: number;
@@ -2214,10 +2220,19 @@ export class ToolController {
           this.options.notify("Wait for the grouped items to finish saving.", "info");
         }
       }
-    } else {
-      if (!event.shiftKey) this.selectOnly([]);
+    } else if (event.shiftKey) {
+      // Shift-drag on empty space draws a marquee that adds to the selection.
       this.gesture = { kind: "marquee", pointerId: event.pointerId, start: point, current: point };
       this.options.renderer.showMarquee(pointsBounds(point, point));
+    } else {
+      // Dragging empty space pans like the Hand tool; a tap still clears the selection.
+      this.gesture = {
+        kind: "pan",
+        pointerId: event.pointerId,
+        lastClient: [event.clientX, event.clientY],
+        selectTap: { startClient: [event.clientX, event.clientY], pointerType: event.pointerType },
+      };
+      this.options.renderer.setCursor(this.toolValue, true);
     }
     event.preventDefault();
   }
@@ -2342,7 +2357,17 @@ export class ToolController {
       if (point === gesture.start) await this.commitZone(gesture.operation);
       return;
     }
-    if (gesture.kind === "pan") return;
+    if (gesture.kind === "pan") {
+      if (!gesture.selectTap) return;
+      this.options.renderer.setCursor(this.toolValue, this.spaceHeld);
+      const { startClient, pointerType } = gesture.selectTap;
+      const distance = Math.hypot(
+        gesture.lastClient[0] - startClient[0],
+        gesture.lastClient[1] - startClient[1],
+      );
+      if (distance <= stickyTapMoveThreshold(pointerType, 1)) this.selectOnly([]);
+      return;
+    }
     if (gesture.kind === "pencil") {
       if (gesture.animationFrame !== null) cancelAnimationFrame(gesture.animationFrame);
       this.options.renderer.clearLocalPreview();
@@ -2570,6 +2595,9 @@ export class ToolController {
     const gesture = this.gesture ?? this.pendingLine;
     this.gesture = null;
     this.pendingLine = null;
+    if (gesture?.kind === "pan" && gesture.selectTap) {
+      this.options.renderer.setCursor(this.toolValue, this.spaceHeld);
+    }
     if (
       !gesture ||
       gesture.kind === "pan" ||
