@@ -243,14 +243,15 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   const boundaryItem = boundaryMath.locator("xpath=ancestor::*[@data-item-id][1]");
   const boundaryItemId = await boundaryItem.getAttribute("data-item-id");
   if (!boundaryItemId) throw new Error("The boundary formula has no item ID.");
-  const boundaryBox = await boundaryMath.evaluate((node) => {
-    const bounds = node.closest("foreignObject")?.getBoundingClientRect();
-    return bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null;
-  });
-  expect(boundaryBox).not.toBeNull();
-  expect((boundaryBox?.y ?? 0) + (boundaryBox?.height ?? 0)).toBeGreaterThan(
-    sectionBounds.y + sectionBounds.height,
-  );
+  // The formula's box is sized a frame after MathJax reports ready, so poll its bottom edge.
+  await expect
+    .poll(() =>
+      boundaryMath.evaluate((node) => {
+        const bounds = node.closest("foreignObject")?.getBoundingClientRect();
+        return bounds ? bounds.y + bounds.height : 0;
+      }),
+    )
+    .toBeGreaterThan(sectionBounds.y + sectionBounds.height);
   await expect
     .poll(async () =>
       page.evaluate(
