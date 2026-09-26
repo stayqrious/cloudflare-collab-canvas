@@ -1090,14 +1090,25 @@ type Gesture =
 type PinchState = {
   pointerIds: readonly [number, number];
   center: Point;
-  /** Finger spacing and zoom that the pinch scales from. */
+  /** Finger spacing and zoom when the gesture began. */
   distance: number;
   zoom: number;
-  zooming: boolean;
 };
 
 /** Relative change in finger spacing before a two-finger gesture starts zooming. */
 export const PINCH_ZOOM_THRESHOLD = 0.1;
+
+/**
+ * Zoom multiplier for a pinch whose finger spacing went from `startDistance` to `distance`.
+ * Within the threshold it is 1; beyond it, scaling continues smoothly from the threshold edge.
+ * Being a function of spacing alone, returning to the starting spacing restores the zoom.
+ */
+export function pinchZoomScale(startDistance: number, distance: number): number {
+  const ratio = distance / Math.max(1, startDistance);
+  if (ratio > 1 + PINCH_ZOOM_THRESHOLD) return ratio / (1 + PINCH_ZOOM_THRESHOLD);
+  if (ratio < 1 - PINCH_ZOOM_THRESHOLD) return ratio / (1 - PINCH_ZOOM_THRESHOLD);
+  return 1;
+}
 
 export function buildUngroupedCopyOperation(
   item: BoardItem,
@@ -1360,7 +1371,6 @@ export class ToolController {
           center: midpoint(first[1], second[1]),
           distance: Math.max(1, pointDistance(first[1], second[1])),
           zoom: this.options.renderer.viewport.zoom,
-          zooming: false,
         };
       }
       event.preventDefault();
@@ -1926,17 +1936,9 @@ export class ToolController {
     const distance = Math.max(1, pointDistance(first, second));
     const viewport = this.options.renderer.viewport;
     viewport.panByPixels(center[0] - pinch.center[0], center[1] - pinch.center[1]);
-    let next: PinchState = { ...pinch, center };
-    const change = distance / next.distance - 1;
-    if (!next.zooming && Math.abs(change) > PINCH_ZOOM_THRESHOLD) {
-      // Scale from the spacing at the threshold so zoom starts at the current level.
-      const base = next.distance * (1 + Math.sign(change) * PINCH_ZOOM_THRESHOLD);
-      next = { ...next, zooming: true, distance: base };
-    }
-    if (next.zooming) {
-      viewport.zoomAt(center[0], center[1], next.zoom * (distance / next.distance));
-    }
-    this.pinch = next;
+    const zoom = pinch.zoom * pinchZoomScale(pinch.distance, distance);
+    if (zoom !== viewport.zoom) viewport.zoomAt(center[0], center[1], zoom);
+    this.pinch = { ...pinch, center };
   }
 
   /** Applies any movement still waiting for a frame, then ends the two-finger gesture. */
