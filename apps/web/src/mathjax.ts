@@ -1,7 +1,9 @@
 import { splitTexSegments } from "@collab/geometry";
 
+import { safeHttpHref } from "./board/links";
+
 type MathJaxApi = {
-  startup?: { promise?: Promise<void> };
+  startup?: { promise?: Promise<void>; defaultReady?: () => void };
   typesetClear?: (elements: HTMLElement[]) => void;
   typesetPromise?: (elements: HTMLElement[]) => Promise<void>;
 };
@@ -62,11 +64,28 @@ async function loadMathJax(): Promise<MathJaxApi> {
         },
         renderActions: { attachSpeech: [], enrich: [], explorable: [] },
       },
-      startup: { typeset: false },
+      // Safe mode filters what TeX can put into the page: link protocols, and the style, class
+      // and ID attributes that \mmlToken, \style, \class and \cssId would otherwise pass
+      // through untouched. It has to wrap the document handler, so it and the \href package are
+      // loaded before MathJax builds that handler. secureMathLinks narrows links further.
+      safeOptions: {
+        allow: { URLs: "safe", classes: "none", cssIDs: "none", styles: "safe" },
+        safeProtocols: { http: true, https: true, file: false, javascript: false, data: false },
+      },
+      startup: {
+        typeset: false,
+        ready: () => {
+          const mathJax = window.MathJax as MathJaxApi;
+          void Promise.all([
+            import("mathjax/ui/safe.js"),
+            import("mathjax/input/tex/extensions/html.js"),
+          ]).then(() => mathJax.startup?.defaultReady?.());
+        },
+      },
       svg: { fontCache: "local" },
       tex: {
         processEscapes: true,
-        packages: { "[-]": ["autoload", "require"] },
+        packages: { "[-]": ["autoload", "require"], "[+]": ["html"] },
       },
     };
     await import("mathjax/tex-svg.js");
@@ -106,6 +125,7 @@ export function typesetMath(container: HTMLElement, options: TypesetMathOptions 
     mathJax.typesetClear?.([container]);
     await mathJax.typesetPromise?.([container]);
     if (!container.isConnected) return false;
+    secureMathLinks(container);
     labelRenderedMath(container, source);
     container.dataset.mathState = "ready";
     return true;
@@ -239,6 +259,8 @@ function measureTypesetSvg(svg: SVGSVGElement): TypesetMathSvg | null {
       : height;
   const element = svg.cloneNode(true) as SVGSVGElement;
   element.removeAttribute("style");
+  // An exported picture is opened outside the app's CSP, so its links get the same checks.
+  secureMathLinks(element);
   element.setAttribute("width", String(round(width)));
   element.setAttribute("height", String(round(height)));
   element.setAttribute("xmlns", "http://www.w3.org/2000/svg");
@@ -248,6 +270,31 @@ function measureTypesetSvg(svg: SVGSVGElement): TypesetMathSvg | null {
     height: round(height),
     baseline: round(Math.min(Math.max(baseline, 0), height)),
   };
+}
+
+const XLINK_NAMESPACE = "http://www.w3.org/1999/xlink";
+
+/**
+ * Keeps only absolute http(s) links in typeset math, the same rule plain-text links follow, and
+ * opens them in a new tab so a link never navigates the board's own frame. Anything else a
+ * formula tries to link to (relative paths, protocol-relative hosts, other schemes) is unlinked.
+ */
+export function secureMathLinks(root: ParentNode): void {
+  for (const anchor of root.querySelectorAll("a")) {
+    const raw = anchor.getAttribute("href") ?? anchor.getAttributeNS(XLINK_NAMESPACE, "href");
+    const href = raw === null ? null : safeHttpHref(raw.trim());
+    anchor.removeAttributeNS(XLINK_NAMESPACE, "href");
+    if (href === null) {
+      anchor.removeAttribute("href");
+      anchor.removeAttribute("target");
+      continue;
+    }
+    anchor.setAttribute("href", href);
+    anchor.setAttribute("target", "_blank");
+    anchor.setAttribute("rel", "noopener noreferrer");
+    // Lets the canvas treat a click on the link as following it rather than starting a drag.
+    anchor.setAttribute("data-board-link", "true");
+  }
 }
 
 function round(value: number): number {
