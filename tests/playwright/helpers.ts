@@ -103,6 +103,17 @@ export async function expandToolPermissions(surface: BoardSurface): Promise<void
   await expect(details).toHaveAttribute("open", "");
 }
 
+/** Turns on the board's browser AI tools (WebMCP), which every new board starts without. */
+export async function enableAiTools(surface: BoardSurface): Promise<void> {
+  await expect(surface.getByTestId("mcp-status-wrap")).toBeHidden();
+  await expandToolPermissions(surface);
+  const drawer = surface.getByTestId("settings-drawer");
+  await drawer.getByRole("checkbox", { name: "Enable AI tools" }).check();
+  await expect(surface.getByTestId("mcp-status-wrap")).toBeVisible();
+  await drawer.getByRole("button", { name: "Close settings" }).click();
+  await expect(drawer).toBeHidden();
+}
+
 export async function canvasPoint(
   page: Page,
   horizontal: number,

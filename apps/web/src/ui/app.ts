@@ -265,6 +265,11 @@ const FEATURE_LABELS: Readonly<Record<BoardFeatureKey, { label: string; detail: 
   organisationTemplates: { label: "Organisation templates", detail: "Shared reusable layouts" },
   voting: { label: "Voting", detail: "Vote controls on templates" },
   spotlight: { label: "Follow me", detail: "Coach-led viewport spotlight" },
+  videos: { label: "Videos", detail: "Embed YouTube and Vimeo players" },
+  aiTools: {
+    label: "AI tools",
+    detail: "Let browser AI assistants (WebMCP) read and add to this Space",
+  },
 };
 
 /**
@@ -293,7 +298,8 @@ export function webMcpWriteFeatureIssue(
   if (kind === "image") {
     return features.images ? null : "Enable images to add an image card to this Space.";
   }
-  // A video embed is a canvas text object carrying a video link, so it follows the text feature.
+  // A video embed is a canvas text object carrying a video link, so it needs text and videos.
+  if (!features.videos) return "Enable videos to embed one in this Space.";
   return features.text ? null : "Enable text to embed a video in this Space.";
 }
 
@@ -1300,6 +1306,7 @@ export class BoardApp {
   private readonly webMcpStatusText: HTMLElement;
   private readonly webMcpStatusTime: HTMLElement;
   private readonly mcpActivityMenu: HTMLElement;
+  private readonly mcpStatusWrap: HTMLElement;
   private readonly mcpActivitySummary: HTMLElement;
   private readonly mcpActivityList: HTMLOListElement;
   private readonly mcpActivityEmpty: HTMLElement;
@@ -1431,6 +1438,7 @@ export class BoardApp {
     this.webMcpStatusText = query(this.root, "[data-webmcp-status-text]", HTMLElement);
     this.webMcpStatusTime = query(this.root, "[data-webmcp-status-time]", HTMLElement);
     this.mcpActivityMenu = query(this.root, "[data-testid='mcp-activity-menu']", HTMLElement);
+    this.mcpStatusWrap = query(this.root, ".mcp-status-wrap", HTMLElement);
     this.mcpActivitySummary = query(
       this.mcpActivityMenu,
       "[data-mcp-activity-summary]",
@@ -1601,143 +1609,11 @@ export class BoardApp {
       api.embedSessionToken,
     );
 
-    this.webMcpState = webMcpRegistryState();
-    this.renderWebMcpStatus(this.webMcpState);
-    this.stopObservingWebMcp = observeWebMcpRegistry((state) => {
-      this.renderWebMcpStatus(state);
-    });
-
     this.mathFieldPanel = new MathFieldPanel({
       root: this.root,
       onChange: this.applyMathField,
       onDone: this.finishMathField,
       onFocusLeft: this.leaveMathField,
-    });
-
-    this.webMcp = new CollectiveInquiryWebMcp({
-      root: this.root,
-      getSelectedItems: () =>
-        savedAuthoritativeItems(
-          [...this.tools.selection],
-          this.model.items,
-          this.model.authoritativeItems,
-        ),
-      getBoardItems: () => [...this.model.authoritativeItems.values()],
-      getAuthoritativeItem: (itemId) => this.model.authoritativeItems.get(itemId),
-      getSequence: () => this.model.lastAppliedSeq,
-      getParticipantDisplayName: (participantId) => this.creatorNames.get(participantId) ?? null,
-      notify: (message, kind) => this.notify(message, kind),
-      canComment: () => this.canComment(),
-      canWrite: () => this.canCommit(),
-      createComment: (itemId, body, assistance) => this.commentFromWebMcp(itemId, body, assistance),
-      onWatchStateChanged: (state) => this.setAiWatchState(state),
-    });
-
-    this.educationPartnerWebMcp = new EducationPartnerWebMcp({
-      canWrite: () => this.canCommit(),
-      getSnapshot: (token) => this.webMcp?.getSnapshot(token),
-      getItemVersion: (itemId) => this.model.authoritativeItems.get(itemId)?.version,
-      getItemBounds: (itemId) => this.model.getBounds(itemId),
-      getPlacementBounds: () => this.model.boundsFor(this.model.items.keys()),
-      imagesEnabled: () => this.bootstrap.board.imagesEnabled,
-      storeVisualImages: (sources, signal) => this.storeEducationVisualImages(sources, signal),
-      commit: (operation) => this.commitAndWait(operation),
-      selectItems: (itemIds) => {
-        this.tools.setTool("select");
-        this.tools.selectOnly(itemIds);
-      },
-      notify: (message, kind) => this.notify(message, kind),
-    });
-
-    this.activityTemplateWebMcp = new ActivityTemplateWebMcp({
-      canWrite: () => this.canCommit(),
-      templateIssue: (template) =>
-        templateAvailabilityIssue(template, this.bootstrap.board.features),
-      getPlacementCenter: () => {
-        const view = this.renderer.viewport.viewState;
-        return [view.center.x, view.center.y];
-      },
-      commit: (operation) => this.commitAndWait(operation),
-      revealItems: (itemIds) => {
-        this.tools.setTool("select");
-        this.tools.selectOnly(itemIds);
-        this.renderer.viewport.fit(this.model.boundsFor(itemIds));
-      },
-      notify: (message, kind) => this.notify(message, kind),
-    });
-
-    this.boardWriteWebMcp = new BoardWriteWebMcp({
-      canWrite: () => this.canCommit(),
-      canComment: () => this.canComment(),
-      imagesEnabled: () => this.bootstrap.board.imagesEnabled,
-      featureIssue: (kind) => webMcpWriteFeatureIssue(kind, this.bootstrap.board.features),
-      getStyle: () => ({
-        stickyFill: this.style.stickyFill,
-        stickyTextColor: this.style.stickyTextColor,
-        stickyFontSize: this.style.stickyFontSize,
-        stickyOpacity: this.style.stickyOpacity,
-        textColor: this.style.color,
-        textFontSize: this.style.fontSize,
-        textFontFamily: this.style.fontFamily,
-        textOpacity: this.style.opacity,
-      }),
-      getPlacementCenter: () => this.imagePlacementCenter(),
-      itemAt: (point) => this.savedItemAt(point),
-      getSelectedItem: () => this.singleSavedSelection(),
-      resolveWatchedStep: (watchToken, stepAlias, action) => {
-        const inquiry = this.webMcp;
-        if (!inquiry) throw new Error("The board watch is not available in this browser.");
-        return inquiry.watchedStepCommentTarget(watchToken, stepAlias, action);
-      },
-      resolveWatchedStickies: (watchToken, stepAliases) => {
-        const inquiry = this.webMcp;
-        if (!inquiry) throw new Error("The board watch is not available in this browser.");
-        return inquiry.watchedStepItems(watchToken, stepAliases);
-      },
-      moveItems: (moves) => this.moveItemsFromWebMcp(moves),
-      commit: (operation) => this.commitAndWait(operation),
-      createComment: (itemId, body, assistance, media) =>
-        this.commentFromWebMcp(itemId, body, assistance, media),
-      storeImage: (imageDataUrl, signal) => this.storeWebMcpImage(imageDataUrl, signal),
-      revealItems: (itemIds) => {
-        this.tools.setTool("select");
-        this.tools.selectOnly(itemIds);
-      },
-      notify: (message, kind) => this.notify(message, kind),
-    });
-
-    this.inquiryMapWebMcp = new InquiryMapWebMcp({
-      root: this.root,
-      canWrite: () => this.canCommit(),
-      getSnapshot: (token) => this.webMcp?.getSnapshot(token),
-      getItemVersion: (itemId) => this.model.authoritativeItems.get(itemId)?.version,
-      getItemBounds: (itemId) => this.model.getBounds(itemId),
-      commit: (operation) => this.commitAndWait(operation),
-      selectItems: (itemIds) => {
-        this.tools.setTool("select");
-        this.tools.selectOnly(itemIds);
-      },
-      notify: (message, kind) => this.notify(message, kind),
-    });
-
-    this.classDecisionWebMcp = new ClassDecisionWebMcp({
-      root: this.root,
-      canWrite: () => this.canCommit(),
-      getSelectedItems: () =>
-        savedAuthoritativeItems(
-          [...this.tools.selection],
-          this.model.items,
-          this.model.authoritativeItems,
-        ),
-      getItem: (itemId) => this.model.authoritativeItems.get(itemId),
-      getItems: () => this.model.items.values(),
-      getItemBounds: (itemId) => this.model.getBounds(itemId),
-      commit: (operation) => this.commitAndWait(operation),
-      selectItems: (itemIds) => {
-        this.tools.setTool("select");
-        this.tools.selectOnly(itemIds);
-      },
-      notify: (message, kind) => this.notify(message, kind),
     });
 
     this.bindShellEvents();
@@ -1755,6 +1631,7 @@ export class BoardApp {
       updatedAt: Date.now(),
     });
     this.previewExpiryTimer = window.setInterval(() => this.expireEphemeralState(), 1_000);
+    this.syncWebMcp();
   }
 
   static async mount(root: HTMLElement, api: ApiClient, bootstrap: Bootstrap): Promise<BoardApp> {
@@ -1800,26 +1677,11 @@ export class BoardApp {
     void this.closeTableCellEditor(false);
     void this.closeZoneTitleEditor(false);
     void this.closeTextEditor(false);
-    this.pendingWebMcpCommits.finishAll(false);
     this.socket.destroy();
-    this.activityTemplateWebMcp?.destroy();
-    this.activityTemplateWebMcp = null;
-    this.boardWriteWebMcp?.destroy();
-    this.boardWriteWebMcp = null;
-    this.educationPartnerWebMcp?.destroy();
-    this.educationPartnerWebMcp = null;
-    this.classDecisionWebMcp?.destroy();
-    this.classDecisionWebMcp = null;
-    this.inquiryMapWebMcp?.destroy();
-    this.inquiryMapWebMcp = null;
-    this.webMcp?.destroy();
-    this.webMcp = null;
-    this.stopObservingWebMcp?.();
-    this.stopObservingWebMcp = null;
+    this.stopWebMcp();
     this.mathFieldPanel?.destroy();
     this.mathFieldPanel = null;
     this.mathFieldTarget = null;
-    this.setAiWatchState({ phase: "idle", expiresAt: null, watchedItemIds: new Set() });
     this.tools.destroy();
     this.renderer.destroy();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
@@ -1847,7 +1709,7 @@ export class BoardApp {
             </div>
           </div>
           <div class="topbar-actions">
-            <div class="menu-wrap mcp-status-wrap">
+            <div class="menu-wrap mcp-status-wrap" data-testid="mcp-status-wrap" hidden>
               <button class="webmcp-status" type="button" data-webmcp-status data-testid="webmcp-status" data-state="ready" data-host="unlinked" aria-haspopup="dialog" aria-controls="mcp-activity-menu" aria-expanded="false">
                 <svg class="webmcp-status-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m5 4 14 7.2-6.1 2.1-2.2 6.2L5 4Z"></path>
@@ -7135,7 +6997,175 @@ export class BoardApp {
     document.title = brandedDocumentTitle(this.bootstrap.board.title);
   }
 
+  /**
+   * Starts or stops the browser AI tools (WebMCP) to match the board's `aiTools` feature, which
+   * is off by default. While it is off nothing is registered with the browser, so no assistant
+   * can read or write the board, and the MCP status control and AI menus stay hidden.
+   */
+  private syncWebMcp(): void {
+    const enabled = this.bootstrap.board.features.aiTools;
+    this.mcpStatusWrap.hidden = !enabled;
+    if (enabled === (this.webMcp !== null)) return;
+    if (enabled) this.startWebMcp();
+    else this.stopWebMcp();
+  }
+
+  private startWebMcp(): void {
+    this.webMcpState = webMcpRegistryState();
+    this.renderWebMcpStatus(this.webMcpState);
+    this.stopObservingWebMcp = observeWebMcpRegistry((state) => {
+      this.renderWebMcpStatus(state);
+    });
+
+    this.webMcp = new CollectiveInquiryWebMcp({
+      root: this.root,
+      getSelectedItems: () =>
+        savedAuthoritativeItems(
+          [...this.tools.selection],
+          this.model.items,
+          this.model.authoritativeItems,
+        ),
+      getBoardItems: () => [...this.model.authoritativeItems.values()],
+      getAuthoritativeItem: (itemId) => this.model.authoritativeItems.get(itemId),
+      getSequence: () => this.model.lastAppliedSeq,
+      getParticipantDisplayName: (participantId) => this.creatorNames.get(participantId) ?? null,
+      notify: (message, kind) => this.notify(message, kind),
+      canComment: () => this.canComment(),
+      canWrite: () => this.canCommit(),
+      createComment: (itemId, body, assistance) => this.commentFromWebMcp(itemId, body, assistance),
+      onWatchStateChanged: (state) => this.setAiWatchState(state),
+    });
+
+    this.educationPartnerWebMcp = new EducationPartnerWebMcp({
+      canWrite: () => this.canCommit(),
+      getSnapshot: (token) => this.webMcp?.getSnapshot(token),
+      getItemVersion: (itemId) => this.model.authoritativeItems.get(itemId)?.version,
+      getItemBounds: (itemId) => this.model.getBounds(itemId),
+      getPlacementBounds: () => this.model.boundsFor(this.model.items.keys()),
+      imagesEnabled: () => this.bootstrap.board.imagesEnabled,
+      storeVisualImages: (sources, signal) => this.storeEducationVisualImages(sources, signal),
+      commit: (operation) => this.commitAndWait(operation),
+      selectItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.activityTemplateWebMcp = new ActivityTemplateWebMcp({
+      canWrite: () => this.canCommit(),
+      templateIssue: (template) =>
+        templateAvailabilityIssue(template, this.bootstrap.board.features),
+      getPlacementCenter: () => {
+        const view = this.renderer.viewport.viewState;
+        return [view.center.x, view.center.y];
+      },
+      commit: (operation) => this.commitAndWait(operation),
+      revealItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+        this.renderer.viewport.fit(this.model.boundsFor(itemIds));
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.boardWriteWebMcp = new BoardWriteWebMcp({
+      canWrite: () => this.canCommit(),
+      canComment: () => this.canComment(),
+      imagesEnabled: () => this.bootstrap.board.imagesEnabled,
+      featureIssue: (kind) => webMcpWriteFeatureIssue(kind, this.bootstrap.board.features),
+      getStyle: () => ({
+        stickyFill: this.style.stickyFill,
+        stickyTextColor: this.style.stickyTextColor,
+        stickyFontSize: this.style.stickyFontSize,
+        stickyOpacity: this.style.stickyOpacity,
+        textColor: this.style.color,
+        textFontSize: this.style.fontSize,
+        textFontFamily: this.style.fontFamily,
+        textOpacity: this.style.opacity,
+      }),
+      getPlacementCenter: () => this.imagePlacementCenter(),
+      itemAt: (point) => this.savedItemAt(point),
+      getSelectedItem: () => this.singleSavedSelection(),
+      resolveWatchedStep: (watchToken, stepAlias, action) => {
+        const inquiry = this.webMcp;
+        if (!inquiry) throw new Error("The board watch is not available in this browser.");
+        return inquiry.watchedStepCommentTarget(watchToken, stepAlias, action);
+      },
+      resolveWatchedStickies: (watchToken, stepAliases) => {
+        const inquiry = this.webMcp;
+        if (!inquiry) throw new Error("The board watch is not available in this browser.");
+        return inquiry.watchedStepItems(watchToken, stepAliases);
+      },
+      moveItems: (moves) => this.moveItemsFromWebMcp(moves),
+      commit: (operation) => this.commitAndWait(operation),
+      createComment: (itemId, body, assistance, media) =>
+        this.commentFromWebMcp(itemId, body, assistance, media),
+      storeImage: (imageDataUrl, signal) => this.storeWebMcpImage(imageDataUrl, signal),
+      revealItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.inquiryMapWebMcp = new InquiryMapWebMcp({
+      root: this.root,
+      canWrite: () => this.canCommit(),
+      getSnapshot: (token) => this.webMcp?.getSnapshot(token),
+      getItemVersion: (itemId) => this.model.authoritativeItems.get(itemId)?.version,
+      getItemBounds: (itemId) => this.model.getBounds(itemId),
+      commit: (operation) => this.commitAndWait(operation),
+      selectItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+
+    this.classDecisionWebMcp = new ClassDecisionWebMcp({
+      root: this.root,
+      canWrite: () => this.canCommit(),
+      getSelectedItems: () =>
+        savedAuthoritativeItems(
+          [...this.tools.selection],
+          this.model.items,
+          this.model.authoritativeItems,
+        ),
+      getItem: (itemId) => this.model.authoritativeItems.get(itemId),
+      getItems: () => this.model.items.values(),
+      getItemBounds: (itemId) => this.model.getBounds(itemId),
+      commit: (operation) => this.commitAndWait(operation),
+      selectItems: (itemIds) => {
+        this.tools.setTool("select");
+        this.tools.selectOnly(itemIds);
+      },
+      notify: (message, kind) => this.notify(message, kind),
+    });
+  }
+
+  private stopWebMcp(): void {
+    this.pendingWebMcpCommits.finishAll(false);
+    this.activityTemplateWebMcp?.destroy();
+    this.activityTemplateWebMcp = null;
+    this.boardWriteWebMcp?.destroy();
+    this.boardWriteWebMcp = null;
+    this.educationPartnerWebMcp?.destroy();
+    this.educationPartnerWebMcp = null;
+    this.classDecisionWebMcp?.destroy();
+    this.classDecisionWebMcp = null;
+    this.inquiryMapWebMcp?.destroy();
+    this.inquiryMapWebMcp = null;
+    this.webMcp?.destroy();
+    this.webMcp = null;
+    this.stopObservingWebMcp?.();
+    this.stopObservingWebMcp = null;
+    this.closeMcpActivityMenu();
+    this.setAiWatchState({ phase: "idle", expiresAt: null, watchedItemIds: new Set() });
+  }
+
   private updatePermissions(): void {
+    this.syncWebMcp();
     const canEdit = this.canCommit();
     if (!canEdit) this.tools.cancelActiveGesture();
     const archived = this.phase === "archived";
@@ -7244,7 +7274,7 @@ export class BoardApp {
         (!canEdit || !enabled || (name === "image" && this.imageUploadInFlight));
     }
     const videoButton = query(this.root, "[data-video-embed]", HTMLButtonElement);
-    const videoEnabled = this.bootstrap.board.features.text;
+    const videoEnabled = this.bootstrap.board.features.text && this.bootstrap.board.features.videos;
     videoButton.hidden = !videoEnabled;
     videoButton.disabled = !canEdit || !videoEnabled;
     if (videoButton.disabled && this.videoEmbedDialog.open) this.videoEmbedDialog.close();

@@ -1,4 +1,3 @@
-import { DEFAULT_BOARD_FEATURES } from "@collab/protocol";
 import { safeLog } from "./logging";
 import type { DurableObjectTelemetryContext } from "./telemetry";
 
@@ -7,6 +6,15 @@ export interface SchemaMigration {
   name: string;
   sql: string;
 }
+
+/**
+ * The board feature map exactly as migration 11 shipped it. A migration's SQL is
+ * immutable once applied, so this literal must never track DEFAULT_BOARD_FEATURES:
+ * changing a default there would otherwise rewrite history and leave a board that
+ * migrates late disagreeing with its mirrored `images_enabled` column.
+ */
+const MIGRATION_11_DEFAULT_FEATURES_JSON =
+  '{"pencil":true,"line":true,"lineSnapping":true,"square":true,"rectangle":true,"triangle":true,"rhombus":true,"pentagon":true,"hexagon":true,"circle":true,"text":true,"stickyNotes":true,"stamps":true,"images":false,"tables":true,"sections":true,"protractor":true,"eraser":true,"partialEraser":true,"objectTransforms":true,"grouping":true,"templates":true,"organisationTemplates":true,"voting":true,"spotlight":true}';
 
 export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
   {
@@ -352,7 +360,7 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
     name: "board_feature_settings",
     sql: `
       ALTER TABLE board ADD COLUMN features_json TEXT NOT NULL
-        DEFAULT '${JSON.stringify(DEFAULT_BOARD_FEATURES)}'
+        DEFAULT '${MIGRATION_11_DEFAULT_FEATURES_JSON}'
         CHECK (json_valid(features_json));
 
       -- Image uploads predate the complete feature map. Carry their effective

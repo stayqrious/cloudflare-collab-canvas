@@ -628,6 +628,13 @@ export class BoardRoom extends DurableObject<Env> {
       if (!canComment(board.drawing_policy, access.role)) {
         throw new BoardDomainError("FORBIDDEN", "Commenting is not allowed for your role.");
       }
+      const features = featuresForBoard(board);
+      if (assistance !== null && !features.aiTools) {
+        throw new BoardDomainError("FORBIDDEN", "AI tools are disabled for this board.");
+      }
+      if (media?.kind === "video" && !features.videos) {
+        throw new BoardDomainError("FORBIDDEN", "Video embeds are disabled for this board.");
+      }
       const target = readItem(this.#sql, itemId);
       if (target === undefined || target.deleted) {
         throw new HttpError(404, "NOT_FOUND", "The comment target no longer exists.");
@@ -6902,6 +6909,12 @@ function assertOperationFeaturesEnabled(
         throw new BoardDomainError("FORBIDDEN", "Grouping is disabled for this board.");
       }
       assertItemFeatureEnabled(features, child.item as { kind: string; geometry?: unknown });
+      if ((child.item as { assistedBy?: unknown }).assistedBy !== undefined && !features.aiTools) {
+        throw new BoardDomainError("FORBIDDEN", "AI tools are disabled for this board.");
+      }
+      if (embedsVideo(child.item.geometry) && !features.videos) {
+        throw new BoardDomainError("FORBIDDEN", "Video embeds are disabled for this board.");
+      }
       if (
         geometryContainsVisiblePaths(child.item.geometry) &&
         (!features.eraser || !features.partialEraser)
@@ -6934,6 +6947,13 @@ function assertOperationFeaturesEnabled(
         (!features.eraser || !features.partialEraser)
       ) {
         throw new BoardDomainError("FORBIDDEN", "Partial erasing is disabled for this board.");
+      }
+      if (
+        embedsVideo(child.patch.geometry) &&
+        !features.videos &&
+        !(source !== undefined && !source.deleted && embedsVideo(source.item.geometry))
+      ) {
+        throw new BoardDomainError("FORBIDDEN", "Video embeds are disabled for this board.");
       }
       if (source !== undefined && !source.deleted && child.patch.geometry !== undefined) {
         const currentFeature = itemFeature(source.item as { kind: string; geometry?: unknown });
@@ -7037,6 +7057,10 @@ function visiblePathsChanged(currentGeometry: unknown, nextGeometry: unknown): b
 
 function geometryContainsVisiblePaths(geometry: unknown): boolean {
   return isRecord(geometry) && Array.isArray(geometry.visiblePaths);
+}
+
+function embedsVideo(geometry: unknown): boolean {
+  return isRecord(geometry) && geometry.embed === "video";
 }
 
 function assertItemFeatureEnabled(
