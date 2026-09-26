@@ -36,7 +36,7 @@ test("captures AI feedback on a mistaken hand-drawn quadratic", async ({ page },
     await page.mouse.click(point.x, point.y);
     const editor = page.getByTestId("canvas-text-editor");
     await editor.fill(text);
-    await editor.press("Enter");
+    await editor.press("Control+Enter");
     await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
   };
 

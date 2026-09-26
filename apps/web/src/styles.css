@@ -1500,6 +1500,10 @@ button:disabled {
   vector-effect: non-scaling-stroke;
 }
 
+.board-canvas[data-pointer-active] iframe {
+  pointer-events: none;
+}
+
 .video-embed-drag-frame {
   fill: none;
   stroke: transparent;

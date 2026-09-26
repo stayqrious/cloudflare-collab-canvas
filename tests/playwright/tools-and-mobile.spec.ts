@@ -253,12 +253,15 @@ test("board shortcuts stay disabled while text and sticky editors are active", a
     padding: "3px 5px",
     fontSize: "20px",
   });
-  await textEditor.press("Control+Enter");
+  const singleLineHeight = await textEditor.evaluate((node) => node.clientHeight);
+  await textEditor.press("Enter");
   await expect(textEditor).toBeVisible();
   await expect(textEditor).toBeFocused();
   await expect(textEditor).toHaveValue(`Text ${shortcutText}\n`);
   await textEditor.type("Continued");
-  await textEditor.press("Enter");
+  // The one-line box grows with each new line rather than scrolling.
+  expect(await textEditor.evaluate((node) => node.clientHeight)).toBeGreaterThan(singleLineHeight);
+  await textEditor.press("Escape");
   await expect(textEditor).toHaveCount(0);
   await expect(page.getByTestId("tool-select")).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#drawing-area .board-item-text")).toContainText(
@@ -459,7 +462,7 @@ test("the complete board remains usable at a 320px viewport", async ({ page }, t
   await page.getByRole("button", { name: /^Text/u }).click();
   await page.mouse.click(textPoint.x, textPoint.y);
   await page.getByTestId("canvas-text-editor").fill("Mobile note");
-  await page.getByTestId("canvas-text-editor").press("Enter");
+  await page.getByTestId("canvas-text-editor").press("Control+Enter");
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
   await page.getByTestId("tool-select").click();
   await page.locator("#drawing-area .board-item-text").click();
