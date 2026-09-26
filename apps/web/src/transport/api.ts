@@ -358,6 +358,13 @@ export class ApiClient {
     return parseBoardComment(result);
   }
 
+  async deleteComment(boardId: string, commentId: string): Promise<void> {
+    await this.request<unknown>(
+      `/api/v1/boards/${encodeURIComponent(boardId)}/comments/${encodeURIComponent(commentId)}`,
+      { method: "DELETE" },
+    );
+  }
+
   async members(boardId: string): Promise<Member[]> {
     const result = await this.request<unknown>(
       `/api/v1/boards/${encodeURIComponent(boardId)}/members`,

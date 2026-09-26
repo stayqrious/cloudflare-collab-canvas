@@ -82,20 +82,20 @@ describe("videoEmbedFromText", () => {
   it("normalizes public Vimeo links", () => {
     expect(videoEmbedFromText("https://vimeo.com/76979871")).toMatchObject({
       provider: "vimeo",
-      embedUrl: "https://player.vimeo.com/video/76979871",
+      embedUrl: "https://player.vimeo.com/video/76979871?dnt=1",
     });
   });
 
   it("preserves Vimeo unlisted-video hashes", () => {
     expect(videoEmbedFromText("https://vimeo.com/76979871/abc123def4")).toMatchObject({
       provider: "vimeo",
-      embedUrl: "https://player.vimeo.com/video/76979871?h=abc123def4",
+      embedUrl: "https://player.vimeo.com/video/76979871?h=abc123def4&dnt=1",
     });
     expect(
       videoEmbedFromText("https://player.vimeo.com/video/76979871?h=abc123def4"),
     ).toMatchObject({
       provider: "vimeo",
-      embedUrl: "https://player.vimeo.com/video/76979871?h=abc123def4",
+      embedUrl: "https://player.vimeo.com/video/76979871?h=abc123def4&dnt=1",
     });
   });
 

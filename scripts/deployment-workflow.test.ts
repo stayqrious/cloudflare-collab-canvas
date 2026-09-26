@@ -9,7 +9,7 @@ function occurrences(source: string, value: string): number {
 }
 
 describe("deployment and CI workflows", () => {
-  it("runs validation automatically and keeps browser E2E manual-only", () => {
+  it("runs validation automatically and browser E2E on pull requests and dispatch", () => {
     expect(ci).toContain("workflow_dispatch:");
     expect(ci).toContain("pull_request:\n    branches: [main]");
     expect(ci).toContain("push:\n    branches: [main]");
@@ -21,8 +21,9 @@ describe("deployment and CI workflows", () => {
     );
     expect(ci).toContain("npm run check");
     expect(ci).toContain("npm run cf:types -- --check");
-    expect(ci).toContain("browser:\n    if: github.event_name == 'workflow_dispatch'");
-    expect(ci).toContain("npm run test:e2e");
+    expect(ci).toContain("browser:\n    if: github.event_name != 'push'");
+    expect(ci).toContain("npm run test:e2e -- --project=chromium --project=mobile-chromium");
+    expect(ci).toContain("run: npm run test:e2e\n");
   });
 
   it("deploys every staging and main push at its exact SHA once the full check passes", () => {

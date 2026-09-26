@@ -7884,6 +7884,67 @@ function loggedEvents(
 }
 
 describe("object comments", () => {
+  it("lets the author delete a comment and limits how fast one participant can post", async () => {
+    const stub = env.BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    const owner = await connect(stub, actorId);
+    const itemId = "018f0000-0000-7000-8000-000000000d30";
+    owner.socket.send(
+      JSON.stringify(
+        createCommit(
+          "018f0000-0000-7000-8000-000000000d31",
+          "018f0000-0000-7000-8000-000000000d32",
+          itemId,
+        ),
+      ),
+    );
+    await owner.next((frame) => frame.t === "server.action" && frame.seq === 1);
+    const post = (body: string) =>
+      stub.fetch(
+        internalRequest(`/api/v1/boards/${boardId}/comments`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ itemId, body }),
+        }),
+      );
+
+    const created = await post("Please remove this.");
+    expect(created.status).toBe(201);
+    const { id: commentId } = (await created.json()) as { id: string };
+
+    const stranger = await stub.fetch(
+      internalActorRequest(
+        "018f0000-0000-7000-8000-00000000dead",
+        `/api/v1/boards/${boardId}/comments/${commentId}`,
+        { method: "DELETE" },
+      ),
+    );
+    expect([401, 403]).toContain(stranger.status);
+    await stranger.arrayBuffer();
+
+    const deleted = await stub.fetch(
+      internalRequest(`/api/v1/boards/${boardId}/comments/${commentId}`, { method: "DELETE" }),
+    );
+    expect(deleted.status).toBe(204);
+    const listed = await stub.fetch(internalRequest(`/api/v1/boards/${boardId}/comments`));
+    expect(((await listed.json()) as { comments: unknown[] }).comments).toEqual([]);
+    const again = await stub.fetch(
+      internalRequest(`/api/v1/boards/${boardId}/comments/${commentId}`, { method: "DELETE" }),
+    );
+    expect(again.status).toBe(404);
+    await again.arrayBuffer();
+
+    // The first comment above used one of the ten-comment burst.
+    for (let index = 0; index < 9; index += 1) {
+      const response = await post(`Idea ${index}`);
+      expect(response.status).toBe(201);
+      await response.arrayBuffer();
+    }
+    const flooded = await post("One too many");
+    expect(flooded.status).toBe(429);
+    expect(await flooded.json()).toMatchObject({ error: { code: "RATE_LIMITED" } });
+  });
+
   afterEach(async () => reset());
   it("keeps comments attached through moves, orphans them on delete, and resolves them", async () => {
     const stub = env.BOARD_ROOMS.getByName(boardId);
