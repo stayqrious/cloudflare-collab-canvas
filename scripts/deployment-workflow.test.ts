@@ -25,10 +25,13 @@ describe("deployment and CI workflows", () => {
     expect(ci).toContain("npm run test:e2e");
   });
 
-  it("deploys only direct staging and main pushes at their exact SHA", () => {
-    expect(deploy).toContain("branches: [staging, main]");
+  it("deploys every staging and main push at its exact SHA once the full check passes", () => {
+    expect(deploy).toContain("push:\n    branches: [staging, main]");
     expect(deploy).not.toContain("workflow_run");
-    expect(occurrences(deploy, "ref: $" + "{{ github.sha }}")).toBe(2);
+    expect(occurrences(deploy, "ref: $" + "{{ github.sha }}")).toBe(3);
+    expect(deploy).toContain("  validate:\n");
+    expect(occurrences(deploy, "needs: validate")).toBe(2);
+    expect(occurrences(deploy, "npm run check")).toBe(1);
     expect(deploy).toContain("if: github.ref == 'refs/heads/staging'");
     expect(deploy).toContain("if: github.ref == 'refs/heads/main'");
   });
@@ -62,7 +65,6 @@ describe("deployment and CI workflows", () => {
   it("uses only a small post-deploy health probe", () => {
     expect(occurrences(deploy, "for attempt in 1 2 3 4 5")).toBe(2);
     expect(occurrences(deploy, ".ok == true and .service ==")).toBe(2);
-    expect(deploy).not.toContain("npm run check");
     expect(deploy).not.toContain("test:e2e");
     expect(deploy).not.toContain("load:smoke");
     expect(deploy).not.toContain("cloudflare/staging");

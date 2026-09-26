@@ -16,11 +16,12 @@ const SECRET_NAMES = [
   "SESSION_SIGNING_KEY_CURRENT",
   "SESSION_SIGNING_KEY_PREVIOUS",
 ] as const;
+// APP_HOSTNAME is deliberately absent: it is a public DNS name the product's own pages and docs
+// mention, so treating it as private only made the check fail once it was configured.
 const PRIVATE_CONFIGURATION_NAMES = [
   "R2_BUCKET_NAME",
   "R2_ASSET_BUCKET_NAME",
   "CLOUDFLARE_WORKER_NAME",
-  "APP_HOSTNAME",
 ] as const;
 const BUILD_DIRECTORIES = ["apps/web/dist", "dist/worker"] as const;
 const GENERATED_BUILD_METADATA = new Set(["dist/worker/README.md"]);

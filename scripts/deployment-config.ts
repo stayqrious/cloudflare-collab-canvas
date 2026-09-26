@@ -183,6 +183,12 @@ export function writeGeneratedWranglerConfig(configuration: DeploymentConfigurat
   return path;
 }
 
+function jurisdictionBinding(configuration: DeploymentConfiguration): { jurisdiction?: string } {
+  return configuration.jurisdiction === "default"
+    ? {}
+    : { jurisdiction: configuration.jurisdiction };
+}
+
 function wranglerConfiguration(configuration: DeploymentConfiguration): Record<string, unknown> {
   const local = configuration.environment === "development";
   const workersDev = local || configuration.hostname.endsWith(".workers.dev");
@@ -210,9 +216,19 @@ function wranglerConfiguration(configuration: DeploymentConfiguration): Record<s
       BoardRoom: { type: "durable-object", storage: "sqlite" },
       OrganisationRoom: { type: "durable-object", storage: "sqlite" },
     },
+    // Wrangler binds the default jurisdiction when this is absent, so an eu or fedramp
+    // bucket that bootstrap created would otherwise never bind.
     r2_buckets: [
-      { binding: "BOARD_SNAPSHOTS", bucket_name: configuration.bucketName },
-      { binding: "BOARD_ASSETS", bucket_name: configuration.assetBucketName },
+      {
+        binding: "BOARD_SNAPSHOTS",
+        bucket_name: configuration.bucketName,
+        ...jurisdictionBinding(configuration),
+      },
+      {
+        binding: "BOARD_ASSETS",
+        bucket_name: configuration.assetBucketName,
+        ...jurisdictionBinding(configuration),
+      },
     ],
     vars: {
       APP_HOSTNAME: configuration.hostname,
