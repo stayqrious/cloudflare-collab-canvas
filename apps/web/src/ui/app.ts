@@ -108,6 +108,7 @@ import type {
   TextFontFamily,
   TextFontStyle,
   TextFontWeight,
+  TextStyle,
   ToolName,
 } from "../types";
 import { canRoleComment, canRoleDraw, createId, PROTOCOL_VERSION } from "../types";
@@ -420,6 +421,8 @@ type StyleState = {
 };
 
 type StickyDraftRecovery = {
+  /** Plain-text drafts share the sticky recovery queue; absent means a sticky note. */
+  mode?: "text";
   itemId?: string;
   draftItemId: string;
   point: Point;
@@ -427,6 +430,26 @@ type StickyDraftRecovery = {
   selectionStart: number;
   selectionEnd: number;
 };
+
+/**
+ * A plain-text editing session. Text is saved in the background after each pause in
+ * typing while the editor stays open and focused. Each save waits for the previous one
+ * to be acknowledged so the next update can carry the server-assigned item version.
+ */
+type TextSaveSession = {
+  itemId: string;
+  point: Point;
+  style: TextStyle;
+  context: CapturedTextEdit | null;
+  createdHere: boolean;
+  savedText: string;
+  pendingText: string | null;
+  inflight: { commandId: string; text: string } | null;
+  queueing: boolean;
+  open: boolean;
+};
+
+const TEXT_AUTOSAVE_DELAY_MS = 500;
 
 export const IMAGE_UPLOAD_MIME_TYPES = [
   "image/png",
@@ -1168,6 +1191,9 @@ export class BoardApp {
   private textEditContext: CapturedTextEdit | null = null;
   private textEditorMode: "text" | "sticky" | null = null;
   private textEditorPreview: (() => void) | null = null;
+  private textEditorTimer: number | null = null;
+  private textSaveSession: TextSaveSession | null = null;
+  private readonly textSaveCommands = new Map<string, TextSaveSession>();
   private textEditorClosing = false;
   private textEditorCloseAttempt = 0;
   private imageUploadInFlight = false;
@@ -1752,6 +1778,8 @@ export class BoardApp {
     this.clearFollowingSpotlight();
     this.unsubscribeViewport?.();
     this.unsubscribeViewport = null;
+    if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
+    this.textSaveCommands.clear();
     this.pendingStickyDrafts.clear();
     this.rejectedStickyDrafts.length = 0;
     this.pendingTableCellDrafts.clear();
@@ -4330,6 +4358,13 @@ export class BoardApp {
       );
       this.model.discardOptimistic();
       for (const command of commands) this.finishWebMcpCommit(command.commandId, false);
+      for (const command of commands) {
+        const session = this.textSaveCommands.get(command.commandId);
+        if (!session) continue;
+        this.textSaveCommands.delete(command.commandId);
+        session.inflight = null;
+        session.pendingText = null;
+      }
       this.notify("Unsaved edits were discarded. The shared board is unchanged.", "info");
     } catch {
       this.notify(
@@ -4476,6 +4511,7 @@ export class BoardApp {
         this.pendingZoneTitleDrafts.delete(action.commandId);
         this.model.reject(action.commandId);
         this.finishWebMcpCommit(action.commandId, false);
+        this.settleTextSave(action.commandId, true);
         void this.outbox.remove(this.bootstrap.board.id, this.bootstrap.actor.id, action.commandId);
         this.updateStatus();
         return;
@@ -4495,6 +4531,7 @@ export class BoardApp {
       this.bootstrap.board.latestSeq = action.seq;
       if (result.acknowledged) {
         this.finishWebMcpCommit(action.commandId, true);
+        this.settleTextSave(action.commandId, true);
         this.pendingStickyDrafts.delete(action.commandId);
         this.pendingTableCellDrafts.delete(action.commandId);
         this.pendingZoneTitleDrafts.delete(action.commandId);
@@ -4520,13 +4557,15 @@ export class BoardApp {
     let stickyDraft: StickyDraftRecovery | undefined;
     let tableCellDraft: TableCellDraftRecovery | undefined;
     let zoneTitleDraft: ZoneTitleDraftRecovery | undefined;
+    let textSave: "open" | "recovered" | "dropped" | null = null;
     if (commandId) {
       const pendingCommand = this.model.pendingCommands.find(
         (command) => command.commandId === commandId,
       );
+      const ownsTextSave = this.textSaveCommands.has(commandId);
       stickyDraft =
         this.pendingStickyDrafts.get(commandId) ??
-        (pendingCommand ? stickyDraftFromOperation(pendingCommand.op) : undefined);
+        (pendingCommand && !ownsTextSave ? stickyDraftFromOperation(pendingCommand.op) : undefined);
       tableCellDraft = this.pendingTableCellDrafts.get(commandId);
       zoneTitleDraft = this.pendingZoneTitleDrafts.get(commandId);
       this.pendingStickyDrafts.delete(commandId);
@@ -4535,6 +4574,7 @@ export class BoardApp {
       this.model.reject(commandId);
       this.finishWebMcpCommit(commandId, false);
       void this.outbox.remove(this.bootstrap.board.id, this.bootstrap.actor.id, commandId);
+      if (ownsTextSave) textSave = this.settleTextSave(commandId, false);
     }
     if (stickyDraft) this.recoverStickyDraft(stickyDraft);
     if (tableCellDraft) this.recoverTableCellDraft(tableCellDraft);
@@ -4565,13 +4605,22 @@ export class BoardApp {
     const message =
       friendly[code] ??
       (typeof frame.message === "string" ? frame.message : "The edit was not saved.");
+    if (textSave === "open") {
+      this.notify(`${message} Your text is still open, so you can keep typing.`, "warning");
+      this.updateStatus();
+      return;
+    }
     const retainedDraft = stickyDraft
-      ? "sticky draft"
-      : tableCellDraft
-        ? "table cell draft"
-        : zoneTitleDraft
-          ? "section title draft"
-          : null;
+      ? stickyDraft.mode === "text"
+        ? "text draft"
+        : "sticky draft"
+      : textSave === "recovered"
+        ? "text draft"
+        : tableCellDraft
+          ? "table cell draft"
+          : zoneTitleDraft
+            ? "section title draft"
+            : null;
     this.notify(
       retainedDraft
         ? `${message} Your ${retainedDraft} was retained${this.canCommit() ? " and reopened" : " until editing is available"}.`
@@ -4959,8 +5008,11 @@ export class BoardApp {
     const style = this.style;
     const textItem = item?.kind === "text" ? item : undefined;
     const stickyItem = item?.kind === "sticky" ? item : undefined;
-    const mode =
-      recovery || stickyItem || (!item && this.tools.tool === "sticky") ? "sticky" : "text";
+    const mode = recovery
+      ? (recovery.mode ?? "sticky")
+      : stickyItem || (!item && this.tools.tool === "sticky")
+        ? "sticky"
+        : "text";
     const editedItem = stickyItem ?? textItem;
     this.textEditorMode = mode;
     this.textEditContext = editedItem
@@ -5008,16 +5060,14 @@ export class BoardApp {
           : "Add text",
     );
     editor.maxLength = mode === "sticky" ? MAX_STICKY_TEXT_CODE_POINTS * 2 : 5_000;
-    editor.rows = mode === "sticky" ? 6 : 1;
+    editor.rows = mode === "sticky" ? 6 : 2;
     editor.value = recovery?.text ?? editedItem?.geometry.text ?? "";
     editor.dataset.boardX = String(textPoint[0]);
     editor.dataset.boardY = String(textPoint[1]);
     if (!editedItem) editor.dataset.draftItemId = recovery?.draftItemId ?? createId();
     editor.placeholder = mode === "sticky" ? "Add an idea…" : "Add text";
-    if (mode === "text") {
-      editor.title = "Enter to add · Ctrl/⌘ Enter for a new line";
-      editor.setAttribute("aria-keyshortcuts", "Enter Control+Enter Meta+Enter");
-    }
+    editor.title = "Esc or Ctrl/⌘ Enter to finish · Enter for a new line";
+    editor.setAttribute("aria-keyshortcuts", "Escape Control+Enter Meta+Enter");
     const zoom = this.renderer.viewport.zoom;
     if (mode === "sticky") {
       const editorWidth = Math.min(
@@ -5053,6 +5103,28 @@ export class BoardApp {
     }
     document.body.append(editor);
     this.textEditor = editor;
+    this.textSaveSession =
+      mode === "text"
+        ? {
+            itemId: textItem?.id ?? editor.dataset.draftItemId ?? createId(),
+            point: textPoint,
+            style: {
+              kind: "text",
+              color: style.color,
+              fontSize: style.fontSize,
+              fontFamily: style.fontFamily,
+              opacity: style.opacity,
+            },
+            context: this.textEditContext,
+            createdHere: !textItem,
+            savedText: textItem?.geometry.text ?? "",
+            pendingText: null,
+            inflight: null,
+            queueing: false,
+            open: true,
+          }
+        : null;
+    const textSession = this.textSaveSession;
 
     const preview = (): void => {
       if (mode === "sticky") {
@@ -5076,7 +5148,7 @@ export class BoardApp {
       );
     };
     this.textEditorPreview = preview;
-    const schedule = (): void => {
+    const onInput = (): void => {
       if (mode === "sticky") {
         const value = clampStickyText(editor.value);
         if (value !== editor.value) {
@@ -5084,13 +5156,21 @@ export class BoardApp {
           editor.value = value;
           editor.setSelectionRange(cursor, cursor);
         }
-        preview();
-        return;
       }
       preview();
+      if (!textSession) return;
+      // Save after a pause in typing without closing or blurring the editor.
+      if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
+      this.textEditorTimer = window.setTimeout(() => {
+        this.textEditorTimer = null;
+        // While the board cannot accept edits the text simply stays in the editor.
+        if (!textSession.open || !editor.value || !this.canCommit()) return;
+        textSession.pendingText = editor.value;
+        void this.flushTextSave(textSession);
+      }, TEXT_AUTOSAVE_DELAY_MS);
     };
-    editor.addEventListener("input", schedule);
-    this.bindMathField(editor, (save) => void this.closeTextEditor(save), schedule);
+    editor.addEventListener("input", onInput);
+    this.bindMathField(editor, (save) => void this.closeTextEditor(save), onInput);
     editor.addEventListener("blur", (event) => {
       // Reaching for the maths keyboard is not leaving the editor; the panel finishes the edit
       // when focus leaves it too.
@@ -5098,22 +5178,10 @@ export class BoardApp {
       void this.closeTextEditor(true);
     });
     editor.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
+      if (event.isComposing) return;
+      if (event.key === "Escape" || (event.key === "Enter" && (event.ctrlKey || event.metaKey))) {
         event.preventDefault();
-        void this.closeTextEditor(false);
-      } else if (event.key === "Enter" && !event.isComposing) {
-        if (mode === "text") {
-          event.preventDefault();
-          if (event.ctrlKey || event.metaKey) {
-            editor.setRangeText("\n", editor.selectionStart, editor.selectionEnd, "end");
-            schedule();
-          } else {
-            void this.closeTextEditor(true);
-          }
-        } else if (event.ctrlKey || event.metaKey) {
-          event.preventDefault();
-          void this.closeTextEditor(true);
-        }
+        void this.finishTextEditing();
       }
     });
     preview();
@@ -5128,20 +5196,28 @@ export class BoardApp {
     const editor = this.textEditor;
     if (!editor) return;
     this.dismissMathField(editor);
+    const textSession = this.textSaveSession;
+    if (textSession) {
+      // The session outlives the editor until its final save is acknowledged.
+      textSession.pendingText = save ? editor.value : null;
+      this.discardTextEditor(editor);
+      await this.flushTextSave(textSession);
+      return;
+    }
     if (!save) {
       this.discardTextEditor(editor);
       return;
     }
     if (this.textEditorClosing) return;
 
+    // Plain text is handled by its save session above; only sticky notes remain.
     const context = this.textEditContext;
-    const mode = this.textEditorMode;
-    if (mode === null) {
+    if (this.textEditorMode !== "sticky") {
       this.discardTextEditor(editor);
       return;
     }
-    const value = mode === "sticky" ? clampStickyText(editor.value) : editor.value;
-    if (mode === "text" && !value) {
+    const value = clampStickyText(editor.value);
+    if (context && value === context.geometry.text) {
       this.discardTextEditor(editor);
       return;
     }
@@ -5155,51 +5231,26 @@ export class BoardApp {
           this.model.authoritativeItems.values(),
           this.bootstrap.board.features.grouping,
         )
-      : mode === "sticky"
-        ? buildStickyCreateOperation(draftItemId, point, this.style, value)
-        : {
-            kind: "item.create",
-            item: {
-              id: draftItemId,
-              kind: "text",
-              style: {
-                kind: "text",
-                color: this.style.color,
-                fontSize: this.style.fontSize,
-                fontFamily: this.style.fontFamily,
-                opacity: this.style.opacity,
-              },
-              transform: [1, 0, 0, 1, 0, 0],
-              geometry: { x: point[0], y: point[1], text: value },
-            },
-          };
+      : buildStickyCreateOperation(draftItemId, point, this.style, value);
     const attempt = ++this.textEditorCloseAttempt;
     const selectionStart = editor.selectionStart;
     const selectionEnd = editor.selectionEnd;
-    const stickyDraft: StickyDraftRecovery | undefined =
-      mode === "sticky"
-        ? {
-            ...(context ? { itemId: context.itemId } : {}),
-            draftItemId: createId(),
-            point,
-            text: value,
-            selectionStart,
-            selectionEnd,
-          }
-        : undefined;
+    const stickyDraft: StickyDraftRecovery = {
+      ...(context ? { itemId: context.itemId } : {}),
+      draftItemId: createId(),
+      point,
+      text: value,
+      selectionStart,
+      selectionEnd,
+    };
     this.textEditorClosing = true;
     editor.readOnly = true;
     editor.setAttribute("aria-busy", "true");
 
     let accepted = false;
     try {
-      accepted = await this.commit(
-        operation,
-        createId(),
-        undefined,
-        stickyDraft
-          ? (commandId) => this.pendingStickyDrafts.set(commandId, stickyDraft)
-          : undefined,
+      accepted = await this.commit(operation, createId(), undefined, (commandId) =>
+        this.pendingStickyDrafts.set(commandId, stickyDraft),
       );
     } catch {
       this.notify("The edit could not be saved. Your draft is still open.", "error");
@@ -5208,10 +5259,6 @@ export class BoardApp {
     if (this.textEditor !== editor || attempt !== this.textEditorCloseAttempt) return;
     this.textEditorClosing = false;
     if (accepted) {
-      if ((mode === "sticky" || mode === "text") && context === null) {
-        this.tools.setTool("select");
-        this.tools.selectOnly([draftItemId]);
-      }
       this.discardTextEditor(editor);
       return;
     }
@@ -5226,6 +5273,24 @@ export class BoardApp {
     });
   }
 
+  /**
+   * Escape and Ctrl/Cmd+Enter save the text or sticky note, then leave it selected with the
+   * Select tool so a second Escape or a click on empty space deselects it.
+   */
+  private async finishTextEditing(): Promise<void> {
+    const editor = this.textEditor;
+    if (!editor) return;
+    const session = this.textSaveSession;
+    const itemId = session
+      ? (session.context?.itemId ?? session.itemId)
+      : (this.textEditContext?.itemId ?? editor.dataset.draftItemId);
+    await this.closeTextEditor(true);
+    // A refused sticky save keeps its editor open so the draft can still be edited.
+    if (this.textEditor === editor) return;
+    this.tools.setTool("select");
+    if (itemId) this.tools.selectOnly([itemId]);
+  }
+
   private discardTextEditor(editor: HTMLTextAreaElement): void {
     if (this.textEditor !== editor) return;
     this.textEditorCloseAttempt += 1;
@@ -5234,9 +5299,123 @@ export class BoardApp {
     this.textEditContext = null;
     this.textEditorMode = null;
     this.textEditorPreview = null;
+    if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
+    this.textEditorTimer = null;
+    if (this.textSaveSession) this.textSaveSession.open = false;
+    this.textSaveSession = null;
     editor.remove();
     this.renderer.clearLocalPreview();
     this.scheduleRejectedDraftRestore();
+  }
+
+  private async flushTextSave(session: TextSaveSession): Promise<void> {
+    if (session.queueing || session.inflight) return;
+    const text = session.pendingText;
+    session.pendingText = null;
+    if (text === null || text === session.savedText) return;
+    let operation: DurableOperation;
+    if (session.context) {
+      if (!text) {
+        // Clearing text that this session created removes it, as if it had never been added.
+        if (!session.createdHere) return;
+        operation = {
+          kind: "item.delete",
+          itemId: session.context.itemId,
+          expectedVersion: session.context.expectedVersion,
+        };
+      } else {
+        operation = buildCapturedTextUpdate(
+          session.context,
+          text,
+          this.model.authoritativeItems.values(),
+          this.bootstrap.board.features.grouping,
+        );
+      }
+    } else {
+      if (!text) return;
+      operation = {
+        kind: "item.create",
+        item: {
+          id: session.itemId,
+          kind: "text",
+          style: session.style,
+          transform: [1, 0, 0, 1, 0, 0],
+          geometry: { x: session.point[0], y: session.point[1], text },
+        },
+      };
+    }
+    session.queueing = true;
+    let accepted = false;
+    try {
+      accepted = await this.commit(operation, createId(), undefined, (commandId) => {
+        session.inflight = { commandId, text };
+        this.textSaveCommands.set(commandId, session);
+      });
+    } catch {
+      accepted = false;
+    }
+    session.queueing = false;
+    if (accepted) return;
+    // A closed editor keeps its draft only when editing is temporarily unavailable.
+    // Ownership and Section-lock denials are final, and reopening would loop.
+    if (!session.open && text && !this.canCommit()) {
+      this.recoverStickyDraft(this.textDraftFromSession(session, text));
+    }
+  }
+
+  /**
+   * Resolves an acknowledged or rejected background text save. The session is rebased on
+   * the latest authoritative item so later saves carry its current version and geometry.
+   */
+  private settleTextSave(
+    commandId: string,
+    accepted: boolean,
+  ): "open" | "recovered" | "dropped" | null {
+    const session = this.textSaveCommands.get(commandId);
+    if (!session) return null;
+    this.textSaveCommands.delete(commandId);
+    const savedText = session.inflight?.text ?? "";
+    session.inflight = null;
+    const latest = this.model.authoritativeItems.get(session.itemId);
+    if (latest?.kind === "text") {
+      session.context = {
+        itemId: latest.id,
+        expectedVersion: latest.version,
+        geometry: structuredClone(latest.geometry),
+        item: structuredClone(latest),
+      };
+      session.savedText = latest.geometry.text;
+    } else {
+      session.itemId = createId();
+      session.context = null;
+      session.createdHere = true;
+      session.savedText = "";
+    }
+    if (accepted) {
+      void this.flushTextSave(session);
+      return null;
+    }
+    const draftText = session.pendingText ?? savedText;
+    session.pendingText = null;
+    // An open editor still holds the text; its next pause or close saves it again.
+    if (session.open) return "open";
+    if (!draftText) return "dropped";
+    this.recoverStickyDraft(this.textDraftFromSession(session, draftText));
+    return "recovered";
+  }
+
+  private textDraftFromSession(session: TextSaveSession, text: string): StickyDraftRecovery {
+    return {
+      mode: "text",
+      ...(session.context ? { itemId: session.context.itemId } : {}),
+      draftItemId: createId(),
+      point: session.context
+        ? [session.context.geometry.x, session.context.geometry.y]
+        : session.point,
+      text,
+      selectionStart: text.length,
+      selectionEnd: text.length,
+    };
   }
 
   private recoverStickyDraft(draft: StickyDraftRecovery): void {
@@ -5249,9 +5428,12 @@ export class BoardApp {
     const draft = this.rejectedStickyDrafts.shift();
     if (!draft) return;
     const latest = draft.itemId ? this.model.getItem(draft.itemId) : undefined;
-    const sticky = latest?.kind === "sticky" ? latest : undefined;
-    const point: Point = sticky ? [sticky.geometry.x, sticky.geometry.y] : draft.point;
-    this.openTextEditor(point, sticky, draft);
+    const target =
+      latest?.kind === (draft.mode === "text" ? "text" : "sticky")
+        ? (latest as Extract<BoardItem, { kind: "text" | "sticky" }>)
+        : undefined;
+    const point: Point = target ? [target.geometry.x, target.geometry.y] : draft.point;
+    this.openTextEditor(point, target, draft);
   }
 
   private recoverTableCellDraft(draft: TableCellDraftRecovery): void {
@@ -7109,6 +7291,14 @@ export class BoardApp {
     if (!canEdit) this.closeImageAltEditor();
     if (!canEdit) void this.closeTableCellEditor(false);
     if (!canEdit) void this.closeZoneTitleEditor(true);
+    // Reconnects also make canEdit false briefly, so only a lost drawing permission
+    // closes plain text; its draft is retained until editing is available again.
+    if (
+      this.textSaveSession &&
+      !canRoleDraw(this.bootstrap.actor.role, this.bootstrap.board.drawingPolicy)
+    ) {
+      void this.closeTextEditor(true);
+    }
     this.updateSelectionActions(this.tools.selection);
     this.renderComments();
     if (canEdit && !this.textEditor && !this.tableCellEditor) {
@@ -8682,9 +8872,13 @@ function transformPoint(point: Point, matrix: Matrix): Point {
 }
 
 function stickyDraftFromOperation(operation: DurableOperation): StickyDraftRecovery | undefined {
-  if (operation.kind === "item.create" && operation.item.kind === "sticky") {
+  if (
+    operation.kind === "item.create" &&
+    (operation.item.kind === "sticky" || operation.item.kind === "text")
+  ) {
     const { geometry } = operation.item;
     return {
+      ...(operation.item.kind === "text" ? { mode: "text" as const } : {}),
       draftItemId: createId(),
       point: [geometry.x, geometry.y],
       text: geometry.text,
@@ -8694,8 +8888,9 @@ function stickyDraftFromOperation(operation: DurableOperation): StickyDraftRecov
   }
   if (operation.kind !== "item.update") return undefined;
   const geometry = operation.patch.geometry;
-  if (!geometry || !("width" in geometry) || !("text" in geometry)) return undefined;
+  if (!geometry || !("text" in geometry) || !("x" in geometry)) return undefined;
   return {
+    ...("width" in geometry ? {} : { mode: "text" as const }),
     itemId: operation.itemId,
     draftItemId: createId(),
     point: [geometry.x, geometry.y],
