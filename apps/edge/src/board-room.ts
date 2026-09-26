@@ -618,15 +618,6 @@ export class BoardRoom extends DurableObject<Env> {
     );
     const itemId = requireOpaqueId(body.itemId, "comment target");
     const text = requireCommentBody(body.body);
-    // Every new comment makes every client re-fetch the list, and the per-board total is capped,
-    // so one participant cannot flood the thread or use up the board's allowance.
-    if (!this.#buckets.consume(`comment:${actor.actorId}`, 1 / 6, 10)) {
-      throw new HttpError(
-        429,
-        "RATE_LIMITED",
-        "You're commenting a little too quickly. Try again in a moment.",
-      );
-    }
     const assistance = requireCommentAssistance(body);
     const media = requireCommentMedia(body);
     const commentId = randomOpaqueId("c_");
@@ -660,6 +651,21 @@ export class BoardRoom extends DurableObject<Env> {
           409,
           "BOARD_LIMIT_REACHED",
           "This Space has reached its comment limit.",
+        );
+      }
+      // Every new comment makes every client re-fetch the list, and the per-board total is
+      // capped, so one participant cannot flood the thread or use up the board's allowance.
+      // Only a comment that would be stored spends a token, and an assistant answering many
+      // watched steps draws on its own, larger allowance rather than the person's.
+      const allowed =
+        assistance === null
+          ? this.#buckets.consume(`comment:${actor.actorId}`, 1 / 6, 10, now)
+          : this.#buckets.consume(`comment-ai:${actor.actorId}`, 1 / 3, 20, now);
+      if (!allowed) {
+        throw new HttpError(
+          429,
+          "RATE_LIMITED",
+          "You're commenting a little too quickly. Try again in a moment.",
         );
       }
       this.#sql.exec(
@@ -7023,6 +7029,14 @@ function assertOperationFeaturesEnabled(
     }
     if (sourceItem !== undefined) {
       assertItemFeatureEnabled(features, sourceItem as { kind: string; geometry?: unknown });
+      // A copy keeps the source's embed and AI label, so it is a new video or a new AI-marked
+      // object, and needs the same switch a fresh one would.
+      if (embedsVideo(sourceItem.geometry) && !features.videos) {
+        throw new BoardDomainError("FORBIDDEN", "Video embeds are disabled for this board.");
+      }
+      if ((sourceItem as { assistedBy?: unknown }).assistedBy !== undefined && !features.aiTools) {
+        throw new BoardDomainError("FORBIDDEN", "AI tools are disabled for this board.");
+      }
     }
   }
 }

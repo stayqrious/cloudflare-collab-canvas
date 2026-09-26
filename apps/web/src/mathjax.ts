@@ -53,6 +53,14 @@ function labelRenderedMath(container: HTMLElement, source: string): void {
 async function loadMathJax(): Promise<MathJaxApi> {
   if (mathJaxReady) return mathJaxReady;
   mathJaxReady = (async () => {
+    // startup.promise only settles once defaultReady runs, so a failed extension import (a
+    // stale chunk after a redeploy, say) must fail the load itself. Every formula then falls
+    // back to its source instead of waiting forever.
+    let failExtensions!: (error: unknown) => void;
+    const extensionsFailed = new Promise<never>((_, reject) => {
+      failExtensions = reject;
+    });
+    extensionsFailed.catch(() => undefined);
     window.MathJax = {
       options: {
         enableBraille: false,
@@ -79,7 +87,7 @@ async function loadMathJax(): Promise<MathJaxApi> {
           void Promise.all([
             import("mathjax/ui/safe.js"),
             import("mathjax/input/tex/extensions/html.js"),
-          ]).then(() => mathJax.startup?.defaultReady?.());
+          ]).then(() => mathJax.startup?.defaultReady?.(), failExtensions);
         },
       },
       svg: { fontCache: "local" },
@@ -90,7 +98,7 @@ async function loadMathJax(): Promise<MathJaxApi> {
     };
     await import("mathjax/tex-svg.js");
     const mathJax = window.MathJax as MathJaxApi | undefined;
-    await mathJax?.startup?.promise;
+    await Promise.race([mathJax?.startup?.promise, extensionsFailed]);
     if (typeof mathJax?.typesetPromise !== "function") {
       throw new Error("MathJax did not expose its browser typesetting API.");
     }

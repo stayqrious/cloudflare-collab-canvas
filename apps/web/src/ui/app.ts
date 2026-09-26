@@ -6697,6 +6697,16 @@ export class BoardApp {
     this.renderComments();
     try {
       await this.api.deleteComment(this.bootstrap.board.id, commentId);
+      if (this.playingCommentVideoId === commentId) {
+        // Its own player goes with it, so there is nothing left to protect from a rebuild.
+        this.playingCommentVideoId = null;
+      } else if (this.playingCommentVideoId !== null) {
+        // Another comment's video is playing and holds the rebuild back, so take this card out
+        // directly rather than leave a deleted comment on screen.
+        this.commentsList
+          .querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(commentId)}"]`)
+          ?.remove();
+      }
       this.comments.remove(commentId);
       this.applyCommentChange();
       this.liveRegion.textContent = "Comment deleted.";
@@ -6783,6 +6793,7 @@ export class BoardApp {
     for (const comment of visible) {
       const card = document.createElement("article");
       card.className = "comment-card";
+      card.dataset.commentId = comment.id;
       card.dataset.state = comment.state;
       if (comment.itemId === this.activeCommentTargetId) card.dataset.activeTarget = "true";
       const heading = document.createElement("div");
@@ -8399,7 +8410,15 @@ export class BoardApp {
     const target = this.mathFieldTarget;
     this.mathFieldPanel?.close();
     this.mathFieldTarget = null;
-    target?.editor.focus();
+    if (!target) return;
+    target.editor.focus();
+    // Leave the caret after the formula's closing delimiter; left inside it, the next key or
+    // click would reopen the maths keyboard the participant just closed.
+    const after = Math.min(
+      target.editor.value.length,
+      target.region.end + target.region.delimiter.close.length,
+    );
+    target.editor.setSelectionRange(after, after);
   };
 
   /**
@@ -8941,7 +8960,12 @@ function fitTextEditorHeight(editor: HTMLTextAreaElement): void {
       ? Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth)
       : -(Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom));
   editor.style.height = "auto";
-  editor.style.height = `${editor.scrollHeight + border}px`;
+  const wanted = editor.scrollHeight + border;
+  // A fixed editor never grows past the bottom of the window; beyond that its text scrolls,
+  // so the caret stays visible.
+  const available = Math.max(40, window.innerHeight - editor.getBoundingClientRect().top - 8);
+  editor.style.height = `${Math.min(wanted, available)}px`;
+  editor.style.overflowY = wanted > available ? "auto" : "hidden";
 }
 
 function stickyDraftFromOperation(operation: DurableOperation): StickyDraftRecovery | undefined {

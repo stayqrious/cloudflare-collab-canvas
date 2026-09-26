@@ -677,6 +677,75 @@ describe("BoardRoom initialization", () => {
     ).toMatchObject({ seq: 1 });
   });
 
+  it("does not let a copy bring back a video embed while videos are off", async () => {
+    const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    const connected = await connect(stub, actorId);
+    const videoId = "018f0000-0000-7000-8000-0000000000b2";
+    const create = {
+      v: 1,
+      t: "client.commit",
+      commandId: "018f0000-0000-7000-8000-0000000000b1",
+      actionId: "018f0000-0000-7000-8000-0000000000bf",
+      baseSeq: 0,
+      op: {
+        kind: "item.create",
+        item: {
+          id: videoId,
+          kind: "text",
+          style: { kind: "text", color: "#112233", fontSize: 20, fontFamily: "sans", opacity: 1 },
+          transform: [1, 0, 0, 1, 0, 0],
+          geometry: {
+            x: 10,
+            y: 20,
+            text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            embed: "video",
+          },
+        },
+      },
+    };
+    connected.socket.send(JSON.stringify(create));
+    await connected.next(
+      (frame) => frame.t === "server.action" && frame.commandId === create.commandId,
+    );
+
+    const disable = await stub.fetch(
+      internalRequest(`/api/v1/boards/${boardId}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ features: { videos: false }, expectedAclVersion: 1 }),
+      }),
+    );
+    expect(disable.status).toBe(200);
+    await disable.arrayBuffer();
+    await connected.next(
+      (frame) =>
+        frame.t === "access.changed" &&
+        (frame.features as Record<string, unknown> | undefined)?.videos === false,
+    );
+
+    const copy = {
+      v: 1,
+      t: "client.commit",
+      commandId: "018f0000-0000-7000-8000-0000000000b3",
+      actionId: "018f0000-0000-7000-8000-0000000000be",
+      baseSeq: 1,
+      op: {
+        kind: "item.copy",
+        sourceItemId: videoId,
+        expectedVersion: 1,
+        newItemId: "018f0000-0000-7000-8000-0000000000b4",
+        translate: { x: 20, y: 20 },
+      },
+    };
+    connected.socket.send(JSON.stringify(copy));
+    expect(
+      await connected.next(
+        (frame) => frame.t === "server.rejected" && frame.commandId === copy.commandId,
+      ),
+    ).toMatchObject({ code: "FORBIDDEN", latestSeq: 1 });
+  });
+
   it("persists feature settings and rejects disabled item creation", async () => {
     const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
     await initializeBoard(stub);
