@@ -14,8 +14,8 @@ Press `Esc` or `Ctrl`/`⌘`+`Enter` to finish a text box or sticky note: it is
 saved and left selected with the **Select** tool. Press `Esc` again, or click
 empty space, to deselect. The mouse wheel, two-finger trackpad scrolling, and a
 two-finger touch drag all pan the board (hold `Shift` to scroll sideways with a
-mouse wheel). Zoom with the zoom buttons, or with `Ctrl`/`⌘` + wheel or a
-trackpad pinch.
+mouse wheel). Pinch on a trackpad or touchscreen to zoom, or use the zoom
+buttons or `Ctrl`/`⌘` + wheel.
 
 Alongside freehand drawing, shapes, and plain text, the board supports durable
 sticky notes for brainstorming, exit tickets, sorting, and feedback. Choose

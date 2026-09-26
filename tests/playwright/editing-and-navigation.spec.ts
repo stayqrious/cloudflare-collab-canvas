@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { canvasPoint, createBoard } from "./helpers";
 
 test("Escape saves text and sticky notes and leaves them selected", async ({ page }, testInfo) => {
@@ -46,7 +46,7 @@ test("Escape saves text and sticky notes and leaves them selected", async ({ pag
   await expect(text).toHaveCount(1);
 });
 
-test("the wheel and two-finger scrolling pan, while zoom stays on the buttons", async ({
+test("the wheel and two-finger trackpad scrolling pan, while Ctrl + wheel zooms", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "Wheel acceptance runs in Chromium.");
@@ -77,4 +77,88 @@ test("the wheel and two-finger scrolling pan, while zoom stays on the buttons", 
   await expect(zoomLabel).toHaveText("100%");
   await page.getByRole("button", { name: "Zoom in" }).click();
   await expect(zoomLabel).not.toHaveText("100%");
+});
+
+type TwoFingerStep = { first: { x: number; y: number }; second: { x: number; y: number } };
+
+/** Dispatches a synthetic two-finger touch gesture: down at the first step, up at the last. */
+async function twoFingerGesture(page: Page, steps: TwoFingerStep[]): Promise<void> {
+  await page.locator("#board-canvas").evaluate((node, input) => {
+    const canvas = node as SVGSVGElement;
+    const captured = new Set<number>();
+    Object.defineProperties(canvas, {
+      setPointerCapture: { configurable: true, value: (id: number) => captured.add(id) },
+      hasPointerCapture: { configurable: true, value: (id: number) => captured.has(id) },
+      releasePointerCapture: { configurable: true, value: (id: number) => captured.delete(id) },
+    });
+    const send = (type: string, pointerId: number, point: { x: number; y: number }) =>
+      canvas.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          pointerId,
+          pointerType: "touch",
+          isPrimary: pointerId === 41,
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          buttons: type === "pointerup" ? 0 : 1,
+        }),
+      );
+    input.forEach((step, index) => {
+      const type =
+        index === 0 ? "pointerdown" : index === input.length - 1 ? "pointerup" : "pointermove";
+      send(type, 41, step.first);
+      send(type, 42, step.second);
+    });
+  }, steps);
+}
+
+/** Interpolates two-finger positions in small steps, as a touchscreen reports them. */
+function twoFingerPath(from: TwoFingerStep, to: TwoFingerStep, count = 20): TwoFingerStep[] {
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const steps: TwoFingerStep[] = [];
+  for (let index = 0; index <= count; index += 1) {
+    const t = index / count;
+    steps.push({
+      first: { x: lerp(from.first.x, to.first.x, t), y: lerp(from.first.y, to.first.y, t) },
+      second: { x: lerp(from.second.x, to.second.x, t), y: lerp(from.second.y, to.second.y, t) },
+    });
+  }
+  steps.push(to);
+  return steps;
+}
+
+test("two fingers pan the board and a pinch zooms it", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Synthetic touch acceptance runs in Chromium.");
+
+  await createBoard(page, "Touch navigation");
+  const canvas = page.locator("#board-canvas");
+  const zoomLabel = page.locator("[data-zoom-label]");
+  const c = await canvasPoint(page, 0.5, 0.5);
+
+  // Moving both fingers together pans without changing the zoom.
+  const before = await canvas.getAttribute("viewBox");
+  await twoFingerGesture(
+    page,
+    twoFingerPath(
+      { first: { x: c.x - 40, y: c.y }, second: { x: c.x + 40, y: c.y } },
+      { first: { x: c.x + 20, y: c.y + 80 }, second: { x: c.x + 100, y: c.y + 80 } },
+    ),
+  );
+  await expect.poll(() => canvas.getAttribute("viewBox")).not.toBe(before);
+  await expect(zoomLabel).toHaveText("100%");
+
+  // Spreading the fingers zooms in.
+  await twoFingerGesture(
+    page,
+    twoFingerPath(
+      { first: { x: c.x - 40, y: c.y }, second: { x: c.x + 40, y: c.y } },
+      { first: { x: c.x - 110, y: c.y }, second: { x: c.x + 110, y: c.y } },
+    ),
+  );
+  await expect
+    .poll(async () => Number.parseInt((await zoomLabel.textContent()) ?? "0", 10))
+    .toBeGreaterThan(100);
 });

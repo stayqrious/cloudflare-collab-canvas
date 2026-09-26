@@ -1083,11 +1083,21 @@ type Gesture =
       operation: ZoneCreateOperation;
     };
 
-/** Two touch points drag the view together; zoom stays with the zoom buttons. */
+/**
+ * Two touch points pan the view as their midpoint moves. Spreading or closing them zooms,
+ * but only once the spacing has clearly changed, so a two-finger pan never drifts the zoom.
+ */
 type PinchState = {
   pointerIds: readonly [number, number];
   center: Point;
+  /** Finger spacing and zoom that the pinch scales from. */
+  distance: number;
+  zoom: number;
+  zooming: boolean;
 };
+
+/** Relative change in finger spacing before a two-finger gesture starts zooming. */
+export const PINCH_ZOOM_THRESHOLD = 0.1;
 
 export function buildUngroupedCopyOperation(
   item: BoardItem,
@@ -1345,6 +1355,9 @@ export class ToolController {
         this.pinch = {
           pointerIds: [first[0], second[0]],
           center: midpoint(first[1], second[1]),
+          distance: Math.max(1, pointDistance(first[1], second[1])),
+          zoom: this.options.renderer.viewport.zoom,
+          zooming: false,
         };
       }
       event.preventDefault();
@@ -1624,11 +1637,18 @@ export class ToolController {
       const second = this.pointers.get(this.pinch.pointerIds[1]);
       if (!first || !second) return;
       const center = midpoint(first, second);
-      this.options.renderer.viewport.panByPixels(
-        center[0] - this.pinch.center[0],
-        center[1] - this.pinch.center[1],
-      );
-      this.pinch = { ...this.pinch, center };
+      const distance = Math.max(1, pointDistance(first, second));
+      const viewport = this.options.renderer.viewport;
+      viewport.panByPixels(center[0] - this.pinch.center[0], center[1] - this.pinch.center[1]);
+      let pinch = { ...this.pinch, center };
+      if (!pinch.zooming && Math.abs(distance / pinch.distance - 1) > PINCH_ZOOM_THRESHOLD) {
+        // Scale from the spacing where zooming began so the view does not jump.
+        pinch = { ...pinch, zooming: true, distance, zoom: viewport.zoom };
+      }
+      if (pinch.zooming) {
+        viewport.zoomAt(center[0], center[1], pinch.zoom * (distance / pinch.distance));
+      }
+      this.pinch = pinch;
       event.preventDefault();
       return;
     }
