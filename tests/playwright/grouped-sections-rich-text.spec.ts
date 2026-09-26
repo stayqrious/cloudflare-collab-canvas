@@ -126,6 +126,8 @@ test("named Sections, grouped movement, typography, links, and export relationsh
   );
   await expect.poll(() => stickies.nth(0).getAttribute("transform")).not.toBe(firstGroupTransform);
   await expect.poll(() => stickies.nth(1).getAttribute("transform")).not.toBe(secondGroupTransform);
+  // Copying waits for the group's move to save, so let it land before pressing Ctrl+D.
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
   await page.keyboard.press("Control+d");
   await expect(page.locator("#drawing-area .board-item-sticky")).toHaveCount(4);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
