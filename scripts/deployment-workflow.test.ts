@@ -63,6 +63,19 @@ describe("deployment and CI workflows", () => {
     expect(deploy).not.toContain('--env=""');
   });
 
+  it("uploads every runtime secret from the GitHub environment with each version", () => {
+    for (const name of [
+      "ORGANISATION_SIGNING_KEYS",
+      "SESSION_SIGNING_KEY_CURRENT",
+      "SESSION_SIGNING_KEY_PREVIOUS",
+      "TURNSTILE_SECRET_KEY",
+    ]) {
+      expect(occurrences(deploy, `${name}: $` + `{{ secrets.${name} }}`)).toBe(2);
+    }
+    expect(occurrences(deploy, "--secrets-file")).toBe(2);
+    expect(deploy).toContain("Configure the production Turnstile secret key");
+  });
+
   it("uses only a small post-deploy health probe", () => {
     expect(occurrences(deploy, "for attempt in 1 2 3 4 5")).toBe(2);
     expect(occurrences(deploy, ".ok == true and .service ==")).toBe(2);

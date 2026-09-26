@@ -31,8 +31,9 @@ avatars. Say:
 > AI one visual workspace, so feedback becomes visible work the class can
 > inspect, discuss, and improve together.
 
-Point out **WebMCP enabled**. There is no extension, separate MCP server, or
-SpaceScale model API key.
+Point out **WebMCP ready**. Before recording, turn on **Settings → Tool
+permissions → AI tools** for the demo Space; every new Space starts with them off.
+There is no extension, separate MCP server, or SpaceScale model API key.
 
 ### 0:20–1:18 — AI catches a mistake in visual work
 
