@@ -469,7 +469,8 @@ export class BoardRoom extends DurableObject<Env> {
       const commentId = commentMatch[1];
       if (commentId === undefined) throw new HttpError(404, "NOT_FOUND", "Comment not found.");
       if (request.method === "PATCH") return this.resolveComment(request, actor, board, commentId);
-      return methodNotAllowed("PATCH");
+      if (request.method === "DELETE") return this.deleteComment(actor, board, commentId);
+      return methodNotAllowed("PATCH, DELETE");
     }
     if (suffix === "/members") {
       requireMethod(request, "GET");
@@ -617,6 +618,15 @@ export class BoardRoom extends DurableObject<Env> {
     );
     const itemId = requireOpaqueId(body.itemId, "comment target");
     const text = requireCommentBody(body.body);
+    // Every new comment makes every client re-fetch the list, and the per-board total is capped,
+    // so one participant cannot flood the thread or use up the board's allowance.
+    if (!this.#buckets.consume(`comment:${actor.actorId}`, 1 / 6, 10)) {
+      throw new HttpError(
+        429,
+        "RATE_LIMITED",
+        "You're commenting a little too quickly. Try again in a moment.",
+      );
+    }
     const assistance = requireCommentAssistance(body);
     const media = requireCommentMedia(body);
     const commentId = randomOpaqueId("c_");
@@ -721,6 +731,30 @@ export class BoardRoom extends DurableObject<Env> {
     });
     if (changed) this.broadcastCommentsRefresh();
     return Response.json(comment, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  /** Removes a comment outright. Its author or a board owner may delete it, open or resolved. */
+  private deleteComment(
+    actor: InternalActorContext,
+    capturedBoard: BoardRow,
+    commentId: string,
+  ): Response {
+    this.ctx.storage.transactionSync(() => {
+      const board = readBoard(this.#sql) ?? capturedBoard;
+      const access = this.requireView(board, actor.actorId);
+      const existing = this.readComment(commentId);
+      if (existing === null) throw new HttpError(404, "NOT_FOUND", "Comment not found.");
+      if (existing.author.id !== actor.actorId && access.role !== "owner") {
+        throw new HttpError(
+          403,
+          "FORBIDDEN",
+          "Only the comment author or a board owner can delete a comment.",
+        );
+      }
+      this.#sql.exec("DELETE FROM comments WHERE comment_id = ?", commentId);
+    });
+    this.broadcastCommentsRefresh();
+    return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   }
 
   private readComments(): BoardComment[] {
@@ -7252,7 +7286,9 @@ function optionalExternalParticipantId(value: unknown): string | null {
   if (
     [...normalized].length < 1 ||
     [...normalized].length > 320 ||
-    containsDisallowedControlCharacter(normalized)
+    // An identifier is a single token, so unlike free text it takes no tabs, line breaks or
+    // lone surrogates either.
+    /[\p{Cc}\p{Cs}]/u.test(normalized)
   ) {
     throw new HttpError(400, "BAD_REQUEST", "The organisation participant ID is invalid.");
   }

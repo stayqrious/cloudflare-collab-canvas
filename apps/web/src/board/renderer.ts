@@ -53,6 +53,7 @@ import type {
   ZoneStyle,
 } from "../types";
 import {
+  configureVideoFrame,
   tokenizeSafeLinks,
   VIDEO_EMBED_HEIGHT,
   VIDEO_EMBED_WIDTH,
@@ -1623,13 +1624,8 @@ function videoEmbedNode(
     heading.textContent = `${video.title} · open in new tab`;
     const frame = document.createElement("iframe");
     frame.className = "video-embed-frame";
+    configureVideoFrame(frame, video.title);
     frame.src = video.embedUrl;
-    frame.title = video.title;
-    frame.loading = "lazy";
-    frame.referrerPolicy = "strict-origin-when-cross-origin";
-    frame.allow =
-      "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share";
-    frame.allowFullscreen = true;
     card.append(heading, frame);
   }
   foreign.append(card);

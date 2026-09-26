@@ -31,7 +31,12 @@ import {
   buildActivityBatch,
 } from "../activities/templates";
 import { buildClearVoteDeletes, isVoteTable, summarizeVotes } from "../activities/voting";
-import { VIDEO_EMBED_HEIGHT, VIDEO_EMBED_WIDTH, videoEmbedFromText } from "../board/links";
+import {
+  configureVideoFrame,
+  VIDEO_EMBED_HEIGHT,
+  VIDEO_EMBED_WIDTH,
+  videoEmbedFromText,
+} from "../board/links";
 import { mathExportOptions } from "../board/math-export";
 import { BoardModel, SequenceError, translateMatrix } from "../board/model";
 import { BoardRenderer, STICKY_PADDING } from "../board/renderer";
@@ -6616,12 +6621,7 @@ export class BoardApp {
     player.className = "comment-media-player";
     const frame = document.createElement("iframe");
     frame.className = "comment-media-frame";
-    frame.title = video.title;
-    frame.loading = "lazy";
-    frame.referrerPolicy = "strict-origin-when-cross-origin";
-    frame.allow =
-      "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share";
-    frame.allowFullscreen = true;
+    configureVideoFrame(frame, video.title);
     const stop = document.createElement("button");
     stop.type = "button";
     stop.className = "comment-media-stop";
@@ -6682,6 +6682,24 @@ export class BoardApp {
       this.comments.upsert(comment);
       this.applyCommentChange();
       this.liveRegion.textContent = "Comment resolved.";
+    } catch (error) {
+      this.apiError(error);
+    } finally {
+      this.commentsResolving.delete(commentId);
+      this.renderComments();
+    }
+  }
+
+  private async deleteObjectComment(commentId: string): Promise<void> {
+    if (this.commentsResolving.has(commentId)) return;
+    if (!window.confirm("Delete this comment for everyone? This cannot be undone.")) return;
+    this.commentsResolving.add(commentId);
+    this.renderComments();
+    try {
+      await this.api.deleteComment(this.bootstrap.board.id, commentId);
+      this.comments.remove(commentId);
+      this.applyCommentChange();
+      this.liveRegion.textContent = "Comment deleted.";
     } catch (error) {
       this.apiError(error);
     } finally {
@@ -6826,6 +6844,17 @@ export class BoardApp {
         resolve.disabled = this.commentsResolving.has(comment.id);
         resolve.addEventListener("click", () => void this.resolveObjectComment(comment.id));
         actions.append(resolve);
+      }
+      // Deleting follows the resolve rule, so a teacher can remove an abusive comment outright.
+      if (canResolveComment(comment, this.bootstrap.actor.id, this.bootstrap.actor.role)) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "comment-delete";
+        remove.textContent = "Delete";
+        remove.setAttribute("aria-label", "Delete comment");
+        remove.disabled = this.commentsResolving.has(comment.id);
+        remove.addEventListener("click", () => void this.deleteObjectComment(comment.id));
+        actions.append(remove);
       }
       const media = this.commentMediaNode(comment);
       if (media) card.append(heading, body, media, actions);
@@ -9341,6 +9370,13 @@ export class CommentStore {
     this.server.clear();
     for (const comment of comments) this.server.set(comment.id, comment);
     return this.reconcile();
+  }
+
+  /** Drops a comment the server just deleted for a local write. */
+  remove(commentId: string): void {
+    this.version += 1;
+    this.server.delete(commentId);
+    this.reconcile();
   }
 
   /** Stores a comment the server just returned for a local write. */

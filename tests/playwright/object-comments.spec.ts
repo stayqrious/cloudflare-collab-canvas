@@ -175,3 +175,31 @@ test("a comment can carry a video and a picture", async ({ page }, testInfo) => 
     .toBe(true);
   await expect(imageCard.locator("figcaption")).toHaveText("A worked example");
 });
+
+test("the author or a board owner can delete a comment for everyone", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Comment deletion runs in Chromium.");
+
+  await createBoard(page, "Comment moderation");
+  const start = await canvasPoint(page, 0.32, 0.38);
+  const shape = await drawShape(page, "Rectangle", start, { x: start.x + 130, y: start.y + 88 });
+  const bounds = await shape.boundingBox();
+  if (!bounds) throw new Error("The comment target has no layout bounds.");
+  await page.getByRole("button", { name: /^Select/u }).click();
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.getByRole("button", { name: "Comment on selected object" }).click();
+  const drawer = page.getByTestId("comments-drawer");
+  await drawer.getByRole("textbox", { name: "Comment" }).fill("Something unkind");
+  await drawer.getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(drawer.locator(".comment-card")).toHaveCount(1);
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await drawer.getByRole("button", { name: "Delete comment" }).click();
+  await expect(drawer.locator(".comment-card")).toHaveCount(0);
+  await expect(page.locator("#comment-layer .comment-marker")).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator("#board-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("#comment-layer .comment-marker")).toHaveCount(0);
+});

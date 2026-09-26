@@ -100,6 +100,23 @@ export function tokenizeSafeLinks(value: string): SafeLinkToken[] {
   return tokens;
 }
 
+/**
+ * Applies the one set of player settings every embedded video uses. The sandbox grants only what
+ * the YouTube and Vimeo players need to run and to open their own pages in a new tab; they can
+ * never navigate the board, submit forms, or open dialogs over it.
+ */
+export function configureVideoFrame(frame: HTMLIFrameElement, title: string): void {
+  frame.title = title;
+  frame.loading = "lazy";
+  frame.referrerPolicy = "strict-origin-when-cross-origin";
+  frame.setAttribute(
+    "sandbox",
+    "allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox",
+  );
+  frame.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+  frame.allowFullscreen = true;
+}
+
 /** Converts a complete YouTube or Vimeo URL into a privacy-conscious embed URL. */
 export function videoEmbedFromText(value: string): VideoEmbed | null {
   const reference = parseVideoEmbedReference(value);
@@ -108,9 +125,10 @@ export function videoEmbedFromText(value: string): VideoEmbed | null {
     return {
       provider: "vimeo",
       sourceUrl: reference.sourceUrl,
-      embedUrl: `https://player.vimeo.com/video/${reference.videoId}${
-        reference.vimeoHash === undefined ? "" : `?h=${encodeURIComponent(reference.vimeoHash)}`
-      }`,
+      // dnt=1 asks Vimeo not to track the viewer, the counterpart of YouTube's nocookie host.
+      embedUrl: `https://player.vimeo.com/video/${reference.videoId}?${
+        reference.vimeoHash === undefined ? "" : `h=${encodeURIComponent(reference.vimeoHash)}&`
+      }dnt=1`,
       title: "Vimeo video",
     };
   }
