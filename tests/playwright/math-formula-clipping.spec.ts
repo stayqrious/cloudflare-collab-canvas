@@ -35,7 +35,7 @@ async function drawFormula(page: Page, at: { x: number; y: number }, tex: string
   const editor = page.getByTestId("canvas-text-editor");
   await expect(editor).toBeFocused();
   await editor.fill(tex);
-  await editor.press("Enter");
+  await editor.press("Control+Enter");
 }
 
 test("a drawn formula is never clipped by the box the board sizes for it", async ({
@@ -88,7 +88,7 @@ test("a double click with the select tool opens a text object for editing", asyn
   const editor = page.getByTestId("canvas-text-editor");
   await expect(editor).toBeFocused();
   await editor.fill("First draft");
-  await editor.press("Enter");
+  await editor.press("Control+Enter");
   await expect(page.locator("#drawing-area .board-item-text")).toContainText("First draft");
 
   // With the select tool, one click selects and a second within the beat opens the text.
@@ -103,7 +103,7 @@ test("a double click with the select tool opens a text object for editing", asyn
   await expect(editor).toHaveValue("First draft");
 
   await editor.fill("Second draft");
-  await editor.press("Enter");
+  await editor.press("Control+Enter");
   await expect(page.locator("#drawing-area .board-item-text")).toContainText("Second draft");
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 });

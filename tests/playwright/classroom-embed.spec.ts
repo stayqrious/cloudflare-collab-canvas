@@ -229,7 +229,7 @@ test("canonical export is faithfully reproduced by the signed read-only viewer",
   const editor = frame.getByTestId("canvas-text-editor");
   await expect(editor).toBeVisible();
   await editor.fill("Shared viewer words");
-  await editor.press("Enter");
+  await editor.press("Control+Enter");
   await expect(frame.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
   await expect(frame.locator("#drawing-area .board-item-text")).toContainText(
     "Shared viewer words",

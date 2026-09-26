@@ -117,7 +117,7 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   await textEditor.fill(
     "$$\\begin{pmatrix}\\frac{1}{2}\\\\\\frac{3}{4}\\\\\\frac{5}{6}\\\\\\frac{7}{8}\\end{pmatrix}$$ See https://example.com/math",
   );
-  await textEditor.press("Enter");
+  await textEditor.press("Control+Enter");
   const freeMath = page.locator(".board-math-content");
   await expect(freeMath).toHaveAttribute("data-math-state", "ready");
   const mathSize = await freeMath.evaluate((content) => {
@@ -155,7 +155,7 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   await page.mouse.click(compactPoint.x, compactPoint.y);
   const compactEditor = page.getByTestId("canvas-text-editor");
   await compactEditor.fill("\\(2x\\)");
-  await compactEditor.press("Enter");
+  await compactEditor.press("Control+Enter");
   const compactMath = page.locator(".board-math-content").last();
   await expect(compactMath).toHaveAttribute("data-math-state", "ready");
   const compactFormula = compactMath.locator("mjx-container");
@@ -204,7 +204,7 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   );
   const compactSectionEditor = page.getByTestId("canvas-text-editor");
   await compactSectionEditor.fill("$$\\displaystyle x$$");
-  await compactSectionEditor.press("Enter");
+  await compactSectionEditor.press("Control+Enter");
   const compactSectionMath = page.locator(".board-math-content").last();
   await expect(compactSectionMath).toHaveAttribute("data-math-state", "ready");
   const compactSectionItem = compactSectionMath.locator("xpath=ancestor::*[@data-item-id][1]");
@@ -237,7 +237,7 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   const boundaryEditor = page.getByTestId("canvas-text-editor");
   const boundaryFormula = "$$\\begin{matrix}x\\\\x\\\\x\\\\x\\\\x\\\\x\\end{matrix}$$";
   await boundaryEditor.fill(boundaryFormula);
-  await boundaryEditor.press("Enter");
+  await boundaryEditor.press("Control+Enter");
   const boundaryMath = page.locator(".board-math-content").last();
   await expect(boundaryMath).toHaveAttribute("data-math-state", "ready");
   const boundaryItem = boundaryMath.locator("xpath=ancestor::*[@data-item-id][1]");
@@ -295,7 +295,7 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   await page.mouse.click(urlTextPoint.x, urlTextPoint.y);
   const urlEditor = page.getByTestId("canvas-text-editor");
   await urlEditor.fill("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-  await urlEditor.press("Enter");
+  await urlEditor.press("Control+Enter");
   await expect(page.locator("#drawing-area .video-embed-item")).toHaveCount(0);
   await expect(page.locator("#drawing-area .board-text-link")).toHaveCount(2);
 

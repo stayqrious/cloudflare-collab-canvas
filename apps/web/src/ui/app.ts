@@ -5060,7 +5060,7 @@ export class BoardApp {
           : "Add text",
     );
     editor.maxLength = mode === "sticky" ? MAX_STICKY_TEXT_CODE_POINTS * 2 : 5_000;
-    editor.rows = mode === "sticky" ? 6 : 2;
+    editor.rows = mode === "sticky" ? 6 : 1;
     editor.value = recovery?.text ?? editedItem?.geometry.text ?? "";
     editor.dataset.boardX = String(textPoint[0]);
     editor.dataset.boardY = String(textPoint[1]);
@@ -5126,6 +5126,8 @@ export class BoardApp {
         : null;
     const textSession = this.textSaveSession;
 
+    if (mode === "text") fitTextEditorHeight(editor);
+
     const preview = (): void => {
       if (mode === "sticky") {
         this.renderer.showLocalSticky(
@@ -5159,6 +5161,7 @@ export class BoardApp {
       }
       preview();
       if (!textSession) return;
+      fitTextEditorHeight(editor);
       // Save after a pause in typing without closing or blurring the editor.
       if (this.textEditorTimer !== null) window.clearTimeout(this.textEditorTimer);
       this.textEditorTimer = window.setTimeout(() => {
@@ -8869,6 +8872,17 @@ function transformPoint(point: Point, matrix: Matrix): Point {
     matrix[0] * point[0] + matrix[2] * point[1] + matrix[4],
     matrix[1] * point[0] + matrix[3] * point[1] + matrix[5],
   ];
+}
+
+/** A text box starts one line tall and grows with each new line instead of scrolling. */
+function fitTextEditorHeight(editor: HTMLTextAreaElement): void {
+  const style = getComputedStyle(editor);
+  const border =
+    style.boxSizing === "border-box"
+      ? Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth)
+      : -(Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom));
+  editor.style.height = "auto";
+  editor.style.height = `${editor.scrollHeight + border}px`;
 }
 
 function stickyDraftFromOperation(operation: DurableOperation): StickyDraftRecovery | undefined {

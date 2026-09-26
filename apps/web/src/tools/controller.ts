@@ -1401,6 +1401,7 @@ export class ToolController {
     }
     this.options.renderer.svg.focus({ preventScroll: true });
     this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
+    this.syncPointerActive();
     this.options.renderer.svg.setPointerCapture(event.pointerId);
 
     if (event.pointerType === "touch" && this.pointers.size === 2) {
@@ -1845,11 +1846,13 @@ export class ToolController {
     if (this.pinch?.pointerIds.includes(event.pointerId)) {
       this.endPinch();
       this.pointers.delete(event.pointerId);
+      this.syncPointerActive();
       this.releasePointerCapture(event.pointerId);
       event.preventDefault();
       return;
     }
     this.pointers.delete(event.pointerId);
+    this.syncPointerActive();
     if (this.pinch) {
       this.releasePointerCapture(event.pointerId);
       event.preventDefault();
@@ -1958,6 +1961,7 @@ export class ToolController {
   private readonly onPointerCancel = (event: PointerEvent): void => {
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
+    this.syncPointerActive();
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
     this.releasePointerCapture(event.pointerId);
   };
@@ -1966,8 +1970,20 @@ export class ToolController {
     if (this.consumeExpectedCaptureLoss(event.pointerId)) return;
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
+    this.syncPointerActive();
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
   };
+
+  /**
+   * Marks the canvas while a pointer is down. Embedded players are cross-origin frames, and a
+   * frame under the pointer can swallow the release even while the canvas holds capture, which
+   * would leave a drag unfinished; the stylesheet stops frames taking the pointer meanwhile.
+   */
+  private syncPointerActive(): void {
+    const { svg } = this.options.renderer;
+    if (this.pointers.size > 0) svg.dataset.pointerActive = "true";
+    else delete svg.dataset.pointerActive;
+  }
 
   private releasePointerCapture(pointerId: number): void {
     const { svg } = this.options.renderer;
