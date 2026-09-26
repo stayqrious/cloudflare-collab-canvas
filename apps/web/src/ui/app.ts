@@ -8600,7 +8600,7 @@ export function renderLanding(root: HTMLElement, api: ApiClient): void {
       <div class="landing-glow" aria-hidden="true"></div>
       <header>
         <a class="wordmark landing-wordmark" href="/" aria-label="${PRODUCT_HOME_LABEL}">${BRAND_MARK_HTML}<span>${PRODUCT_NAME}</span></a>
-        <span class="landing-badge landing-webmcp-badge"><span aria-hidden="true"></span>WebMCP enabled</span>
+        <span class="landing-badge landing-webmcp-badge"><span aria-hidden="true"></span>WebMCP ready</span>
       </header>
       <section class="landing-copy">
         <div class="landing-hero-mark" aria-hidden="true">${BRAND_MARK_HTML}</div>

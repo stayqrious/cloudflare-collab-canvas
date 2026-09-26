@@ -25,11 +25,15 @@ selected section for the teacher, or drafting starter prompts. It must not grade
 profile, rank, discipline, diagnose, or make consequential decisions about a
 student.
 
-- Every browser with board access discovers the WebMCP tools. Read tools operate
-  on the saved selection in that browser; write tools use the existing board
-  edit permission and never elevate a viewer. A future classroom rollout must
-  additionally add a server-enforced, fail-closed kill switch and board-level
-  owner opt-in.
+- The WebMCP tools sit behind the board feature `aiTools`, which is **off by
+  default** for every new Space. While it is off the page registers no tools and
+  shows no MCP or AI controls, and the Worker rejects any object or comment
+  marked as AI-assisted, so the label cannot be written without the board's
+  opt-in. The Space owner turns it on under **Settings → Tool permissions → AI
+  tools**, or a partner sets `features.aiTools` in the signed launch. When it is
+  on, every browser with board access discovers the tools. Read tools operate on
+  the saved selection in that browser; write tools use the existing board edit
+  permission and never elevate a viewer.
 - The board header shows whether a WebMCP host is linked to this browser and how
   many tools it can see, so a participant can tell at a glance when an assistant
   is present. While a watch is live the tool rail also offers an AI action that
@@ -281,8 +285,9 @@ every applicable item below has an owner and recorded evidence.
 
 ### Engineering and safety
 
-- [ ] Add a server-enforced, fail-closed global kill switch plus board-level
-  owner opt-in; do not expose provider credentials to the browser.
+- [x] Board-level owner opt-in (`aiTools`, off by default), enforced by the
+  Worker for AI-assisted writes. No provider credentials reach the browser.
+- [ ] Add a deployment-wide kill switch that overrides every board's `aiTools`.
 - [ ] Enforce role, board lock, consent state, selection bounds, request limits,
   filtering, timeouts, rate limits, and abuse controls at the Worker.
 - [ ] Keep unconfirmed output out of board state, history, snapshots, exports,

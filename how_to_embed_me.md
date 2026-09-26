@@ -412,7 +412,7 @@ are broadcast to participants in real time.
 | `text` | `true` | Free canvas text and its font controls. |
 | `stickyNotes` | `true` | Resizable sticky-note cards. |
 | `stamps` | `true` | Star, check, heart, question, smile, and sparkle stickers. |
-| `images` | `false` | Private board image uploads and image cards. |
+| `images` | `true` | Private board image uploads and image cards. Set `false` for classes that must not upload photos. |
 | `tables` | `true` | Resizable tables, rows, and columns. |
 | `sections` | `true` | Resizable named Sections (`zone` items in JSON). |
 | `grouping` | `true` | Explicit multi-item groups and automatic Section membership for grouped move/copy behavior. |
@@ -424,6 +424,8 @@ are broadcast to participants in real time.
 | `organisationTemplates` | `true` | Organisation-owned reusable templates. Independent of built-in `templates`. |
 | `voting` | `true` | Voting template and vote overlays/actions. |
 | `spotlight` | `true` | Coach-led **Follow me** viewport spotlight. |
+| `videos` | `true` | Embedded YouTube and Vimeo players on the canvas and in comments. Also needs `text`, because a video is a text object carrying its link. |
+| `aiTools` | `false` | Browser AI tools (WebMCP): the tools an AI assistant in a participant's browser can call, and the MCP status and AI controls. While `false` the page registers no tools and the Worker rejects AI-assisted objects and comments. Turn it on only for Spaces whose school has approved AI use; see [classroom AI safety](docs/classroom-ai-safety.md). |
 
 Example restricted activity:
 

@@ -91,7 +91,8 @@ The complete technical delta and safety constraints are documented in the
 ## Try the judge path
 
 1. Open the [public demo](https://webmcp.spacescale.net/) in ChatGPT's in-app
-   browser or another compatible WebMCP host and create a Space.
+   browser or another compatible WebMCP host and create a Space. Then turn on
+   **Settings → Tool permissions → AI tools**; every new Space starts with them off.
 2. Write `x² + 7x + 10 = 0`, deliberately sketch the wrong intercepts `-3` and
    `-1`, and add a sticky with that student claim.
 3. Select the visual work and ask the agent to inspect the graph. Then select
@@ -124,6 +125,14 @@ empty space, to deselect. The mouse wheel, two-finger trackpad scrolling, and a
 two-finger touch drag all pan the board (hold `Shift` to scroll sideways with a
 mouse wheel). Pinch on a trackpad or touchscreen to zoom, or use the zoom
 buttons or `Ctrl`/`⌘` + wheel.
+
+Formulas can link to sources: write `\href{https://example.com/article}{source}`
+inside a formula, or paste a plain `https://` link into any text. Only absolute
+`http` and `https` links are kept, and they always open in a new tab; MathJax runs
+in safe mode, so a formula cannot carry script links, page styles, or app classes.
+A comment's author or the Space owner can delete it for everyone, and posting is
+rate-limited per participant. YouTube and Vimeo embeds have their own **Videos**
+switch in Settings and play in a sandboxed frame.
 
 Alongside freehand drawing, shapes, and plain text, the board supports durable
 sticky notes for brainstorming, exit tickets, sorting, and feedback. Choose
@@ -209,8 +218,11 @@ on shapes, sticky notes, tables, image cards, and sections. V1 stores the snappe
 coordinates as ordinary line geometry, so moving the target later does not move
 the connector automatically.
 
-Codex and other compatible browser hosts discover fourteen WebMCP tools directly from every
-board browser. Six read: `read_board`, `read_selection` and `read_user` each take one reading
+Every board starts with its AI tools off. Until the Space owner (or a partner launch) turns
+on **AI tools** under **Settings → Tool permissions**, the page registers no WebMCP tools and
+shows no MCP or AI controls, and the Worker rejects any object or comment marked as
+AI-assisted. Once they are on, Codex and other compatible browser hosts discover fourteen
+WebMCP tools directly from every browser on that board. Six read: `read_board`, `read_selection` and `read_user` each take one reading
 of a scope; `list_users` names the people with saved work and hands back the participant IDs
 the user tools take; `read_live_class_vote` reports aggregate counts; `read_templates` lists
 the board's activity templates. Two follow the same three scopes live: `watch_board`, with
@@ -312,8 +324,8 @@ npm run check
 Run the focused checks relevant to a change during normal development. The full
 `npm run check` runs automatically in CI and is the required gate for pull
 requests into `main`; running it locally before opening one avoids a failed
-check. The Playwright suite stays manual-only and is not a release gate: CI runs
-it only on an explicit workflow dispatch. `npm run build` verifies the production
+check. CI also runs the Playwright suite in Chromium and mobile Chromium on every
+pull request, and every browser project on a manual dispatch. `npm run build` verifies the production
 bundle with `wrangler deploy --dry-run`; on a checkout without deployment details
 it substitutes non-deployable `dry-run` placeholders for `DEPLOYMENT_NAME`,
 `APP_HOSTNAME`, and `TURNSTILE_SITE_KEY`, while `deployment:init` keeps strict
@@ -472,28 +484,24 @@ To deploy only after successful provisioning:
 npm run deployment:init -- --env production --deploy
 ```
 
-Cloudflare can also pull this repository, run `npm run check`, and deploy it
-directly with Workers Builds. Runtime secrets stay on the Worker, so this path
-does not need a GitHub deployment API token. The exact dashboard settings,
-staging separation, and rollout tradeoffs are documented in
-[docs/deployment-ci.md](docs/deployment-ci.md#cloudflare-workers-builds).
+GitHub Actions is the one deployment path. Every push to `main` deploys
+production (and every push to `staging` deploys staging): the workflow runs the
+full `npm run check` first, then checks out that exact SHA, idempotently creates
+or reuses both private R2 buckets, builds the web assets, uploads a Worker version
+together with every runtime secret from the GitHub environment, deploys it at
+100%, attaches the custom domain, and makes a small five-attempt health probe.
+It does not stage a candidate, run load suites, or automate rollback; fix forward.
+Do not also connect the Worker to Cloudflare Workers Builds, or two systems would
+race to deploy it. The first launch, including every value to set and which of
+them can never change afterwards, is in [docs/launch.md](docs/launch.md).
 
-The retained GitHub Actions path is deliberately direct. A push to `staging` or
-`main` checks out that exact SHA, idempotently creates or reuses both private R2
-buckets, builds the web assets, uploads a Worker version, deploys it at 100%, and
-makes a small five-attempt health probe. Pull requests into `main` require an
-approval plus the full `validate` job; CI repeats on the resulting push to `main`.
-Playwright browser E2E is run explicitly with a manual CI workflow dispatch. The
-deployment itself still does not wait for that post-merge run, stage a candidate,
-run load suites, or automate rollback. Moving the same SHA through `staging`
-before opening the production PR remains recommended.
+Runtime secrets (`SESSION_SIGNING_KEY_CURRENT`, `ORGANISATION_SIGNING_KEYS`, the
+production `TURNSTILE_SECRET_KEY`, and an optional `SESSION_SIGNING_KEY_PREVIOUS`)
+live only in the GitHub environment and are uploaded with each version, so
+nothing is set on the Worker by hand. The commands below are only for a manual
+deployment without the workflow.
 
-For GitHub deployments, add `ORGANISATION_SIGNING_KEYS` as an encrypted secret
-in both the `staging` and `production` GitHub environments. The workflow uploads
-it with each Worker version using Wrangler's secret file support. The commands
-below remain useful for manual or Cloudflare-native deployments.
-
-Install runtime secrets before the first production request:
+Install runtime secrets for a manual production deployment:
 
 ```sh
 npm run deployment:init -- --env production
@@ -513,9 +521,9 @@ npx wrangler secret put ORGANISATION_SIGNING_KEYS --config .generated/wrangler.s
 Before initialization, provide the selected environment's deployment name,
 hostname, switches, and credentials through ignored environment files or CI
 variables. Bucket and Worker names are not inputs; they are always derived from
-`DEPLOYMENT_NAME` and `--env`. Remove legacy `R2_BUCKET_NAME`,
-`R2_ASSET_BUCKET_NAME`, and `CLOUDFLARE_WORKER_NAME` variables; initialization
-rejects them so an existing manual mapping cannot be reused accidentally.
+`DEPLOYMENT_NAME` and `--env`, so `DEPLOYMENT_NAME` can never change after launch.
+Initialization rejects `R2_BUCKET_NAME`, `R2_ASSET_BUCKET_NAME`, and
+`CLOUDFLARE_WORKER_NAME`.
 
 During signing-key rotation, install `SESSION_SIGNING_KEY_PREVIOUS`, deploy code
 that accepts both keys, rotate the current key, wait past the session window,
