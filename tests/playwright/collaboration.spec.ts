@@ -188,7 +188,7 @@ test("move, copy, and delete converge through authoritative batch actions", asyn
       originalBounds.y + originalBounds.height / 2,
     );
     await expect(page.getByTestId("selection-actions")).toBeVisible();
-    await page.getByRole("button", { name: "Copy selected items" }).click();
+    await page.keyboard.press("Control+d");
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(2);
     await expect(collaborator.locator("#drawing-area [data-item-id]")).toHaveCount(2);
 
@@ -213,7 +213,7 @@ test("move, copy, and delete converge through authoritative batch actions", asyn
       collaborator.locator(`#drawing-area [data-item-id="${copiedId}"]`),
     ).toHaveAttribute("transform", authoritativeTransform ?? "");
 
-    await page.getByRole("button", { name: "Delete selected items" }).click();
+    await page.keyboard.press("Delete");
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(1);
     await expect(collaborator.locator("#drawing-area [data-item-id]")).toHaveCount(1);
   } finally {

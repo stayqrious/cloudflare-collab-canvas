@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  deploymentConfigurationFromEnvironment,
+  type DeploymentConfiguration as EnvironmentConfiguration,
+  type DeploymentEnvironment as EnvironmentName,
+  parseDeploymentEnvironment,
+  writeGeneratedWranglerConfig,
+} from "./deployment-config.ts";
 import {
   assertPublicConfiguration,
   assertTurnstileSiteKeyForEnvironment,
@@ -9,15 +15,6 @@ import {
   requireEnvironment,
 } from "./env.ts";
 
-type EnvironmentName = "development" | "staging" | "production";
-type EnvironmentConfiguration = {
-  bucketName: string;
-  assetBucketName: string;
-  jurisdiction: "default" | "eu" | "fedramp";
-  hostname: string;
-  turnstileEnabled: boolean;
-  boardCreationEnabled: boolean;
-};
 type Bucket = {
   name: string;
   jurisdiction?: string;
@@ -45,8 +42,17 @@ type WafProvisioning = {
   applicable: boolean;
   created: boolean;
   updated: boolean;
-  zoneName: string | null;
-  ruleId: string | null;
+};
+type WorkerDomain = {
+  hostname?: string;
+  service?: string;
+  cert_id?: string;
+};
+type CustomDomainProvisioning = {
+  applicable: boolean;
+  created: boolean;
+  updated: boolean;
+  certificateAssigned: boolean | null;
 };
 
 const SERVER_API_PREFIX = "/api/v1/organisations/";
@@ -60,56 +66,39 @@ function jurisdictionHeaders(
     : { "cf-r2-jurisdiction": configuration.jurisdiction };
 }
 
-function parseArguments(args: string[]): { environment: EnvironmentName; deploy: boolean } {
+function parseArguments(args: string[]): {
+  environment: EnvironmentName;
+  deploy: boolean;
+  finalize: boolean;
+} {
   let environment: EnvironmentName | undefined;
   let deploy = false;
+  let finalize = false;
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index];
     if (value === "--env") {
-      const candidate = args[index + 1];
-      if (candidate === "development" || candidate === "staging" || candidate === "production") {
-        environment = candidate;
-        index += 1;
-        continue;
+      try {
+        environment = parseDeploymentEnvironment(args[index + 1]);
+      } catch {
+        throw new Error("--env must be development, staging, or production.");
       }
-      throw new Error("--env must be development, staging, or production.");
+      index += 1;
+      continue;
     }
     if (value === "--deploy") {
       deploy = true;
       continue;
     }
+    if (value === "--finalize") {
+      finalize = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${value}`);
   }
   if (!environment)
-    throw new Error("Usage: npm run cf:bootstrap -- --env <environment> [--deploy]");
-  return { environment, deploy };
-}
-
-function configurationFor(environment: EnvironmentName): EnvironmentConfiguration {
-  const raw = JSON.parse(readFileSync("config/environments.json", "utf8")) as Record<
-    string,
-    EnvironmentConfiguration
-  >;
-  const configuration = raw[environment];
-  if (!configuration) throw new Error(`No committed configuration for ${environment}.`);
-  for (const bucketName of [configuration.bucketName, configuration.assetBucketName]) {
-    if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(bucketName)) {
-      throw new Error(`Committed bucket name for ${environment} is invalid.`);
-    }
-  }
-  if (configuration.bucketName === configuration.assetBucketName) {
-    throw new Error(`Committed buckets for ${environment} must be distinct.`);
-  }
-  if (!configuration.hostname || typeof configuration.hostname !== "string") {
-    throw new Error(`Committed hostname for ${environment} is invalid.`);
-  }
-  if (
-    typeof configuration.turnstileEnabled !== "boolean" ||
-    typeof configuration.boardCreationEnabled !== "boolean"
-  ) {
-    throw new Error(`Committed public switches for ${environment} are invalid.`);
-  }
-  return configuration;
+    throw new Error("Usage: npm run deployment:init -- --env <environment> [--deploy|--finalize]");
+  if (deploy && finalize) throw new Error("Use only one of --deploy or --finalize.");
+  return { environment, deploy, finalize };
 }
 
 async function getBucket(
@@ -151,9 +140,7 @@ function verifyBucket(bucket: Bucket, configuration: EnvironmentConfiguration): 
   }
   const actualJurisdiction = bucket.jurisdiction ?? "default";
   if (actualJurisdiction !== configuration.jurisdiction) {
-    throw new Error(
-      `Existing bucket jurisdiction ${actualJurisdiction} is incompatible with ${configuration.jurisdiction}.`,
-    );
+    throw new Error("Existing bucket jurisdiction does not match deployment configuration.");
   }
 }
 
@@ -228,7 +215,7 @@ async function findOwningZone(hostname: string): Promise<Zone> {
     );
     if (exact) return exact;
   }
-  throw new Error(`No active Cloudflare zone is accessible for ${hostname}.`);
+  throw new Error("No active Cloudflare zone is accessible for the configured hostname.");
 }
 
 function desiredBotBypassRule(environment: EnvironmentName, hostname: string): WafRule {
@@ -271,8 +258,6 @@ async function provisionServerApiBotBypass(
       applicable: false,
       created: false,
       updated: false,
-      zoneName: null,
-      ruleId: null,
     };
   }
 
@@ -302,13 +287,11 @@ async function provisionServerApiBotBypass(
     if (!created.response.ok || !created.envelope.success || !created.envelope.result) {
       throw publicApiFailure("WAF ruleset creation", created.response, created.envelope);
     }
-    const rule = verifiedRule(created.envelope.result, expected);
+    verifiedRule(created.envelope.result, expected);
     return {
       applicable: true,
       created: true,
       updated: false,
-      zoneName: zone.name,
-      ruleId: rule.id ?? null,
     };
   }
 
@@ -325,8 +308,6 @@ async function provisionServerApiBotBypass(
       applicable: true,
       created: false,
       updated: false,
-      zoneName: zone.name,
-      ruleId: existing.id ?? null,
     };
   }
 
@@ -345,126 +326,172 @@ async function provisionServerApiBotBypass(
       mutation.envelope,
     );
   }
-  const rule = verifiedRule(mutation.envelope.result, expected);
+  verifiedRule(mutation.envelope.result, expected);
   return {
     applicable: true,
     created: !existing,
     updated: Boolean(existing),
-    zoneName: zone.name,
-    ruleId: rule.id ?? null,
   };
 }
 
-loadLocalEnv();
-const args = parseArguments(process.argv.slice(2));
-const configuration = configurationFor(args.environment);
-const env = requireEnvironment(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"] as const);
-assertPublicConfiguration(env);
+async function provisionWorkerCustomDomain(
+  account: string,
+  configuration: EnvironmentConfiguration,
+): Promise<CustomDomainProvisioning> {
+  if (configuration.hostname === "localhost" || configuration.hostname.endsWith(".workers.dev")) {
+    return {
+      applicable: false,
+      created: false,
+      updated: false,
+      certificateAssigned: null,
+    };
+  }
 
-const requestedBucketName = process.env.R2_BUCKET_NAME?.trim();
-if (requestedBucketName !== undefined && requestedBucketName !== configuration.bucketName) {
-  throw new Error(
-    `R2_BUCKET_NAME does not match committed ${args.environment} configuration (${configuration.bucketName}).`,
+  const lookup = await cloudflareRequest<WorkerDomain[]>(
+    `/accounts/${account}/workers/domains?hostname=${encodeURIComponent(configuration.hostname)}`,
   );
-}
-const requestedHostname = process.env.APP_HOSTNAME?.trim();
-if (requestedHostname !== undefined && requestedHostname !== configuration.hostname) {
-  throw new Error(
-    `APP_HOSTNAME does not match committed ${args.environment} configuration (${configuration.hostname}).`,
+  if (!lookup.response.ok || !lookup.envelope.success || !lookup.envelope.result) {
+    throw publicApiFailure("Worker Custom Domain lookup", lookup.response, lookup.envelope);
+  }
+  const existing = lookup.envelope.result.find(
+    (domain) => domain.hostname === configuration.hostname,
   );
+  if (existing?.service === configuration.workerName) {
+    return {
+      applicable: true,
+      created: false,
+      updated: false,
+      certificateAssigned: Boolean(existing.cert_id),
+    };
+  }
+
+  const attached = await cloudflareRequest<WorkerDomain>(`/accounts/${account}/workers/domains`, {
+    method: "PUT",
+    body: JSON.stringify({
+      hostname: configuration.hostname,
+      service: configuration.workerName,
+    }),
+  });
+  if (!attached.response.ok || !attached.envelope.success || !attached.envelope.result) {
+    throw publicApiFailure("Worker Custom Domain attachment", attached.response, attached.envelope);
+  }
+  if (
+    attached.envelope.result.hostname !== configuration.hostname ||
+    attached.envelope.result.service !== configuration.workerName
+  ) {
+    throw new Error("Cloudflare returned an unexpected Worker Custom Domain mapping.");
+  }
+  return {
+    applicable: true,
+    created: existing === undefined,
+    updated: existing !== undefined,
+    certificateAssigned: Boolean(attached.envelope.result.cert_id),
+  };
 }
 
-if (args.deploy) {
-  env.ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.trim() ?? "";
+async function initializeDeployment(): Promise<void> {
+  const args = parseArguments(process.argv.slice(2));
+  loadLocalEnv(`.env.${args.environment}`);
+  loadLocalEnv();
+  const configuration = deploymentConfigurationFromEnvironment(args.environment, process.env);
+
+  if (args.environment === "development") {
+    if (args.deploy || args.finalize) {
+      throw new Error("Development initialization is local-only; run `npm run dev` to start it.");
+    }
+    const configPath = writeGeneratedWranglerConfig(configuration);
+    process.stdout.write(
+      `${JSON.stringify({
+        ok: true,
+        environment: args.environment,
+        configPath,
+        resources: { mode: "local", created: false },
+        deployment: "not_applicable",
+      })}\n`,
+    );
+    return;
+  }
+
+  // Validate every required local detail before writing the mapping or making
+  // the first Cloudflare API request.
+  const env = requireEnvironment(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"] as const);
   assertPublicConfiguration({
-    ALLOWED_ORIGINS: env.ALLOWED_ORIGINS,
+    ...env,
+    ALLOWED_ORIGINS: configuration.allowedOrigins,
     APP_HOSTNAME: configuration.hostname,
   });
   if (configuration.turnstileEnabled) {
-    Object.assign(env, requireEnvironment(["TURNSTILE_SITE_KEY"] as const));
-    assertTurnstileSiteKeyForEnvironment(env.TURNSTILE_SITE_KEY ?? "", args.environment);
+    assertTurnstileSiteKeyForEnvironment(configuration.turnstileSiteKey ?? "", args.environment);
   }
 
-  const requestedBoardCreation = process.env.BOARD_CREATION_ENABLED?.trim();
-  if (requestedBoardCreation !== undefined && !/^(?:true|false)$/u.test(requestedBoardCreation)) {
-    throw new Error("BOARD_CREATION_ENABLED must be exactly true or false when provided.");
-  }
-  if (
-    requestedBoardCreation !== undefined &&
-    requestedBoardCreation !== String(configuration.boardCreationEnabled)
-  ) {
-    throw new Error(
-      `BOARD_CREATION_ENABLED does not match committed ${args.environment} configuration (${configuration.boardCreationEnabled}).`,
+  const generatedConfigPath = writeGeneratedWranglerConfig(configuration);
+  const account = encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID ?? "");
+  const tokenCheck = await cloudflareRequest<{ status?: string }>(
+    `/accounts/${account}/tokens/verify`,
+  );
+  if (!tokenCheck.envelope.success || tokenCheck.envelope.result?.status !== "active") {
+    throw publicApiFailure(
+      "Cloudflare account token verification",
+      tokenCheck.response,
+      tokenCheck.envelope,
     );
   }
-}
 
-const account = encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID ?? "");
-const tokenCheck = await cloudflareRequest<{ status?: string }>(
-  `/accounts/${account}/tokens/verify`,
-);
-if (!tokenCheck.envelope.success || tokenCheck.envelope.result?.status !== "active") {
-  throw publicApiFailure(
-    "Cloudflare account token verification",
-    tokenCheck.response,
-    tokenCheck.envelope,
-  );
-}
-
-const created = await provisionPrivateBucket(account, configuration);
-const assetBucketConfiguration: EnvironmentConfiguration = {
-  ...configuration,
-  bucketName: configuration.assetBucketName,
-};
-const assetCreated = await provisionPrivateBucket(account, assetBucketConfiguration);
-const serverApiBotBypass = await provisionServerApiBotBypass(
-  args.environment,
-  configuration.hostname,
-);
-
-const result = {
-  ok: true,
-  environment: args.environment,
-  bucketName: configuration.bucketName,
-  assetBucketName: configuration.assetBucketName,
-  jurisdiction: configuration.jurisdiction,
-  hostname: configuration.hostname,
-  turnstileEnabled: configuration.turnstileEnabled,
-  boardCreationEnabled: configuration.boardCreationEnabled,
-  created,
-  assetCreated,
-  private: true,
-  serverApiBotBypass,
-  deployment: args.deploy ? "starting" : "not_requested",
-  nextCommand: args.deploy ? null : `npm run cf:bootstrap -- --env ${args.environment} --deploy`,
-};
-process.stdout.write(`${JSON.stringify(result)}\n`);
-
-if (args.deploy) {
-  const wranglerArguments = ["wrangler", "deploy"];
-  if (args.environment !== "production") {
-    wranglerArguments.push("--env", args.environment);
+  if (args.finalize) {
+    const customDomain = await provisionWorkerCustomDomain(account, configuration);
+    process.stdout.write(
+      `${JSON.stringify({
+        ok: true,
+        environment: args.environment,
+        configPath: generatedConfigPath,
+        customDomain,
+        deployment: "finalized",
+      })}\n`,
+    );
+    return;
   }
-  wranglerArguments.push(
-    "--var",
-    `APP_HOSTNAME:${configuration.hostname}`,
-    "--var",
-    `BOARD_CREATION_ENABLED:${configuration.boardCreationEnabled}`,
-    "--var",
-    `ALLOWED_ORIGINS:${env.ALLOWED_ORIGINS}`,
-    "--var",
-    `TURNSTILE_ENABLED:${configuration.turnstileEnabled}`,
-    "--var",
-    `ENVIRONMENT:${args.environment}`,
+
+  const created = await provisionPrivateBucket(account, configuration);
+  const assetBucketConfiguration: EnvironmentConfiguration = {
+    ...configuration,
+    bucketName: configuration.assetBucketName,
+  };
+  const assetCreated = await provisionPrivateBucket(account, assetBucketConfiguration);
+  const serverApiBotBypass = await provisionServerApiBotBypass(
+    args.environment,
+    configuration.hostname,
   );
-  if (configuration.turnstileEnabled) {
-    wranglerArguments.push("--var", `TURNSTILE_SITE_KEY:${env.TURNSTILE_SITE_KEY}`);
+
+  let customDomain: CustomDomainProvisioning | null = null;
+  if (args.deploy) {
+    const wranglerArguments = ["wrangler", "deploy", "--config", generatedConfigPath];
+    const deployment = spawnSync(
+      process.platform === "win32" ? "npx.cmd" : "npx",
+      wranglerArguments,
+      { stdio: "inherit", env: process.env },
+    );
+    if (deployment.error) throw deployment.error;
+    if (deployment.status !== 0) throw new Error("Worker deployment failed.");
+    customDomain = await provisionWorkerCustomDomain(account, configuration);
   }
-  const deployment = spawnSync(
-    process.platform === "win32" ? "npx.cmd" : "npx",
-    wranglerArguments,
-    { stdio: "inherit", env: process.env },
-  );
-  if (deployment.error) throw deployment.error;
-  if (deployment.status !== 0) process.exitCode = deployment.status ?? 1;
+
+  const result = {
+    ok: true,
+    environment: args.environment,
+    configPath: generatedConfigPath,
+    resources: {
+      snapshotBucketCreated: created,
+      assetBucketCreated: assetCreated,
+      private: true,
+    },
+    serverApiBotBypass,
+    customDomain,
+    deployment: args.deploy ? "complete" : "not_requested",
+    nextCommand: args.deploy
+      ? null
+      : `npm run deployment:init -- --env ${args.environment} --deploy`,
+  };
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 }
+
+await initializeDeployment();

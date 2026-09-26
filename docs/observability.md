@@ -40,9 +40,9 @@ Run this gate in staging before saving queries. Passing `npm run observability:c
 that the declaration is internally consistent; it cannot prove that a deployed runtime emits the
 declared fields.
 
-1. Enable Workers Logs for every deployed environment at a head sampling rate of `1`. The root
-   production target currently declares observability in `wrangler.jsonc`; confirm the effective
-   configuration and the staging/development environment overrides before relying on their data.
+1. Enable Workers Logs for every deployed environment at a head sampling rate of `1`. The
+   setup-generated Wrangler configuration enables observability; confirm the effective target
+   configuration before relying on its data.
 2. Emit custom telemetry as a JavaScript object, for example `console.log({ event, ...fields })`.
    Do not pass `JSON.stringify(object)` to `console.log`: Cloudflare stores that as a message string
    rather than indexing the application fields.

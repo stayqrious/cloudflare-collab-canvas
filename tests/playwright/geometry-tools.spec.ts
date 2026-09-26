@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { canvasPoint, createBoard, drag, drawShape } from "./helpers";
+import {
+  canvasPoint,
+  chooseMoreTool,
+  createBoard,
+  drag,
+  drawShape,
+  expandToolPermissions,
+} from "./helpers";
 
 test("shape palette, rotatable protractor, snapping, partial erase, and feature gates work together", async ({
   page,
@@ -33,8 +40,7 @@ test("shape palette, rotatable protractor, snapping, partial erase, and feature 
   await expect(page.locator("#drawing-area .board-item-ellipse")).toHaveCount(1);
 
   const placement = await canvasPoint(page, 0.76, 0.62);
-  await page.getByTestId("tool-protractor").click();
-  await page.getByTestId("tools-protractor").click();
+  await chooseMoreTool(page, "tools-protractor");
   await page.mouse.click(placement.x, placement.y);
   const protractor = page.locator("#drawing-area .board-item-protractor");
   await expect(protractor).toHaveCount(1);
@@ -117,6 +123,7 @@ test("shape palette, rotatable protractor, snapping, partial erase, and feature 
       nearTick: { x: tick.x + 5, y: tick.y + 4 },
     };
   });
+  await page.getByTestId("tool-rectangle").click();
   await page.getByTestId("tool-line").click();
   await page.mouse.click(snapTarget.center.x, snapTarget.center.y);
   await expect(page.locator("#local-preview-layer .connector-snap-halo")).toHaveCount(1);
@@ -156,11 +163,44 @@ test("shape palette, rotatable protractor, snapping, partial erase, and feature 
   await page.getByTestId("settings-button").click();
   const settings = page.getByTestId("settings-drawer");
   await expect(settings).toBeVisible();
+  await expandToolPermissions(page);
   const protractorGate = settings.locator("input[data-feature='protractor']");
   await expect(protractorGate).toBeChecked();
   await protractorGate.uncheck();
-  await expect(page.getByTestId("tool-protractor")).toBeHidden();
+  await expect
+    .poll(async () =>
+      page.getByTestId("tools-protractor").evaluate((node) => (node as HTMLElement).hidden),
+    )
+    .toBe(true);
   await protractorGate.check();
-  await expect(page.getByTestId("tool-protractor")).toBeVisible();
+  await expect
+    .poll(async () =>
+      page.getByTestId("tools-protractor").evaluate((node) => (node as HTMLElement).hidden),
+    )
+    .toBe(false);
+
+  // Protractor must be able to restore the More trigger when it is the only nested tool enabled.
+  for (const feature of [
+    "stamps",
+    "images",
+    "text",
+    "tables",
+    "templates",
+    "organisationTemplates",
+  ]) {
+    const toggle = settings.locator(`input[data-feature='${feature}']`);
+    if (await toggle.isChecked()) await toggle.uncheck();
+  }
+  const moreTools = page.getByTestId("tool-more");
+  // Feature updates are acknowledged asynchronously. Wait until Protractor is genuinely the only
+  // enabled nested tool before testing whether it controls the More trigger.
+  await expect
+    .poll(() => page.locator("[data-more-tools-grid] > button:not([hidden])").count())
+    .toBe(1);
+  await expect(moreTools).toBeVisible();
+  await protractorGate.uncheck();
+  await expect(moreTools).toBeHidden();
+  await protractorGate.check();
+  await expect(moreTools).toBeVisible();
   expect(browserErrors).toEqual([]);
 });

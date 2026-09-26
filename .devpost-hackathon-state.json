@@ -1,0 +1,36 @@
+{
+  "plugin": "devpost-hackathon",
+  "version": 2,
+  "hackathon": {
+    "slug": "webmcp",
+    "name": "WebMCP Challenge",
+    "url": "https://webmcp.devpost.com/",
+    "selected": true,
+    "source": "known"
+  },
+  "participant": {
+    "name": "Shankar Ram Akshayakumar",
+    "display_name": "Shankar"
+  },
+  "project": {
+    "name": "SpaceScale",
+    "summary": "SpaceScale is a multiplayer canvas where students draw and write together while AI coaches each learner in real time—using two-way WebMCP polling, guided by the teacher's own skill and knowledge files.",
+    "ai_usage": "The visiting WebMCP agent checks handwritten work, identifies reasoning errors, gives hints instead of answers, compares responses, suggests peer support, and brings relevant learning material onto the shared board under the teacher's permissions.",
+    "codex_usage": "Claude Code and Codex supported product exploration, architecture, WebMCP tool design, implementation, automated testing, debugging, review, documentation, demo preparation, and submission writing. Codex is also the reference demo agent."
+  },
+  "current_stage": "prepare-submission",
+  "completed_stages": ["start-hackathon", "review", "prepare-submission"],
+  "rules_acknowledged": true,
+  "learning": {
+    "status": "not-started",
+    "current_step": "",
+    "completed_steps": [],
+    "plan_file": "",
+    "checklist_file": ""
+  },
+  "submission": {
+    "draft_file": "devpost-submission.md",
+    "status": "drafting"
+  },
+  "next_command": "submit-project"
+}

@@ -1,7 +1,15 @@
 name: CI
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
   contents: read
@@ -21,9 +29,12 @@ jobs:
       - name: Verify generated Worker binding types
         run: npm run cf:types -- --check
 
+  # Pull requests run the browser suite in Chromium and mobile Chromium, which covers the new
+  # surface area on every change; a manual dispatch runs every browser project.
   browser:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,5 +42,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps
-      - run: npm run test:e2e
+      - if: github.event_name == 'pull_request'
+        run: npx playwright install --with-deps chromium
+      - if: github.event_name == 'pull_request'
+        run: npm run test:e2e -- --project=chromium --project=mobile-chromium
+      - if: github.event_name == 'workflow_dispatch'
+        run: npx playwright install --with-deps
+      - if: github.event_name == 'workflow_dispatch'
+        run: npm run test:e2e

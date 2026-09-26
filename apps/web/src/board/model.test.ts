@@ -40,6 +40,25 @@ function sticky(version = 1): BoardItem {
   };
 }
 
+function textItem(version = 1): Extract<BoardItem, { kind: "text" }> {
+  return {
+    id: ITEM_ID,
+    kind: "text",
+    z: 1,
+    version,
+    createdBy: ACTOR_ID,
+    style: {
+      kind: "text",
+      color: "#20201e",
+      fontSize: 20,
+      fontFamily: "sans",
+      opacity: 1,
+    },
+    transform: [1, 0, 0, 1, 0, 0],
+    geometry: { x: 10, y: 40, text: "$$\\frac{1}{2}$$" },
+  };
+}
+
 function stamp(version = 1): BoardItem {
   return {
     id: ITEM_ID,
@@ -76,7 +95,7 @@ function image(version = 1): BoardItem {
   };
 }
 
-function zone(version = 1): BoardItem {
+function zone(version = 1): Extract<BoardItem, { kind: "zone" }> {
   return {
     id: "018f47a1-7a2b-7c3d-8e4f-123456789ac1",
     kind: "zone",
@@ -227,6 +246,106 @@ describe("BoardModel", () => {
     model.load(snapshot([item], 1));
     expect(model.hitTest([50, 30])?.id).toBe(ITEM_ID);
     expect(model.hitTest([400, 300])).toBeUndefined();
+  });
+
+  it("uses measured MathJax dimensions for bounds and hit testing", () => {
+    const item = textItem();
+    item.geometry.text = `$$${"x".repeat(100)}$$`;
+    const model = new BoardModel();
+    model.load(snapshot([item], 1));
+    expect(model.setRenderedTextSize(ITEM_ID, 1, 240, 180)).toBe(true);
+    expect(model.getBounds(ITEM_ID)).toEqual({ minX: 8, minY: 18, maxX: 252, maxY: 202 });
+    expect(itemBounds(model.getItem(ITEM_ID) as BoardItem)).toEqual({
+      minX: 8,
+      minY: 18,
+      maxX: 252,
+      maxY: 202,
+    });
+    expect(model.hitTest([200, 180], 0)?.id).toBe(ITEM_ID);
+    expect(model.setRenderedTextSize(ITEM_ID, 0, 500, 500)).toBe(false);
+  });
+
+  it("builds a durable detach when measured and canonical bounds both leave a Section", () => {
+    const section = zone();
+    section.geometry.width = 260;
+    section.geometry.height = 100;
+    const item = textItem();
+    item.geometry.text = Array.from({ length: 5 }, () => "$$\\frac{1}{2}$$").join("\n");
+    item.sectionId = section.id;
+    const model = new BoardModel();
+    model.load(snapshot([section]));
+    const command: CommitFrame = {
+      v: 1,
+      t: "client.commit",
+      commandId: ACTION_ID,
+      actionId: ACTION_ID,
+      baseSeq: 0,
+      op: {
+        kind: "item.create",
+        item: {
+          id: item.id,
+          kind: item.kind,
+          sectionId: item.sectionId,
+          style: item.style,
+          transform: item.transform,
+          geometry: item.geometry,
+        },
+      },
+    };
+    model.queue(command, ACTOR_ID);
+
+    expect(model.setRenderedTextSize(ITEM_ID, 0, 240, 180)).toBe(true);
+    expect(model.renderedTextSectionMembershipOperation(ITEM_ID, 0)).toBeNull();
+    model.applyAction({
+      v: 1,
+      t: "server.action",
+      seq: 1,
+      acceptedAt: 1,
+      actor: { id: ACTOR_ID, displayName: "Sam" },
+      commandId: ACTION_ID,
+      actionId: ACTION_ID,
+      op: { kind: "item.create", item },
+    } as unknown as ServerAction);
+
+    expect(model.renderedTextSectionMembershipOperation(ITEM_ID, 1)).toEqual({
+      kind: "item.update",
+      itemId: ITEM_ID,
+      expectedVersion: 1,
+      patch: { sectionId: null },
+    });
+  });
+
+  it("keeps Section membership when only the local measurement leaves the Section", () => {
+    const section = zone();
+    section.geometry.width = 260;
+    section.geometry.height = 100;
+    const item = textItem();
+    item.sectionId = section.id;
+    const model = new BoardModel();
+    model.load(snapshot([section, item], 1));
+
+    // A client whose MathJax measurement overflows the Section must not detach while the
+    // shared canonical estimate still fits, or clients that measure the same formula
+    // differently take turns detaching and reattaching it forever.
+    expect(model.setRenderedTextSize(ITEM_ID, 1, 240, 180)).toBe(true);
+    expect(model.renderedTextSectionMembershipOperation(ITEM_ID, 1)).toBeNull();
+  });
+
+  it("builds a durable attachment when measured MathJax bounds fit a Section", () => {
+    const section = zone();
+    section.geometry.width = 100;
+    section.geometry.height = 80;
+    const item = textItem();
+    const model = new BoardModel();
+    model.load(snapshot([section, item], 1));
+
+    expect(model.setRenderedTextSize(ITEM_ID, 1, 40, 24)).toBe(true);
+    expect(model.renderedTextSectionMembershipOperation(ITEM_ID, 1)).toEqual({
+      kind: "item.update",
+      itemId: ITEM_ID,
+      expectedVersion: 1,
+      patch: { sectionId: section.id },
+    });
   });
 
   it("finds connector anchors on transformed local edges", () => {

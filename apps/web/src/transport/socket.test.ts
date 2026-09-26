@@ -59,6 +59,7 @@ function hooks(): SocketHooks {
     onAction: vi.fn(),
     onReady: vi.fn(),
     onRejected: vi.fn(),
+    onCommentsChanged: vi.fn(),
     onHistory: vi.fn(),
     onAccessChanged: vi.fn(),
     onOwnerRecovery: vi.fn(),

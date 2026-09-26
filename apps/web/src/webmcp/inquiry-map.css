@@ -1,0 +1,132 @@
+.inquiry-preview-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.inquiry-preview-dialog > form {
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.inquiry-preview-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inquiry-preview-state {
+  padding: 5px 9px;
+  border: 1px solid #d8cdf0;
+  border-radius: 999px;
+  background: #f7f2ff;
+  color: #65448f;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inquiry-preview-title {
+  color: #4b2c82;
+  font:
+    650 19px / 1.25 "Rubik Variable",
+    serif;
+}
+
+.webmcp-dialog > form > .inquiry-preview-meta {
+  color: #7d708b;
+  font-size: 10px;
+}
+
+.inquiry-preview-themes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.inquiry-preview-theme {
+  min-height: 120px;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 13px;
+  border: 1px solid #d9c9ef;
+  border-radius: 12px;
+  background: #f4eeff;
+}
+
+.inquiry-preview-theme[data-colour="2"] {
+  border-color: #bcdcef;
+  background: #eaf7ff;
+}
+
+.inquiry-preview-theme[data-colour="3"] {
+  border-color: #efcbbc;
+  background: #fff1eb;
+}
+
+.inquiry-preview-theme[data-colour="4"] {
+  border-color: #c8dfc1;
+  background: #eff9ec;
+}
+
+.inquiry-preview-theme h3,
+.inquiry-preview-theme p,
+.inquiry-preview-theme small {
+  margin: 0;
+}
+
+.inquiry-preview-theme h3 {
+  color: #3f2c59;
+  font-size: 13px;
+}
+
+.inquiry-preview-theme p {
+  color: #50485a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.inquiry-preview-theme small {
+  color: #76569e;
+  font-size: 8px;
+  font-weight: 680;
+  text-transform: uppercase;
+}
+
+.inquiry-preview-section,
+.inquiry-preview-tension {
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  color: #493e55;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.inquiry-preview-section {
+  border: 1px solid #e1d7ef;
+  background: #fff;
+}
+
+.inquiry-preview-section ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.inquiry-preview-tension {
+  background: #fff0ea;
+  color: #633b34;
+}
+
+.inquiry-preview-tension p {
+  margin: 0;
+}
+
+@media (max-width: 620px) {
+  .inquiry-preview-themes {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,22 +1,20 @@
-import { readFileSync } from "node:fs";
+import {
+  deploymentConfigurationFromEnvironment,
+  parseDeploymentEnvironment,
+  requestedEnvironment,
+  writeGeneratedWranglerConfig,
+} from "./deployment-config.ts";
 import {
   assertPublicConfiguration,
   assertTurnstileSiteKeyForEnvironment,
   cloudflareRequest,
   loadLocalEnv,
+  readLocalEnv,
   requireEnvironment,
 } from "./env.ts";
 
 type Bucket = { name: string; jurisdiction?: string };
 type BucketList = { buckets?: Bucket[] } | Bucket[];
-type EnvironmentName = "development" | "staging" | "production";
-type PublicEnvironment = {
-  bucketName: string;
-  assetBucketName: string;
-  hostname: string;
-  turnstileEnabled: boolean;
-  boardCreationEnabled: boolean;
-};
 type TurnstileWidget = {
   sitekey?: string;
   secret?: string;
@@ -24,47 +22,38 @@ type TurnstileWidget = {
 };
 type WorkerDomain = { hostname?: string; service?: string; cert_id?: string };
 
+// Without `--env`, the environment comes from DEPLOYMENT_ENVIRONMENT (process
+// or `.env`) and defaults to production. `.env.<environment>` is always loaded
+// before `.env` so environment-specific values win, matching deployment:init.
+const requested = requestedEnvironment(process.argv.slice(2));
+const environmentName = parseDeploymentEnvironment(
+  (
+    requested ??
+    process.env.DEPLOYMENT_ENVIRONMENT ??
+    readLocalEnv().DEPLOYMENT_ENVIRONMENT
+  )?.trim() || "production",
+);
+loadLocalEnv(`.env.${environmentName}`);
 loadLocalEnv();
+const environmentConfiguration = deploymentConfigurationFromEnvironment(
+  environmentName,
+  process.env,
+);
+writeGeneratedWranglerConfig(environmentConfiguration);
 const env = requireEnvironment([
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_API_TOKEN",
   "SESSION_SIGNING_KEY_CURRENT",
-  "R2_BUCKET_NAME",
-  "APP_HOSTNAME",
 ] as const);
-env.ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.trim() ?? "";
-assertPublicConfiguration(env);
-
-const environments = JSON.parse(readFileSync("config/environments.json", "utf8")) as Record<
-  EnvironmentName,
-  PublicEnvironment
->;
-const selectedEnvironment = (
-  Object.entries(environments) as Array<[EnvironmentName, PublicEnvironment]>
-).find(
-  ([, configuration]) =>
-    configuration.bucketName === env.R2_BUCKET_NAME && configuration.hostname === env.APP_HOSTNAME,
-);
-if (!selectedEnvironment) {
-  throw new Error(
-    "APP_HOSTNAME and R2_BUCKET_NAME do not identify the same committed deployment environment.",
-  );
-}
-const [environmentName, environmentConfiguration] = selectedEnvironment;
+assertPublicConfiguration({
+  ...env,
+  ALLOWED_ORIGINS: environmentConfiguration.allowedOrigins,
+  APP_HOSTNAME: environmentConfiguration.hostname,
+});
 if (environmentConfiguration.turnstileEnabled) {
   Object.assign(env, requireEnvironment(["TURNSTILE_SECRET_KEY", "TURNSTILE_SITE_KEY"] as const));
   assertTurnstileSiteKeyForEnvironment(env.TURNSTILE_SITE_KEY ?? "", environmentName);
 }
-const requestedBoardCreation = process.env.BOARD_CREATION_ENABLED?.trim();
-if (
-  requestedBoardCreation !== undefined &&
-  requestedBoardCreation !== String(environmentConfiguration.boardCreationEnabled)
-) {
-  throw new Error(
-    `BOARD_CREATION_ENABLED does not match committed ${environmentName} configuration (${environmentConfiguration.boardCreationEnabled}).`,
-  );
-}
-
 const account = encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID ?? "");
 
 function report(value: Record<string, unknown>): void {
@@ -75,8 +64,7 @@ const token = await cloudflareRequest<{ status?: string }>(`/accounts/${account}
 report({
   check: "public_configuration",
   environment: environmentName,
-  hostnameMatchesCommittedConfiguration: true,
-  bucketMatchesCommittedConfiguration: true,
+  generatedConfiguration: true,
   turnstileEnabled: environmentConfiguration.turnstileEnabled,
   boardCreationEnabled: environmentConfiguration.boardCreationEnabled,
 });
@@ -98,15 +86,12 @@ report({
 });
 
 const domains = await cloudflareRequest<WorkerDomain[]>(
-  `/accounts/${account}/workers/domains?hostname=${encodeURIComponent(env.APP_HOSTNAME ?? "")}`,
+  `/accounts/${account}/workers/domains?hostname=${encodeURIComponent(environmentConfiguration.hostname)}`,
 );
 const configuredDomain = domains.envelope.result?.find(
-  (domain) => domain.hostname === env.APP_HOSTNAME,
+  (domain) => domain.hostname === environmentConfiguration.hostname,
 );
-const expectedWorkerService =
-  environmentName === "production"
-    ? "cloudflare-collab-canvas"
-    : `cloudflare-collab-canvas-${environmentName}`;
+const expectedWorkerService = environmentConfiguration.workerName;
 const expectedWorkerAttached = configuredDomain?.service === expectedWorkerService;
 report({
   check: "workers_domain_access",
@@ -131,7 +116,9 @@ const buckets = await cloudflareRequest<BucketList>(
 );
 const result = buckets.envelope.result;
 const bucketList = Array.isArray(result) ? result : (result?.buckets ?? []);
-const configuredBucketExists = bucketList.some((bucket) => bucket.name === env.R2_BUCKET_NAME);
+const configuredBucketExists = bucketList.some(
+  (bucket) => bucket.name === environmentConfiguration.bucketName,
+);
 const configuredAssetBucketExists = bucketList.some(
   (bucket) => bucket.name === environmentConfiguration.assetBucketName,
 );
@@ -186,7 +173,7 @@ if (environmentConfiguration.turnstileEnabled) {
     ? widget.envelope.result?.sitekey === env.TURNSTILE_SITE_KEY
     : null;
   const widgetHostnameAllowed = widgetReadable
-    ? widget.envelope.result?.domains?.includes(env.APP_HOSTNAME ?? "") === true
+    ? widget.envelope.result?.domains?.includes(environmentConfiguration.hostname) === true
     : null;
   const returnedWidgetSecret = widget.envelope.result?.secret;
   const widgetSecretMatches =

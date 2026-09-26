@@ -1,6 +1,8 @@
 import {
   PROTOCOL_VERSION as SHARED_PROTOCOL_VERSION,
+  type Assistance as SharedAssistance,
   type BoardFeatures as SharedBoardFeatures,
+  type CommentMedia as SharedCommentMedia,
   type TextDecoration as SharedTextDecoration,
   type TextFontFamily as SharedTextFontFamily,
   type TextFontStyle as SharedTextFontStyle,
@@ -13,6 +15,8 @@ export type Role = "viewer" | "editor" | "owner";
 export type DrawingPolicy = "editors_enabled" | "owner_only" | "locked";
 export type AccessMode = "private" | "link_view";
 export type BoardFeatures = SharedBoardFeatures;
+/** The one picture or video a comment can carry beside its text. */
+export type CommentMedia = SharedCommentMedia;
 export type ToolName =
   | "select"
   | "pencil"
@@ -143,14 +147,19 @@ export type LineGeometry = {
   y2: number;
   visiblePaths?: VisiblePaths;
 };
-export type BoxGeometry = { x: number; y: number; width: number; height: number };
+export type BoxGeometry = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 export type OutlineBoxGeometry = BoxGeometry & { visiblePaths?: VisiblePaths };
 export type RectangleKind = "rectangle" | "square";
 export type RectangleGeometry = OutlineBoxGeometry & { shape: RectangleKind };
 export type PolygonKind = "triangle" | "rhombus" | "pentagon" | "hexagon";
 export type PolygonGeometry = OutlineBoxGeometry & { polygon: PolygonKind };
 export type ProtractorGeometry = { radius: number };
-export type TextGeometry = { x: number; y: number; text: string };
+export type TextGeometry = { x: number; y: number; text: string; embed?: "video" };
 export type StickyGeometry = {
   x: number;
   y: number;
@@ -158,7 +167,12 @@ export type StickyGeometry = {
   height: number;
   text: string;
 };
-export type StampGeometry = { x: number; y: number; size: number; stamp: StampKind };
+export type StampGeometry = {
+  x: number;
+  y: number;
+  size: number;
+  stamp: StampKind;
+};
 
 export type ImageGeometry = {
   x: number;
@@ -190,6 +204,7 @@ type ItemBase = {
   z: number;
   version: number;
   createdBy: string;
+  assistedBy?: "ai";
   transform: Matrix;
 };
 
@@ -292,7 +307,12 @@ export type ItemPatch = {
 
 export type BatchItemOperation =
   | { kind: "item.create"; item: NewBoardItem }
-  | { kind: "item.update"; itemId: string; expectedVersion: number; patch: ItemPatch }
+  | {
+      kind: "item.update";
+      itemId: string;
+      expectedVersion: number;
+      patch: ItemPatch;
+    }
   | { kind: "item.delete"; itemId: string; expectedVersion: number }
   | {
       kind: "item.copy";
@@ -307,8 +327,16 @@ export type BatchItemOperation =
 export type DurableOperation =
   | BatchItemOperation
   | { kind: "items.batch"; operations: BatchItemOperation[] }
-  | { kind: "history.undo"; expectedHistoryVersion: number; targetActionId?: string }
-  | { kind: "history.redo"; expectedHistoryVersion: number; targetActionId?: string }
+  | {
+      kind: "history.undo";
+      expectedHistoryVersion: number;
+      targetActionId?: string;
+    }
+  | {
+      kind: "history.redo";
+      expectedHistoryVersion: number;
+      targetActionId?: string;
+    }
   | { kind: "board.clear"; expectedBoardSeq: number };
 
 export type CommitFrame = {
@@ -321,6 +349,25 @@ export type CommitFrame = {
 };
 
 export type Actor = { id: string; displayName: string };
+
+export type CommentState = "open" | "resolved" | "orphaned";
+
+export type BoardComment = {
+  id: string;
+  itemId: string;
+  body: string;
+  state: CommentState;
+  author: Actor;
+  createdAt: number;
+  updatedAt: number;
+  resolvedBy?: Actor;
+  resolvedAt?: number;
+  assistedBy?: "ai";
+  /** Present iff `assistedBy === "ai"`: which WebMCP tool wrote it and the action it answered. */
+  assistance?: SharedAssistance;
+  /** A picture already stored on this board, or a public video, shown under the comment text. */
+  media?: CommentMedia;
+};
 
 export type CanonicalOperation = DurableOperation & {
   item?: BoardItem;
@@ -382,7 +429,11 @@ export type Bootstrap = {
   snapshot: BoardSnapshot | { url: string; seq: number; format?: string; version?: number };
 };
 
-export type Member = Actor & { role: Role; connected?: boolean; primaryOwner?: boolean };
+export type Member = Actor & {
+  role: Role;
+  connected?: boolean;
+  primaryOwner?: boolean;
+};
 export type Presence = Actor & {
   connectionId?: string;
   role?: Role;
@@ -456,6 +507,11 @@ export function canRoleDraw(role: Role, policy: DrawingPolicy): boolean {
   if (policy === "locked" || role === "viewer") return false;
   if (policy === "owner_only") return role === "owner";
   return role === "owner" || role === "editor";
+}
+
+/** Comments follow the drawing policy's role rules but are not blocked by a lock. */
+export function canRoleComment(role: Role, policy: DrawingPolicy): boolean {
+  return canRoleDraw(role, policy === "locked" ? "editors_enabled" : policy);
 }
 
 export function createId(): string {

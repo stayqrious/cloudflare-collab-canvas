@@ -16,20 +16,48 @@ env:
   WRANGLER_VERSION: 4.118.0
 
 jobs:
+  # Every push to main deploys, including direct pushes that skipped a pull request, so the
+  # full repository check gates both deploy jobs rather than relying on branch protection.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run check
+
   staging:
+    needs: validate
     if: github.ref == 'refs/heads/staging'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
       name: staging
-      url: https://staging-cloud-collab.spacescale.net
+      url: ${{ format('https://{0}', vars.APP_HOSTNAME) }}
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       ORGANISATION_SIGNING_KEYS: ${{ secrets.ORGANISATION_SIGNING_KEYS }}
+      SESSION_SIGNING_KEY_CURRENT: ${{ secrets.SESSION_SIGNING_KEY_CURRENT }}
+      SESSION_SIGNING_KEY_PREVIOUS: ${{ secrets.SESSION_SIGNING_KEY_PREVIOUS }}
+      TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+      DEPLOYMENT_NAME: ${{ vars.DEPLOYMENT_NAME }}
+      R2_BUCKET_JURISDICTION: ${{ vars.R2_BUCKET_JURISDICTION }}
+      APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+      BOARD_CREATION_ENABLED: "true"
+      TURNSTILE_ENABLED: "false"
       ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
       WEBHOOK_ALLOWED_ORIGINS: ${{ vars.WEBHOOK_ALLOWED_ORIGINS }}
-      DEPLOY_URL: https://staging-cloud-collab.spacescale.net
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,10 +78,13 @@ jobs:
           : "${CLOUDFLARE_ACCOUNT_ID:?Configure the staging Cloudflare account ID}"
           : "${CLOUDFLARE_API_TOKEN:?Configure the staging Cloudflare API token}"
           : "${ORGANISATION_SIGNING_KEYS:?Configure the staging Organisation key registry}"
+          : "${SESSION_SIGNING_KEY_CURRENT:?Configure the staging session signing key}"
+          : "${DEPLOYMENT_NAME:?Configure the staging deployment name}"
+          : "${APP_HOSTNAME:?Configure the staging application hostname}"
           test "$(node -p "require('./node_modules/wrangler/package.json').version")" = "$WRANGLER_VERSION"
 
-      - name: Ensure private staging R2 buckets
-        run: npm run cf:bootstrap -- --env staging
+      - name: Initialize staging resources
+        run: npm run deployment:init -- --env staging
 
       - run: npm run build:web
 
@@ -64,20 +95,24 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/wrangler-staging-upload.jsonl"
           secrets_file="$RUNNER_TEMP/wrangler-staging-secrets.json"
-          jq -n --arg registry "$ORGANISATION_SIGNING_KEYS" \
-            '{ORGANISATION_SIGNING_KEYS: $registry}' > "$secrets_file"
+          # Every runtime secret comes from the GitHub environment and is uploaded with each
+          # version, so the Worker never depends on secrets set by hand. Blank optional ones
+          # are left out rather than uploaded empty.
+          jq -n \
+            --arg registry "$ORGANISATION_SIGNING_KEYS" \
+            --arg session "$SESSION_SIGNING_KEY_CURRENT" \
+            --arg previous "$SESSION_SIGNING_KEY_PREVIOUS" \
+            --arg turnstile "$TURNSTILE_SECRET_KEY" \
+            '{ORGANISATION_SIGNING_KEYS: $registry, SESSION_SIGNING_KEY_CURRENT: $session}
+              + (if $previous == "" then {} else {SESSION_SIGNING_KEY_PREVIOUS: $previous} end)
+              + (if $turnstile == "" then {} else {TURNSTILE_SECRET_KEY: $turnstile} end)' \
+            > "$secrets_file"
           chmod 600 "$secrets_file"
           WRANGLER_OUTPUT_FILE_PATH="$output" npx --no-install wrangler versions upload \
-            --env staging \
+            --config .generated/wrangler.staging.jsonc \
             --secrets-file "$secrets_file" \
             --tag "staging-${GITHUB_SHA:0:12}" \
-            --message "staging ${GITHUB_SHA}" \
-            --var "APP_HOSTNAME:staging-cloud-collab.spacescale.net" \
-            --var "BOARD_CREATION_ENABLED:true" \
-            --var "ALLOWED_ORIGINS:${ALLOWED_ORIGINS}" \
-            --var "WEBHOOK_ALLOWED_ORIGINS:${WEBHOOK_ALLOWED_ORIGINS}" \
-            --var "TURNSTILE_ENABLED:false" \
-            --var "ENVIRONMENT:staging"
+            --message "staging ${GITHUB_SHA}"
           version="$(jq -r 'select(.type == "version-upload") | .version_id' "$output" | tail -n 1)"
           test -n "$version"
           test "$version" != "null"
@@ -89,9 +124,12 @@ jobs:
           set -euo pipefail
           npx --no-install wrangler versions deploy \
             "${{ steps.upload.outputs.version_id }}@100" \
-            --env staging \
+            --config .generated/wrangler.staging.jsonc \
             --yes \
             --message "staging ${GITHUB_SHA}"
+
+      - name: Finalize staging Custom Domain
+        run: npm run deployment:init -- --env staging --finalize
 
       - name: Probe staging health
         shell: bash
@@ -100,7 +138,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             if curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
               --connect-timeout 5 --max-time 15 \
-              "$DEPLOY_URL/healthz?deploy=${GITHUB_RUN_ID}-${attempt}" |
+              "https://${APP_HOSTNAME}/healthz?deploy=${GITHUB_RUN_ID}-${attempt}" |
               jq -e '.ok == true and .service == "cloudflare-collab-canvas-edge"' >/dev/null
             then
               exit 0
@@ -111,20 +149,28 @@ jobs:
           exit 1
 
   production:
+    needs: validate
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
       name: production
-      url: https://spacescale.net
+      url: ${{ format('https://{0}', vars.APP_HOSTNAME) }}
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       ORGANISATION_SIGNING_KEYS: ${{ secrets.ORGANISATION_SIGNING_KEYS }}
+      SESSION_SIGNING_KEY_CURRENT: ${{ secrets.SESSION_SIGNING_KEY_CURRENT }}
+      SESSION_SIGNING_KEY_PREVIOUS: ${{ secrets.SESSION_SIGNING_KEY_PREVIOUS }}
+      TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+      DEPLOYMENT_NAME: ${{ vars.DEPLOYMENT_NAME }}
+      R2_BUCKET_JURISDICTION: ${{ vars.R2_BUCKET_JURISDICTION }}
+      APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+      BOARD_CREATION_ENABLED: "true"
+      TURNSTILE_ENABLED: "true"
       TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
       ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
       WEBHOOK_ALLOWED_ORIGINS: ${{ vars.WEBHOOK_ALLOWED_ORIGINS }}
-      DEPLOY_URL: https://spacescale.net
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,11 +191,15 @@ jobs:
           : "${CLOUDFLARE_ACCOUNT_ID:?Configure the production Cloudflare account ID}"
           : "${CLOUDFLARE_API_TOKEN:?Configure the production Cloudflare API token}"
           : "${ORGANISATION_SIGNING_KEYS:?Configure the production Organisation key registry}"
+          : "${SESSION_SIGNING_KEY_CURRENT:?Configure the production session signing key}"
+          : "${TURNSTILE_SECRET_KEY:?Configure the production Turnstile secret key}"
+          : "${DEPLOYMENT_NAME:?Configure the production deployment name}"
+          : "${APP_HOSTNAME:?Configure the production application hostname}"
           : "${TURNSTILE_SITE_KEY:?Configure the production Turnstile site key}"
           test "$(node -p "require('./node_modules/wrangler/package.json').version")" = "$WRANGLER_VERSION"
 
-      - name: Ensure private production R2 buckets
-        run: npm run cf:bootstrap -- --env production
+      - name: Initialize production resources
+        run: npm run deployment:init -- --env production
 
       - run: npm run build:web
 
@@ -160,21 +210,24 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/wrangler-production-upload.jsonl"
           secrets_file="$RUNNER_TEMP/wrangler-production-secrets.json"
-          jq -n --arg registry "$ORGANISATION_SIGNING_KEYS" \
-            '{ORGANISATION_SIGNING_KEYS: $registry}' > "$secrets_file"
+          # Every runtime secret comes from the GitHub environment and is uploaded with each
+          # version, so the Worker never depends on secrets set by hand. Blank optional ones
+          # are left out rather than uploaded empty.
+          jq -n \
+            --arg registry "$ORGANISATION_SIGNING_KEYS" \
+            --arg session "$SESSION_SIGNING_KEY_CURRENT" \
+            --arg previous "$SESSION_SIGNING_KEY_PREVIOUS" \
+            --arg turnstile "$TURNSTILE_SECRET_KEY" \
+            '{ORGANISATION_SIGNING_KEYS: $registry, SESSION_SIGNING_KEY_CURRENT: $session}
+              + (if $previous == "" then {} else {SESSION_SIGNING_KEY_PREVIOUS: $previous} end)
+              + (if $turnstile == "" then {} else {TURNSTILE_SECRET_KEY: $turnstile} end)' \
+            > "$secrets_file"
           chmod 600 "$secrets_file"
           WRANGLER_OUTPUT_FILE_PATH="$output" npx --no-install wrangler versions upload \
-            --env="" \
+            --config .generated/wrangler.production.jsonc \
             --secrets-file "$secrets_file" \
             --tag "main-${GITHUB_SHA:0:12}" \
-            --message "production ${GITHUB_SHA}" \
-            --var "APP_HOSTNAME:spacescale.net" \
-            --var "BOARD_CREATION_ENABLED:true" \
-            --var "ALLOWED_ORIGINS:${ALLOWED_ORIGINS}" \
-            --var "WEBHOOK_ALLOWED_ORIGINS:${WEBHOOK_ALLOWED_ORIGINS}" \
-            --var "TURNSTILE_SITE_KEY:${TURNSTILE_SITE_KEY}" \
-            --var "TURNSTILE_ENABLED:true" \
-            --var "ENVIRONMENT:production"
+            --message "production ${GITHUB_SHA}"
           version="$(jq -r 'select(.type == "version-upload") | .version_id' "$output" | tail -n 1)"
           test -n "$version"
           test "$version" != "null"
@@ -186,9 +239,12 @@ jobs:
           set -euo pipefail
           npx --no-install wrangler versions deploy \
             "${{ steps.upload.outputs.version_id }}@100" \
-            --env="" \
+            --config .generated/wrangler.production.jsonc \
             --yes \
             --message "production ${GITHUB_SHA}"
+
+      - name: Finalize production Custom Domain
+        run: npm run deployment:init -- --env production --finalize
 
       - name: Probe production health
         shell: bash
@@ -197,7 +253,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             if curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
               --connect-timeout 5 --max-time 15 \
-              "$DEPLOY_URL/healthz?deploy=${GITHUB_RUN_ID}-${attempt}" |
+              "https://${APP_HOSTNAME}/healthz?deploy=${GITHUB_RUN_ID}-${attempt}" |
               jq -e '.ok == true and .service == "cloudflare-collab-canvas-edge"' >/dev/null
             then
               exit 0

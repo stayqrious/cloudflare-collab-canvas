@@ -3,13 +3,19 @@ import {
   canvasPoint,
   createBoard,
   createInvite,
+  drag,
   drawShape,
   isolatedContextOptions,
 } from "./helpers";
 
 type RelationshipExport = {
   sections: Array<{ id: string; memberItemIds: string[] }>;
-  items: Array<{ id: string; kind: string; sectionId?: string }>;
+  items: Array<{
+    id: string;
+    kind: string;
+    sectionId?: string;
+    geometry?: { x: number; y: number; width: number; height: number };
+  }>;
 };
 
 async function exportRelationships(
@@ -93,7 +99,7 @@ test("translated copies and Section deletion keep exported membership current", 
     originalBounds.y + originalBounds.height / 2,
   );
   await expect(page.getByTestId("selection-actions")).toBeVisible();
-  await page.getByRole("button", { name: "Copy selected items" }).click();
+  await page.keyboard.press("Control+d");
   await expect(page.locator("#drawing-area .board-item-rectangle")).toHaveCount(2);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
@@ -115,8 +121,7 @@ test("translated copies and Section deletion keep exported membership current", 
     titleBounds.x + titleBounds.width / 2,
     titleBounds.y + titleBounds.height / 2,
   );
-  await expect(page.getByRole("button", { name: "Delete selected items" })).toBeEnabled();
-  await page.getByRole("button", { name: "Delete selected items" }).click();
+  await page.keyboard.press("Delete");
   await expect(page.locator("#drawing-area .board-item-zone")).toHaveCount(0);
   await expect(page.locator("#drawing-area .board-item-rectangle")).toHaveCount(2);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
@@ -132,7 +137,7 @@ test("translated copies and Section deletion keep exported membership current", 
   expect(browserErrors).toEqual([]);
 });
 
-test("Section deletion rejects foreign member cleanup without partial writes", async ({
+test("Section deletion by its creator detaches foreign members without deleting them", async ({
   browser,
   page,
 }, testInfo) => {
@@ -182,30 +187,86 @@ test("Section deletion rejects foreign member cleanup without partial writes", a
       titleBounds.x + titleBounds.width / 2,
       titleBounds.y + titleBounds.height / 2,
     );
-    await expect(editor.getByRole("button", { name: "Delete selected items" })).toBeEnabled();
-    await editor.getByRole("button", { name: "Delete selected items" }).click();
-    await expect(editor.getByTestId("toast-region")).toContainText(
-      "This Section contains an item you cannot remove from the Section.",
-    );
+    await editor.keyboard.press("Delete");
+    await expect(editor.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
-    await expect(page.locator("#drawing-area .board-item-zone")).toHaveCount(1);
-    await expect(editor.locator("#drawing-area .board-item-zone")).toHaveCount(1);
+    // The Section's creator may detach members they do not own, so the Section
+    // goes away while the owner's sticky survives unparented on both clients.
+    await expect(page.locator("#drawing-area .board-item-zone")).toHaveCount(0);
+    await expect(editor.locator("#drawing-area .board-item-zone")).toHaveCount(0);
     await expect(page.locator("#drawing-area .board-item-sticky")).toHaveCount(1);
     await expect(editor.locator("#drawing-area .board-item-sticky")).toHaveCount(1);
 
     const exported = await exportRelationships(page, boardUrl);
     expect(exported.status).toBe(200);
-    const [section] = exported.body.sections;
     const sticky = exported.body.items.find((item) => item.kind === "sticky");
-    expect(section).toBeDefined();
-    expect(sticky?.sectionId).toBe(section?.id);
-    expect(section?.memberItemIds).toContain(sticky?.id);
+    expect(exported.body.sections).toEqual([]);
+    expect(sticky).toBeDefined();
+    expect(sticky?.sectionId).toBeUndefined();
 
     await editor.screenshot({
-      path: "/tmp/spacescale-section-delete-foreign-member-rejected.png",
+      path: "/tmp/spacescale-section-delete-foreign-member-detached.png",
     });
     expect(browserErrors).toEqual([]);
   } finally {
     await editorContext.close();
   }
+});
+
+test("a dragged Section covers the swept area and binds the items inside it", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Focused Section drag QA runs in Chromium.");
+
+  const browserErrors: string[] = [];
+  captureBrowserErrors(page, browserErrors);
+  const boardUrl = await createBoard(page, "Section drag lab");
+  await expect(page.getByTestId("board-shell")).toBeVisible();
+
+  const center = await canvasPoint(page, 0.5, 0.5);
+  const enclosed = await drawShape(
+    page,
+    "Rectangle",
+    { x: center.x - 30, y: center.y - 20 },
+    { x: center.x + 30, y: center.y + 20 },
+  );
+  const enclosedId = await enclosed.getAttribute("data-item-id");
+  if (!enclosedId) throw new Error("The enclosed rectangle has no item ID.");
+
+  const sweep = { x: center.x - 150, y: center.y - 110, width: 300, height: 220 };
+  await page.getByTestId("tool-zone").click();
+  await drag(
+    page,
+    { x: sweep.x, y: sweep.y },
+    { x: sweep.x + sweep.width, y: sweep.y + sweep.height },
+  );
+
+  const titleEditor = page.getByTestId("zone-title-editor");
+  await expect(titleEditor).toBeVisible();
+  await titleEditor.fill("Swept area");
+  await titleEditor.press("Enter");
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+
+  const section = page.locator("#drawing-area .board-item-zone");
+  await expect(section).toHaveCount(1);
+  const sectionId = await section.getAttribute("data-item-id");
+  const rendered = await section.locator(".zone-fill").boundingBox();
+  if (!sectionId || !rendered) throw new Error("The dragged Section was not rendered completely.");
+
+  // The Section covers what the pointer swept out, not the default-size drop.
+  expect(Math.abs(rendered.x - sweep.x)).toBeLessThanOrEqual(4);
+  expect(Math.abs(rendered.y - sweep.y)).toBeLessThanOrEqual(4);
+  expect(Math.abs(rendered.width - sweep.width)).toBeLessThanOrEqual(4);
+  expect(Math.abs(rendered.height - sweep.height)).toBeLessThanOrEqual(4);
+
+  const exported = await exportRelationships(page, boardUrl);
+  expect(exported.status).toBe(200);
+  const exportedSection = exported.body.items.find((item) => item.id === sectionId);
+  expect(exportedSection?.geometry?.width).not.toBe(520);
+  expect(exportedSection?.geometry?.height).not.toBe(320);
+  expect(exported.body.items.find((item) => item.id === enclosedId)?.sectionId).toBe(sectionId);
+  expect(
+    exported.body.sections.find((candidate) => candidate.id === sectionId)?.memberItemIds,
+  ).toContain(enclosedId);
+  expect(browserErrors).toEqual([]);
 });

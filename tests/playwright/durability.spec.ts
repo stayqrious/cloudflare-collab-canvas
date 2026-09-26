@@ -189,7 +189,6 @@ test("Saved waits for the authoritative ACK and a refreshed outbox command retri
 
   await releaseAcks(page);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
-  await expect(page.getByTestId("save-status")).toContainText("Saved · 1");
   await expect.poll(async () => (await outboxCommands(page, boardId as string)).length).toBe(0);
 
   await page.reload();

@@ -59,7 +59,24 @@ describe("gateway board routing", () => {
     const response = await SELF.fetch("http://localhost/");
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    const contentSecurityPolicy = response.headers.get("content-security-policy");
+    expect(contentSecurityPolicy).toContain("frame-ancestors 'none'");
+    expect(contentSecurityPolicy).toContain(
+      "frame-src https://challenges.cloudflare.com https://www.youtube-nocookie.com https://player.vimeo.com",
+    );
+    expect(contentSecurityPolicy).toContain("font-src 'self' data:");
+    expect(contentSecurityPolicy).toContain("style-src 'self' 'sha256-");
+    // Inline style attributes are allowed on their own, for MathLive's field and keyboard. They
+    // cannot run anything; stylesheets and <style> blocks stay bound by style-src and its hashes.
+    expect(contentSecurityPolicy).toContain("style-src-attr 'unsafe-inline'");
+    // Every other directive must still refuse inline content, which is the point of the policy.
+    const relaxed = (contentSecurityPolicy ?? "")
+      .split(";")
+      .map((directive) => directive.trim())
+      .filter((directive) => directive.includes("'unsafe-inline'"))
+      .map((directive) => directive.split(/\s+/u)[0]);
+    expect(relaxed).toEqual(["style-src-attr"]);
+    expect(contentSecurityPolicy).not.toContain("'unsafe-eval'");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
     expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");

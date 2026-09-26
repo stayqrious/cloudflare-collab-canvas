@@ -16,8 +16,16 @@ function deterministicIds(): () => string {
 }
 
 describe("classroom templates", () => {
-  it("builds all five templates as small valid ordinary-item batches", () => {
+  it("builds every template as a small valid ordinary-item batch", () => {
     const expectedCounts: Record<ActivityTemplateId, number> = {
+      "problem-set-six-students": 95,
+      "brainstorm-school-traffic": 29,
+      "student-questions": 27,
+      "debate-school-start": 14,
+      "tasks-four-projects": 29,
+      "marketing-ad-ideas": 36,
+      "graph-check": 13,
+      "collective-inquiry-demo": 13,
       "exit-ticket": 7,
       kwl: 2,
       "sort-it": 12,
@@ -88,5 +96,86 @@ describe("classroom templates", () => {
       createdBy: "teacher",
     };
     expect(isVoteTable(voteTable)).toBe(true);
+  });
+
+  it("gives each demo board student Sections and no AI scaffolding", () => {
+    const byId = new Map(ACTIVITY_TEMPLATES.map((template) => [template.id, template]));
+    const demos = [
+      "graph-check",
+      "student-questions",
+      "brainstorm-school-traffic",
+      "problem-set-six-students",
+      "debate-school-start",
+      "tasks-four-projects",
+      "marketing-ad-ideas",
+    ] as const;
+
+    for (const id of demos) {
+      const template = byId.get(id);
+      if (!template) throw new Error(`${id} is missing.`);
+      // The AI answers in comments, so no board may carry a block waiting for it.
+      for (const item of template.items) {
+        const text =
+          item.kind === "text" || item.kind === "sticky"
+            ? item.geometry.text
+            : item.kind === "zone"
+              ? item.geometry.title
+              : "";
+        expect(text).not.toMatch(/\bAI\b/u);
+        // A lone $ is a dollar sign, so no board may lean on it for math.
+        expect(text.replace(/\$\$/gu, "")).not.toContain("$");
+      }
+      // Every stroke must be drawable.
+      for (const item of template.items) {
+        if (item.kind !== "pencil") continue;
+        expect(item.geometry.points.length).toBeGreaterThanOrEqual(2);
+      }
+    }
+
+    // The handwriting board is what makes a watch send a picture rather than a description.
+    const graph = byId.get("graph-check");
+    expect(graph?.items.filter(({ kind }) => kind === "pencil").length).toBeGreaterThanOrEqual(5);
+    expect(
+      graph?.items.some(
+        (item) => item.kind === "sticky" && item.geometry.text.includes("\\(x=-3\\)"),
+      ),
+    ).toBe(true);
+
+    // The three class boards each give six students a Section of their own.
+    for (const id of [
+      "student-questions",
+      "brainstorm-school-traffic",
+      "problem-set-six-students",
+    ] as const) {
+      const sections = byId.get(id)?.items.filter((item) => item.kind === "zone") ?? [];
+      expect(sections, id).toHaveLength(6);
+      const names = sections.map((item) => (item.kind === "zone" ? item.geometry.title : ""));
+      expect(new Set(names).size, id).toBe(6);
+      // Every Section holds work, or there would be nothing to comment on.
+      expect(
+        names.every((name) => name.length > 0),
+        id,
+      ).toBe(true);
+    }
+
+    // The debate board gives each side one Section, so a comment lands on one side's claim.
+    const debate = byId.get("debate-school-start");
+    const sides = debate?.items.filter((item) => item.kind === "zone") ?? [];
+    expect(sides).toHaveLength(2);
+    expect(debate?.items.filter(({ kind }) => kind === "sticky")).toHaveLength(8);
+
+    // The problem set shows working: some drawn stroke by stroke, some in a handwriting face,
+    // and every student has the same five questions in front of them.
+    const problems = byId.get("problem-set-six-students");
+    const strokes = (problems?.items ?? []).filter((item) => item.kind === "pencil");
+    expect(strokes.length).toBeGreaterThanOrEqual(30);
+    const handwritten = (problems?.items ?? []).filter(
+      (item) => item.kind === "text" && item.style.fontFamily === "handwritten",
+    );
+    expect(handwritten.length).toBeGreaterThanOrEqual(15);
+    const questionSheets = (problems?.items ?? []).filter(
+      (item) => item.kind === "text" && item.geometry.text.includes("20 ÷ 4 × 5"),
+    );
+    expect(questionSheets).toHaveLength(6);
   });
 });

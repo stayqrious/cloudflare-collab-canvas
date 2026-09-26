@@ -1,8 +1,9 @@
-export const STAGING_LOAD_HOSTNAME = "staging-cloud-collab.spacescale.net";
-
-const PRODUCTION_HOSTNAME = "spacescale.net";
-
-export function validateLoadTarget(baseUrl: string, allowRemote: boolean): void {
+export function validateLoadTarget(
+  baseUrl: string,
+  allowRemote: boolean,
+  remoteHostname = process.env.LOAD_REMOTE_HOSTNAME?.trim(),
+  protectedHostname = process.env.APP_HOSTNAME?.trim(),
+): void {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("The load target must use HTTP or HTTPS.");
@@ -15,13 +16,11 @@ export function validateLoadTarget(baseUrl: string, allowRemote: boolean): void 
   if (!local && url.protocol !== "https:") {
     throw new Error("Remote load targets must use HTTPS.");
   }
-  if (url.hostname === PRODUCTION_HOSTNAME) {
-    throw new Error("The production spacescale.net host is never a valid load-test target.");
+  if (!local && protectedHostname && url.hostname === protectedHostname) {
+    throw new Error("The configured production host is never a valid load-test target.");
   }
-  if (!local && url.hostname !== STAGING_LOAD_HOSTNAME) {
-    throw new Error(
-      `Remote load tests may target only the committed staging host ${STAGING_LOAD_HOSTNAME}.`,
-    );
+  if (!local && (!remoteHostname || url.hostname !== remoteHostname)) {
+    throw new Error("Remote load tests may target only the explicitly configured test host.");
   }
   if (!local && !allowRemote) {
     throw new Error(

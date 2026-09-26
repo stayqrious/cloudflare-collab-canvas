@@ -66,7 +66,7 @@ function makeEnv(options: { allowedOrigins?: string } = {}): {
               title: launch.title,
               accessMode: "private",
               drawingPolicy: "editors_enabled",
-              imagesEnabled: false,
+              imagesEnabled: launch.features.images === true,
               features: launch.features,
               aclVersion: 1,
             },
@@ -231,7 +231,7 @@ describe("organisation embed gateway", () => {
       placeholderOwnerActorId: expect.stringMatching(/^a_[A-Za-z0-9_-]{22}$/u),
       spaceId: "Algebra Space",
       ownerRecoveryHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
-      features: expect.objectContaining({ images: false, line: false, protractor: false }),
+      features: expect.objectContaining({ images: true, line: false, protractor: false }),
       importSnapshot: "eyJmb3JtYXQiOiJjZi13aGl0ZWJvYXJkLWpzb24ifQ",
     });
 

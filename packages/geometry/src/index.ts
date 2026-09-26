@@ -74,6 +74,86 @@ export interface TextGeometry {
   x: number;
   y: number;
   text: string;
+  embed?: "video";
+}
+
+export const VIDEO_EMBED_WIDTH = 360;
+export const VIDEO_EMBED_HEIGHT = 232;
+
+export interface VideoEmbedReference {
+  provider: "youtube" | "vimeo";
+  videoId: string;
+  sourceUrl: string;
+  vimeoHash?: string;
+}
+
+/** Parses the complete HTTPS video URLs supported by every render and validation surface. */
+export function parseVideoEmbedReference(value: string): VideoEmbedReference | null {
+  const candidate = value.trim();
+  if (!candidate || /\s/u.test(candidate)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null;
+
+  const host = parsed.hostname.toLowerCase();
+  if (host === "youtu.be" || host === "www.youtu.be") {
+    return youtubeVideoReference(parsed.pathname.split("/").filter(Boolean)[0], parsed.href);
+  }
+  if (
+    host === "youtube.com" ||
+    host === "www.youtube.com" ||
+    host === "m.youtube.com" ||
+    host === "youtube-nocookie.com" ||
+    host === "www.youtube-nocookie.com"
+  ) {
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const videoId =
+      parsed.pathname === "/watch"
+        ? parsed.searchParams.get("v")
+        : parts[0] === "embed" || parts[0] === "shorts" || parts[0] === "live"
+          ? parts[1]
+          : null;
+    return youtubeVideoReference(videoId, parsed.href);
+  }
+  if (host === "vimeo.com" || host === "www.vimeo.com" || host === "player.vimeo.com") {
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const playerUrl = host === "player.vimeo.com";
+    const videoId =
+      playerUrl && parts[0] === "video" && parts.length === 2
+        ? parts[1]
+        : !playerUrl && parts.length >= 1 && parts.length <= 2
+          ? parts[0]
+          : null;
+    if (!videoId || !/^\d{5,12}$/u.test(videoId)) return null;
+    const pathHash = !playerUrl && parts.length === 2 ? parts[1] : undefined;
+    // A present "h" always yields a string, so an empty ?h= stays defined and is rejected
+    // below by the hash pattern rather than silently falling back to the path hash.
+    const queryHash = parsed.searchParams.get("h") ?? undefined;
+    if (pathHash !== undefined && queryHash !== undefined && pathHash !== queryHash) {
+      return null;
+    }
+    const vimeoHash = queryHash ?? pathHash;
+    if (vimeoHash !== undefined && !/^[A-Za-z0-9_-]{6,64}$/u.test(vimeoHash)) return null;
+    return {
+      provider: "vimeo",
+      videoId,
+      sourceUrl: parsed.href,
+      ...(vimeoHash === undefined ? {} : { vimeoHash }),
+    };
+  }
+  return null;
+}
+
+function youtubeVideoReference(
+  videoId: string | null | undefined,
+  sourceUrl: string,
+): VideoEmbedReference | null {
+  if (!videoId || !/^[A-Za-z0-9_-]{6,15}$/u.test(videoId)) return null;
+  return { provider: "youtube", videoId, sourceUrl };
 }
 
 export interface StickyGeometry extends BoxGeometry {
@@ -509,14 +589,24 @@ export function normalizeProtractorGeometry(
 
 export function normalizeTextGeometry(value: unknown, path = "$geometry"): TextGeometry {
   const object = expectRecord(value, path);
-  expectOnlyKeys(object, ["x", "y", "text"], path);
+  expectKeys(object, ["x", "y", "text"], ["embed"], path);
   if (typeof object.text !== "string") {
     throw new GeometryValidationError("Expected text to be a string", `${path}.text`);
+  }
+  if (object.embed !== undefined && object.embed !== "video") {
+    throw new GeometryValidationError('Expected text embed to be "video"', `${path}.embed`);
+  }
+  if (object.embed === "video" && parseVideoEmbedReference(object.text) === null) {
+    throw new GeometryValidationError(
+      "Video embed text must be a supported HTTPS YouTube or Vimeo URL",
+      `${path}.text`,
+    );
   }
   return {
     x: normalizeCoordinate(object.x, `${path}.x`),
     y: normalizeCoordinate(object.y, `${path}.y`),
     text: object.text,
+    ...(object.embed === "video" ? { embed: "video" as const } : {}),
   };
 }
 
@@ -997,6 +1087,302 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
+/**
+ * The board's TeX delimiters, which are MathJax's own defaults: `\(…\)` for inline math, and
+ * `\[…\]` or `$$…$$` for display math. A lone `$` is a dollar sign. Prices are far more common
+ * on a classroom board than inline math, and "$5 to $12" must never become a formula.
+ *
+ * The browser renderer, the canonical geometry, and the picture exporter all read math through
+ * this one pattern, so Section membership can never disagree with what MathJax typeset.
+ */
+const UNAMBIGUOUS_TEX_MARKUP = /\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$\$[\s\S]+?\$\$/gu;
+
+/** True when the character at `index` is escaped by an odd run of backslashes before it. */
+function isEscaped(value: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) backslashes += 1;
+  return backslashes % 2 === 1;
+}
+
+/**
+ * Every formula in a value, skipping any whose opening delimiter is escaped. MathJax is configured
+ * with processEscapes, so `\$` is a dollar sign a participant asked for literally; reading it as a
+ * delimiter would let a picture of the board, and the bounds that decide Section membership,
+ * disagree with what the board actually shows.
+ */
+function texMarkupMatches(value: string): Array<{ markup: string; index: number }> {
+  const matches: Array<{ markup: string; index: number }> = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    UNAMBIGUOUS_TEX_MARKUP.lastIndex = cursor;
+    const match = UNAMBIGUOUS_TEX_MARKUP.exec(value);
+    if (!match) break;
+    const index = match.index;
+    if (isEscaped(value, index)) {
+      // Step past the escaped delimiter and keep looking; a later one may still be real.
+      cursor = index + 1;
+      continue;
+    }
+    matches.push({ markup: match[0], index });
+    cursor = index + match[0].length;
+  }
+  UNAMBIGUOUS_TEX_MARKUP.lastIndex = 0;
+  return matches;
+}
+const TEX_ENVIRONMENT_COMMAND = /\\(?:begin|end)\s*\{[^{}]*\}/gu;
+const ZERO_WIDTH_TEX_LAYOUT_COMMAND =
+  /\\(?:displaystyle|textstyle|scriptstyle|scriptscriptstyle|frac|dfrac|tfrac|binom|dbinom|tbinom|left|right|middle|text|textrm|textsf|texttt|textnormal|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|boldsymbol|operatorname|overline|underline|hat|widehat|bar|vec|dot|ddot|tilde|widetilde|overbrace|underbrace)\b/gu;
+const TEX_CONTROL_WORD = /\\[A-Za-z]+/gu;
+const TEX_ESCAPED_VISIBLE_SYMBOL = /\\([#$%&_{}])/gu;
+
+/**
+ * Spacing and rule commands lay out an explicit dimension rather than glyphs. Collapsing them
+ * to one representative character would let `$$\hspace{20em}x$$` claim the width of a few
+ * letters, so a crafted item could be attached to a Section that the rendered formula spills
+ * far outside of, and edge containment would accept it.
+ */
+const TEX_DIMENSION = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)\s*(?:em|ex|mu|pt|pc|bp|dd|cc|sp|in|cm|mm|px)`;
+const TEX_HORIZONTAL_DIMENSION_COMMAND = new RegExp(
+  String.raw`\\(?:hspace\*?|mspace)\s*\{\s*(${TEX_DIMENSION})\s*\}` +
+    String.raw`|\\(?:kern|mkern|hskip|mskip)\s*(${TEX_DIMENSION})`,
+  "gu",
+);
+const TEX_VERTICAL_DIMENSION_COMMAND = new RegExp(
+  String.raw`\\vspace\*?\s*\{\s*(${TEX_DIMENSION})\s*\}|\\vskip\s*(${TEX_DIMENSION})`,
+  "gu",
+);
+const TEX_RULE_COMMAND = new RegExp(
+  String.raw`\\rule\s*(?:\[\s*(${TEX_DIMENSION})\s*\])?\s*\{\s*(${TEX_DIMENSION})\s*\}\s*\{\s*(${TEX_DIMENSION})\s*\}`,
+  "gu",
+);
+/** Sized commands left over once the parseable forms above are expanded. */
+const TEX_UNSIZED_DIMENSION_COMMAND =
+  /\\(?:hspace\*?|vspace\*?|mspace|kern|mkern|hskip|vskip|mskip|rule|raisebox|makebox|framebox|parbox|resizebox|scalebox)\b/gu;
+const TEX_DIMENSION_PARTS = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*([a-z]+)$/u;
+/** Fixed-width math spaces, in em. */
+const TEX_FIXED_SPACE_EM = new Map<string, number>([
+  ["\\!", -3 / 18],
+  ["\\negthinspace", -3 / 18],
+  ["\\,", 3 / 18],
+  ["\\thinspace", 3 / 18],
+  ["\\:", 4 / 18],
+  ["\\>", 4 / 18],
+  ["\\medspace", 4 / 18],
+  ["\\;", 5 / 18],
+  ["\\thickspace", 5 / 18],
+  ["\\enspace", 0.5],
+  ["\\quad", 1],
+  ["\\qquad", 2],
+]);
+const TEX_FIXED_SPACE =
+  /\\(?:negthinspace|thinspace|medspace|thickspace|enspace|qquad|quad|[!,:;>])/gu;
+/** Horizontal movements whose signed cursor offsets can escape the estimated text width. */
+const TEX_HORIZONTAL_MOVEMENT = new RegExp(
+  `(?:${TEX_HORIZONTAL_DIMENSION_COMMAND.source})|(${TEX_FIXED_SPACE.source})`,
+  "gu",
+);
+/** Layout ratios the canonical text estimate below is expressed in. */
+const TEXT_GLYPH_WIDTH_RATIO = 0.6;
+const TEXT_LINE_HEIGHT_RATIO = 1.2;
+/** Keeps a hostile dimension from expanding into an unbounded estimate string. */
+const TEX_MAX_ESTIMATE_GLYPHS = 4096;
+const TEX_MAX_ESTIMATE_LINES = 512;
+/** Used for an unparseable sized command, so its extent is over- rather than under-reported. */
+const TEX_UNSIZED_COMMAND_GLYPHS = 64;
+const DEFAULT_TEX_ESTIMATE_FONT_SIZE = 16;
+const PX_PER_POINT = 4 / 3;
+const TEX_UNIT_PIXELS = new Map<string, number>([
+  ["px", 1],
+  ["pt", PX_PER_POINT],
+  ["bp", PX_PER_POINT],
+  ["pc", 12 * PX_PER_POINT],
+  ["in", 72 * PX_PER_POINT],
+  ["cm", (72 / 2.54) * PX_PER_POINT],
+  ["mm", (7.2 / 2.54) * PX_PER_POINT],
+  ["dd", 1.07 * PX_PER_POINT],
+  ["cc", 12 * 1.07 * PX_PER_POINT],
+  ["sp", PX_PER_POINT / 65536],
+]);
+
+/** Resolves a TeX dimension to pixels, or null when the unit is not one we model. */
+function texDimensionPixels(dimension: string, fontSize: number): number | null {
+  const parts = TEX_DIMENSION_PARTS.exec(dimension.trim());
+  if (!parts) return null;
+  const unit = parts[2];
+  const amount = Number(parts[1]);
+  if (!Number.isFinite(amount) || unit === undefined) return null;
+  if (unit === "em") return amount * fontSize;
+  if (unit === "ex") return amount * fontSize * 0.5;
+  if (unit === "mu") return (amount / 18) * fontSize;
+  const pixels = TEX_UNIT_PIXELS.get(unit);
+  return pixels === undefined ? null : amount * pixels;
+}
+
+function texWidthGlyphCount(pixels: number, fontSize: number): number {
+  return Math.ceil(Math.max(0, pixels) / Math.max(1, fontSize * TEXT_GLYPH_WIDTH_RATIO));
+}
+
+function texHeightLineCount(pixels: number, fontSize: number): number {
+  return Math.ceil(Math.max(0, pixels) / Math.max(1, fontSize * TEXT_LINE_HEIGHT_RATIO));
+}
+
+type TexExpansionBudget = { remainingGlyphs: number; remainingLines: number };
+
+function expandTexDimensions(markup: string, fontSize: number, budget: TexExpansionBudget): string {
+  const glyphRun = (requested: number): string => {
+    const count = Math.min(budget.remainingGlyphs, Math.max(0, requested));
+    budget.remainingGlyphs -= count;
+    return "x".repeat(count);
+  };
+  const lineRun = (requested: number): string => {
+    const count = Math.min(budget.remainingLines, Math.max(0, requested));
+    budget.remainingLines -= count;
+    return "\n".repeat(count);
+  };
+  const width = (dimension: string | undefined): string => {
+    const pixels = dimension === undefined ? null : texDimensionPixels(dimension, fontSize);
+    return pixels === null
+      ? glyphRun(TEX_UNSIZED_COMMAND_GLYPHS)
+      : glyphRun(texWidthGlyphCount(pixels, fontSize));
+  };
+  const height = (dimension: string | undefined): string => {
+    const pixels = dimension === undefined ? null : texDimensionPixels(dimension, fontSize);
+    return pixels === null ? lineRun(1) : lineRun(texHeightLineCount(pixels, fontSize));
+  };
+  return markup
+    .replace(
+      TEX_RULE_COMMAND,
+      (_match, _ruleRaise?: string, ruleWidth?: string, ruleHeight?: string) =>
+        `${width(ruleWidth)}${height(ruleHeight)}`,
+    )
+    .replace(TEX_HORIZONTAL_DIMENSION_COMMAND, (_match, braced?: string, bare?: string) =>
+      width(braced ?? bare),
+    )
+    .replace(TEX_VERTICAL_DIMENSION_COMMAND, (_match, braced?: string, bare?: string) =>
+      height(braced ?? bare),
+    )
+    .replace(TEX_FIXED_SPACE, (match) =>
+      glyphRun(texWidthGlyphCount((TEX_FIXED_SPACE_EM.get(match) ?? 0) * fontSize, fontSize)),
+    )
+    .replace(TEX_UNSIZED_DIMENSION_COMMAND, () => glyphRun(TEX_UNSIZED_COMMAND_GLYPHS));
+}
+
+function raisedRuleVerticalExtents(
+  value: string,
+  fontSize: number,
+): { upward: number; downward: number } {
+  let upward = 0;
+  let downward = 0;
+  const maximum = TEX_MAX_ESTIMATE_LINES * fontSize * TEXT_LINE_HEIGHT_RATIO;
+  for (const markupMatch of texMarkupMatches(value)) {
+    for (const ruleMatch of markupMatch.markup.matchAll(TEX_RULE_COMMAND)) {
+      const raise = ruleMatch[1] === undefined ? 0 : texDimensionPixels(ruleMatch[1], fontSize);
+      const height = ruleMatch[3] === undefined ? null : texDimensionPixels(ruleMatch[3], fontSize);
+      if (raise === null || height === null) continue;
+      const edge = raise + height;
+      upward = Math.max(upward, Math.min(maximum, Math.max(0, raise, edge)));
+      downward = Math.max(downward, Math.min(maximum, Math.max(0, -raise, -edge)));
+    }
+  }
+  return { upward, downward };
+}
+
+function texHorizontalMovementExtents(
+  value: string,
+  fontSize: number,
+): { left: number; right: number } {
+  let left = 0;
+  let right = 0;
+  const maximum = TEX_MAX_ESTIMATE_GLYPHS * fontSize * TEXT_GLYPH_WIDTH_RATIO;
+  for (const markupMatch of texMarkupMatches(value)) {
+    let cursor = 0;
+    let minimum = 0;
+    let maximumCursor = 0;
+    for (const movementMatch of markupMatch.markup.matchAll(TEX_HORIZONTAL_MOVEMENT)) {
+      const dimension = movementMatch[1] ?? movementMatch[2];
+      const fixedSpace = movementMatch[3];
+      const pixels =
+        dimension !== undefined
+          ? texDimensionPixels(dimension, fontSize)
+          : fixedSpace === undefined
+            ? null
+            : (TEX_FIXED_SPACE_EM.get(fixedSpace) ?? 0) * fontSize;
+      if (pixels === null) continue;
+      cursor = Math.max(-maximum, Math.min(maximum, cursor + pixels));
+      minimum = Math.min(minimum, cursor);
+      maximumCursor = Math.max(maximumCursor, cursor);
+    }
+    left = Math.max(left, -minimum);
+    right = Math.max(right, maximumCursor);
+  }
+  return { left, right };
+}
+
+function texLayoutEstimateSource(
+  markup: string,
+  fontSize: number,
+  budget: TexExpansionBudget,
+): string {
+  return expandTexDimensions(markup.slice(2, -2), fontSize, budget)
+    .replace(TEX_ENVIRONMENT_COMMAND, "")
+    .replace(/\\\\/gu, "\n")
+    .replace(ZERO_WIDTH_TEX_LAYOUT_COMMAND, "")
+    .replace(TEX_CONTROL_WORD, "x")
+    .replace(TEX_ESCAPED_VISIBLE_SYMBOL, (_match, symbol: string) =>
+      symbol === "{" ? "(" : symbol === "}" ? ")" : symbol === "_" ? "-" : symbol,
+    )
+    .replace(/[{}^_]/gu, "");
+}
+
+/**
+ * Normalizes TeX markup to representative visible glyphs for deterministic bounds estimates.
+ * The font size resolves absolute dimensions; callers that have one must pass it so clients
+ * and the edge agree on the estimate.
+ */
+export function textLayoutEstimateSource(
+  value: string,
+  fontSize: number = DEFAULT_TEX_ESTIMATE_FONT_SIZE,
+): string {
+  const size =
+    Number.isFinite(fontSize) && fontSize > 0 ? fontSize : DEFAULT_TEX_ESTIMATE_FONT_SIZE;
+  const budget: TexExpansionBudget = {
+    remainingGlyphs: TEX_MAX_ESTIMATE_GLYPHS,
+    remainingLines: TEX_MAX_ESTIMATE_LINES,
+  };
+  // Rebuilt rather than replaced, so an escaped delimiter is left exactly as the participant
+  // typed it: the estimate has to describe the same text MathJax will draw.
+  let estimated = "";
+  let copied = 0;
+  for (const { markup, index } of texMarkupMatches(value)) {
+    estimated += value.slice(copied, index) + texLayoutEstimateSource(markup, size, budget);
+    copied = index + markup.length;
+  }
+  return estimated + value.slice(copied);
+}
+
+/** One run of a text value: either literal characters or one TeX expression. */
+export type TexSegment =
+  | { kind: "text"; text: string }
+  | { kind: "math"; text: string; tex: string; display: boolean };
+
+/**
+ * Splits a text value into literal runs and TeX expressions. Renderers that draw math and
+ * renderers that only measure it share this, so a picture of a board can never disagree with the
+ * board about where a formula begins.
+ */
+export function splitTexSegments(value: string): TexSegment[] {
+  const segments: TexSegment[] = [];
+  let cursor = 0;
+  for (const { markup, index } of texMarkupMatches(value)) {
+    if (index > cursor) segments.push({ kind: "text", text: value.slice(cursor, index) });
+    const display = markup.startsWith("$$") || markup.startsWith("\\[");
+    segments.push({ kind: "math", text: markup, tex: markup.slice(2, -2), display });
+    cursor = index + markup.length;
+  }
+  if (cursor < value.length) segments.push({ kind: "text", text: value.slice(cursor) });
+  return segments;
+}
+
 export type OutlineGeometryKind = "pencil" | "line" | "rectangle" | "ellipse" | "polygon";
 export type OutlineGeometry = PencilGeometry | LineGeometry | OutlineBoxGeometry | PolygonGeometry;
 
@@ -1210,14 +1596,29 @@ export function geometryBounds(
     }
     case "text": {
       const text = geometry as TextGeometry;
-      const lines = text.text.split(/\r\n?|\n/u);
-      const lineHeight = textFontSize * 1.2;
-      const width = Math.max(...lines.map((line) => codePointLength(line) * textFontSize * 0.6));
+      if (text.embed === "video") {
+        return {
+          minX: text.x,
+          minY: text.y - textFontSize,
+          maxX: text.x + VIDEO_EMBED_WIDTH,
+          maxY: text.y - textFontSize + VIDEO_EMBED_HEIGHT,
+        };
+      }
+      const lines = textLayoutEstimateSource(text.text, textFontSize).split(/\r\n?|\n/u);
+      const lineHeight = textFontSize * TEXT_LINE_HEIGHT_RATIO;
+      const ruleExtents = raisedRuleVerticalExtents(text.text, textFontSize);
+      const horizontalExtents = texHorizontalMovementExtents(text.text, textFontSize);
+      const width = Math.max(
+        ...lines.map((line) => codePointLength(line) * textFontSize * TEXT_GLYPH_WIDTH_RATIO),
+      );
       return {
-        minX: text.x,
-        minY: text.y - textFontSize,
-        maxX: text.x + width,
-        maxY: text.y - textFontSize + Math.max(1, lines.length) * lineHeight,
+        minX: text.x - horizontalExtents.left,
+        minY: Math.min(text.y - textFontSize, text.y - ruleExtents.upward),
+        maxX: text.x + Math.max(width, horizontalExtents.right),
+        maxY: Math.max(
+          text.y - textFontSize + Math.max(1, lines.length) * lineHeight,
+          text.y + ruleExtents.downward,
+        ),
       };
     }
   }

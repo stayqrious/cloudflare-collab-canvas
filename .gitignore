@@ -12,4 +12,6 @@ apps/web/dist/
 playwright-report/
 test-results/
 .wrangler/
+.generated/
 *.tsbuildinfo
+tests/playwright/local-tmp.config.ts
