@@ -945,8 +945,11 @@ describe("durable operation validation", () => {
   });
 
   it("normalizes an exact, complete board feature map with images on by default", () => {
-    expect(BOARD_FEATURE_KEYS).toHaveLength(25);
+    expect(BOARD_FEATURE_KEYS).toHaveLength(27);
     expect(DEFAULT_BOARD_FEATURES.images).toBe(true);
+    expect(DEFAULT_BOARD_FEATURES.videos).toBe(true);
+    // Browser AI tools are opt-in for every board.
+    expect(DEFAULT_BOARD_FEATURES.aiTools).toBe(false);
     expect(normalizeBoardFeatures(DEFAULT_BOARD_FEATURES)).toEqual(DEFAULT_BOARD_FEATURES);
     expect(() => normalizeBoardFeatures({ ...DEFAULT_BOARD_FEATURES, protractor: "yes" })).toThrow(
       /protractor must be a boolean/,

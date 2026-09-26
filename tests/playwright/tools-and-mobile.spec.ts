@@ -4,6 +4,7 @@ import {
   createBoard,
   dispatchSyntheticPointerGesture,
   drawShape,
+  enableAiTools,
   expandToolPermissions,
   openMoreTools,
   openSettingsDrawer,
@@ -324,6 +325,7 @@ test("the complete board remains usable at a 320px viewport", async ({ page }, t
 
   await page.setViewportSize({ width: 320, height: 640 });
   await createBoard(page, "Pocket canvas");
+  await enableAiTools(page);
 
   const layout = await page.evaluate(() => {
     const canvas = document.querySelector("#board-canvas")?.getBoundingClientRect();

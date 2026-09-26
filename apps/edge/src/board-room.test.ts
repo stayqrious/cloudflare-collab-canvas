@@ -579,6 +579,104 @@ describe("BoardRoom initialization", () => {
     });
   });
 
+  it("keeps AI-made items and video embeds behind their board features", async () => {
+    const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    const bootstrap = await stub.fetch(internalRequest(`/api/v1/boards/${boardId}/bootstrap`));
+    expect(await bootstrap.json()).toMatchObject({
+      board: { features: { aiTools: false, videos: true } },
+    });
+
+    const textCommit = (
+      commandId: string,
+      itemId: string,
+      extra: { assistedBy?: "ai"; embed?: "video" },
+      baseSeq: number,
+    ) => ({
+      v: 1,
+      t: "client.commit",
+      commandId,
+      actionId: commandId.replace(/.$/u, "f"),
+      baseSeq,
+      op: {
+        kind: "item.create",
+        item: {
+          id: itemId,
+          kind: "text",
+          style: { kind: "text", color: "#112233", fontSize: 20, fontFamily: "sans", opacity: 1 },
+          transform: [1, 0, 0, 1, 0, 0],
+          geometry: {
+            x: 10,
+            y: 20,
+            text: extra.embed ? "https://www.youtube.com/watch?v=dQw4w9WgXcQ" : "Hint",
+            ...(extra.embed ? { embed: extra.embed } : {}),
+          },
+          ...(extra.assistedBy ? { assistedBy: extra.assistedBy } : {}),
+        },
+      },
+    });
+    const connected = await connect(stub, actorId);
+    const rejected = async (frame: ReturnType<typeof textCommit>) => {
+      connected.socket.send(JSON.stringify(frame));
+      return connected.next(
+        (reply) => reply.t === "server.rejected" && reply.commandId === frame.commandId,
+      );
+    };
+
+    const aiWhileOff = textCommit(
+      "018f0000-0000-7000-8000-0000000000a1",
+      "018f0000-0000-7000-8000-0000000000a2",
+      { assistedBy: "ai" },
+      0,
+    );
+    expect(await rejected(aiWhileOff)).toMatchObject({ code: "FORBIDDEN", latestSeq: 0 });
+
+    const settings = (features: Record<string, boolean>, expectedAclVersion: number) =>
+      stub.fetch(
+        internalRequest(`/api/v1/boards/${boardId}/settings`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ features, expectedAclVersion }),
+        }),
+      );
+    const disableVideos = await settings({ videos: false }, 1);
+    expect(disableVideos.status).toBe(200);
+    await disableVideos.arrayBuffer();
+    await connected.next(
+      (frame) =>
+        frame.t === "access.changed" &&
+        (frame.features as Record<string, unknown> | undefined)?.videos === false,
+    );
+    const videoWhileOff = textCommit(
+      "018f0000-0000-7000-8000-0000000000a3",
+      "018f0000-0000-7000-8000-0000000000a4",
+      { embed: "video" },
+      0,
+    );
+    expect(await rejected(videoWhileOff)).toMatchObject({ code: "FORBIDDEN", latestSeq: 0 });
+
+    const enableAi = await settings({ aiTools: true }, 2);
+    expect(enableAi.status).toBe(200);
+    await enableAi.arrayBuffer();
+    await connected.next(
+      (frame) =>
+        frame.t === "access.changed" &&
+        (frame.features as Record<string, unknown> | undefined)?.aiTools === true,
+    );
+    const aiWhileOn = textCommit(
+      "018f0000-0000-7000-8000-0000000000a5",
+      "018f0000-0000-7000-8000-0000000000a6",
+      { assistedBy: "ai" },
+      0,
+    );
+    connected.socket.send(JSON.stringify(aiWhileOn));
+    expect(
+      await connected.next(
+        (frame) => frame.t === "server.action" && frame.commandId === aiWhileOn.commandId,
+      ),
+    ).toMatchObject({ seq: 1 });
+  });
+
   it("persists feature settings and rejects disabled item creation", async () => {
     const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
     await initializeBoard(stub);
@@ -8057,6 +8155,31 @@ describe("object comments", () => {
       ),
     );
     await owner.next((frame) => frame.t === "server.action" && frame.seq === 1);
+
+    // Assisted comments come from the browser AI tools, which a board turns on explicitly.
+    const withoutAiTools = await stub.fetch(
+      internalRequest(`/api/v1/boards/${boardId}/comments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          itemId,
+          body: "Step 2 drops the negative sign.",
+          assistedBy: "ai",
+          assistance: { tool: "comment_on_watched_step", action: "critique" },
+        }),
+      }),
+    );
+    expect(withoutAiTools.status).toBe(403);
+    await withoutAiTools.arrayBuffer();
+    const enableAi = await stub.fetch(
+      internalRequest(`/api/v1/boards/${boardId}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ features: { aiTools: true }, expectedAclVersion: 1 }),
+      }),
+    );
+    expect(enableAi.status).toBe(200);
+    await enableAi.arrayBuffer();
 
     const assistedResponse = await stub.fetch(
       internalRequest(`/api/v1/boards/${boardId}/comments`, {

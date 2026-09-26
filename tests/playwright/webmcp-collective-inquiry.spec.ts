@@ -3,6 +3,7 @@ import {
   canvasPoint,
   chooseMoreTool,
   createBoard,
+  enableAiTools,
   expandToolPermissions,
   openSettingsDrawer,
 } from "./helpers";
@@ -73,6 +74,10 @@ test("a board participant can use headless WebMCP tools with neutral board attri
   });
 
   await createBoard(page, "Collective inquiry demo");
+  // A new board registers nothing with the browser until its AI tools are turned on.
+  await expect(page.getByTestId("mcp-status-wrap")).toBeHidden();
+  expect(await page.evaluate(() => Object.keys(window.__spaceScaleWebMcpTools))).toEqual([]);
+  await enableAiTools(page);
   await page.getByTestId("settings-button").click();
   const settingsDrawer = page.getByTestId("settings-drawer");
   await expandToolPermissions(page);
@@ -604,4 +609,44 @@ test("a board participant can use headless WebMCP tools with neutral board attri
   await page.getByTestId("undo-button").click();
   await expect(canvasItems).toHaveCount(14);
   await expect(page.locator("#drawing-area")).not.toContainText("Volcanoes");
+});
+
+test("turning the AI tools off unregisters every WebMCP tool and hides its controls", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "The WebMCP switch runs in Chromium.");
+
+  await page.addInitScript(() => {
+    const tools: Record<string, RegisteredTool> = {};
+    Object.defineProperty(window, "__spaceScaleWebMcpTools", { value: tools });
+    Object.defineProperty(document, "modelContext", {
+      configurable: true,
+      value: {
+        registerTool(tool: RegisteredTool, options?: { signal?: AbortSignal }) {
+          tools[tool.name] = tool;
+          options?.signal?.addEventListener("abort", () => delete tools[tool.name], {
+            once: true,
+          });
+        },
+      },
+    });
+  });
+
+  await createBoard(page, "AI tools switch");
+  const registered = () => page.evaluate(() => Object.keys(window.__spaceScaleWebMcpTools).length);
+  expect(await registered()).toBe(0);
+  await enableAiTools(page);
+  await expect.poll(registered).toBeGreaterThan(0);
+
+  await expandToolPermissions(page);
+  const drawer = page.getByTestId("settings-drawer");
+  await drawer.getByRole("checkbox", { name: "Enable AI tools" }).uncheck();
+  await expect(page.getByTestId("mcp-status-wrap")).toBeHidden();
+  await expect.poll(registered).toBe(0);
+
+  // The setting is stored on the board, so a reload starts with the tools still off.
+  await page.reload();
+  await expect(page.locator("#board-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.getByTestId("mcp-status-wrap")).toBeHidden();
+  expect(await registered()).toBe(0);
 });

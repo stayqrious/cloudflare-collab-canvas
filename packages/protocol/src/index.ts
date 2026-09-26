@@ -160,6 +160,8 @@ export const BOARD_FEATURE_KEYS = [
   "organisationTemplates",
   "voting",
   "spotlight",
+  "videos",
+  "aiTools",
 ] as const;
 
 export type BoardFeatureKey = (typeof BOARD_FEATURE_KEYS)[number];
@@ -191,6 +193,9 @@ export const DEFAULT_BOARD_FEATURES: BoardFeatures = {
   organisationTemplates: true,
   voting: true,
   spotlight: true,
+  videos: true,
+  // Browser AI tools (WebMCP) stay off until an owner or partner launch turns them on.
+  aiTools: false,
 };
 
 export const ITEM_KINDS = [

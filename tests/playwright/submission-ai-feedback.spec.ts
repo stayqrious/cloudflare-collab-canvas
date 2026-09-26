@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { canvasPoint, createBoard, drawShape } from "./helpers";
+import { canvasPoint, createBoard, drawShape, enableAiTools } from "./helpers";
 
 type RegisteredTool = {
   name: string;
@@ -30,6 +30,7 @@ test("captures AI feedback on a mistaken hand-drawn quadratic", async ({ page },
   });
 
   const boardUrl = await createBoard(page, "AI feedback on a quadratic");
+  await enableAiTools(page);
   const addText = async (text: string, horizontal: number, vertical: number) => {
     const point = await canvasPoint(page, horizontal, vertical);
     await page.getByTestId("tool-text").click();
