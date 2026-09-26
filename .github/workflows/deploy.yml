@@ -16,7 +16,28 @@ env:
   WRANGLER_VERSION: 4.118.0
 
 jobs:
+  # Every push to main deploys, including direct pushes that skipped a pull request, so the
+  # full repository check gates both deploy jobs rather than relying on branch protection.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run check
+
   staging:
+    needs: validate
     if: github.ref == 'refs/heads/staging'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -114,6 +135,7 @@ jobs:
           exit 1
 
   production:
+    needs: validate
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15

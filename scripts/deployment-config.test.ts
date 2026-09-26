@@ -101,6 +101,24 @@ describe("setup-time deployment configuration", () => {
     expect(parsed.workers_dev).toBe(false);
     expect(statSync(path).mode & 0o077).toBe(0);
   });
+
+  it("binds both buckets in the configured R2 jurisdiction", () => {
+    const directory = mkdtempSync(join(tmpdir(), "spacescale-config-"));
+    chmodSync(directory, 0o700);
+    process.chdir(directory);
+    const bindings = (jurisdiction: string) => {
+      const configuration = deploymentConfigurationFromEnvironment("staging", {
+        DEPLOYMENT_NAME: "example-canvas",
+        APP_HOSTNAME: "staging.example.test",
+        TURNSTILE_ENABLED: "false",
+        R2_BUCKET_JURISDICTION: jurisdiction,
+      });
+      const written = readFileSync(writeGeneratedWranglerConfig(configuration), "utf8");
+      return (JSON.parse(written) as { r2_buckets: Array<Record<string, unknown>> }).r2_buckets;
+    };
+    expect(bindings("eu").map((binding) => binding.jurisdiction)).toEqual(["eu", "eu"]);
+    expect(bindings("default").every((binding) => !("jurisdiction" in binding))).toBe(true);
+  });
 });
 
 describe("shared deployment command helpers", () => {
