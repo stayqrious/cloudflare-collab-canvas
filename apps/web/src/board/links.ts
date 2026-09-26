@@ -51,7 +51,8 @@ function withoutTrailingSentencePunctuation(candidate: string): string {
   return value;
 }
 
-function safeHref(candidate: string): string | null {
+/** An absolute http(s) URL without credentials, normalized, or null for anything else. */
+export function safeHttpHref(candidate: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(candidate);
@@ -86,7 +87,7 @@ export function tokenizeSafeLinks(value: string): SafeLinkToken[] {
 
     const displayText = withoutTrailingSentencePunctuation(matched);
     const trailingText = matched.slice(displayText.length);
-    const href = displayText.length > 0 ? safeHref(displayText) : null;
+    const href = displayText.length > 0 ? safeHttpHref(displayText) : null;
     if (href === null) appendText(tokens, matched);
     else {
       tokens.push({ kind: "link", text: displayText, href });

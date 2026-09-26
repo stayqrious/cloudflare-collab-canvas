@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tokenizeSafeLinks, videoEmbedFromText } from "./links";
+import { safeHttpHref, tokenizeSafeLinks, videoEmbedFromText } from "./links";
 
 describe("tokenizeSafeLinks", () => {
   it("preserves ordinary and empty text", () => {
@@ -104,5 +104,29 @@ describe("videoEmbedFromText", () => {
     expect(videoEmbedFromText("https://user:secret@youtu.be/dQw4w9WgXcQ")).toBeNull();
     expect(videoEmbedFromText("https://example.com/video/123456")).toBeNull();
     expect(videoEmbedFromText("not a url")).toBeNull();
+  });
+});
+
+describe("safeHttpHref", () => {
+  it("keeps absolute http and https links, normalized", () => {
+    expect(safeHttpHref("https://example.com/source")).toBe("https://example.com/source");
+    expect(safeHttpHref("HTTPS://Example.com")).toBe("https://example.com/");
+    expect(safeHttpHref("http://example.com/a b")).toBe("http://example.com/a%20b");
+  });
+
+  it("refuses scripts, other schemes, relative and protocol-relative links, and credentials", () => {
+    for (const candidate of [
+      "javascript:alert(1)",
+      "JaVaScRiPt:alert(1)",
+      "data:text/html,hi",
+      "file:///etc/passwd",
+      "mailto:a@example.com",
+      "//evil.example/x",
+      "/api/v1/boards",
+      "java&#x09;script:alert(1)",
+      "https://user:pass@example.com",
+    ]) {
+      expect(safeHttpHref(candidate), candidate).toBeNull();
+    }
   });
 });

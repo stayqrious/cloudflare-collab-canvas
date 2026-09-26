@@ -9,3 +9,5 @@ interface ImportMeta {
 }
 
 declare module "mathjax/tex-svg.js";
+declare module "mathjax/ui/safe.js";
+declare module "mathjax/input/tex/extensions/html.js";
