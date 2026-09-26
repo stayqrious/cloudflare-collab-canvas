@@ -3910,12 +3910,9 @@ export class BoardApp {
     editor.addEventListener("input", onInput);
     editor.addEventListener("blur", () => void this.closeTextEditor(true));
     editor.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" || (event.key === "Enter" && (event.ctrlKey || event.metaKey))) {
         event.preventDefault();
-        void this.closeTextEditor(false);
-      } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void this.closeTextEditor(true);
+        void this.finishTextEditing();
       }
     });
     preview();
@@ -3950,6 +3947,10 @@ export class BoardApp {
       return;
     }
     const value = clampStickyText(editor.value);
+    if (context && value === context.geometry.text) {
+      this.discardTextEditor(editor);
+      return;
+    }
 
     const point: Point = [Number(editor.dataset.boardX), Number(editor.dataset.boardY)];
     const draftItemId = editor.dataset.draftItemId ?? createId();
@@ -4000,6 +4001,24 @@ export class BoardApp {
       editor.focus();
       editor.setSelectionRange(selectionStart, selectionEnd);
     });
+  }
+
+  /**
+   * Escape and Ctrl/Cmd+Enter save the text or sticky note, then leave it selected with the
+   * Select tool so a second Escape or a click on empty space deselects it.
+   */
+  private async finishTextEditing(): Promise<void> {
+    const editor = this.textEditor;
+    if (!editor) return;
+    const session = this.textSaveSession;
+    const itemId = session
+      ? (session.context?.itemId ?? session.itemId)
+      : (this.textEditContext?.itemId ?? editor.dataset.draftItemId);
+    await this.closeTextEditor(true);
+    // A refused sticky save keeps its editor open so the draft can still be edited.
+    if (this.textEditor === editor) return;
+    this.tools.setTool("select");
+    if (itemId) this.tools.selectOnly([itemId]);
   }
 
   private discardTextEditor(editor: HTMLTextAreaElement): void {

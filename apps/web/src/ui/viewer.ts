@@ -7,6 +7,7 @@ import { MAX_SNAPSHOT_BYTES } from "@collab/protocol";
 
 import { BoardModel } from "../board/model";
 import { BoardRenderer, type ImageAssetLoader } from "../board/renderer";
+import { wheelScrollPixels } from "../board/wheel";
 
 const VIEWER_STYLE_ID = "spacescale-read-only-viewer-styles";
 const ZOOM_FACTOR = 1.2;
@@ -676,6 +677,14 @@ export class ReadOnlySpaceViewer {
       (rawEvent) => {
         const event = rawEvent as WheelEvent;
         event.preventDefault();
+        if (!event.ctrlKey && !event.metaKey) {
+          const [deltaX, deltaY] = wheelScrollPixels(event, {
+            width: svg.clientWidth,
+            height: svg.clientHeight,
+          });
+          this.renderer.viewport.panByPixels(-deltaX, -deltaY);
+          return;
+        }
         this.renderer.viewport.zoomAt(
           event.clientX,
           event.clientY,

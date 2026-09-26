@@ -4,6 +4,7 @@ import { MAX_BATCH_OPERATIONS } from "@collab/protocol";
 import type { BoardModel, Bounds, ConnectorAnchor } from "../board/model";
 import { itemBounds, translateMatrix } from "../board/model";
 import type { BoardRenderer } from "../board/renderer";
+import { wheelScrollPixels } from "../board/wheel";
 import { STICKY_COLOR_VALUES, UI_COLORS } from "../palette";
 import type {
   BatchItemOperation,
@@ -1082,12 +1083,32 @@ type Gesture =
       operation: ZoneCreateOperation;
     };
 
+/**
+ * Two touch points pan the view as their midpoint moves. Spreading or closing them zooms,
+ * but only once the spacing has clearly changed, so a two-finger pan never drifts the zoom.
+ */
 type PinchState = {
   pointerIds: readonly [number, number];
-  distance: number;
   center: Point;
+  /** Finger spacing and zoom when the gesture began. */
+  distance: number;
   zoom: number;
 };
+
+/** Relative change in finger spacing before a two-finger gesture starts zooming. */
+export const PINCH_ZOOM_THRESHOLD = 0.1;
+
+/**
+ * Zoom multiplier for a pinch whose finger spacing went from `startDistance` to `distance`.
+ * Within the threshold it is 1; beyond it, scaling continues smoothly from the threshold edge.
+ * Being a function of spacing alone, returning to the starting spacing restores the zoom.
+ */
+export function pinchZoomScale(startDistance: number, distance: number): number {
+  const ratio = distance / Math.max(1, startDistance);
+  if (ratio > 1 + PINCH_ZOOM_THRESHOLD) return ratio / (1 + PINCH_ZOOM_THRESHOLD);
+  if (ratio < 1 - PINCH_ZOOM_THRESHOLD) return ratio / (1 - PINCH_ZOOM_THRESHOLD);
+  return 1;
+}
 
 export function buildUngroupedCopyOperation(
   item: BoardItem,
@@ -1112,6 +1133,7 @@ export class ToolController {
   private spaceHeld = false;
   private readonly pointers = new Map<number, Point>();
   private pinch: PinchState | null = null;
+  private pinchFrame: number | null = null;
   private lastPresenceAt = 0;
   private lastStickyTap: { itemId: string; at: number } | null = null;
   private lastTableTap: {
@@ -1314,6 +1336,8 @@ export class ToolController {
 
   destroy(): void {
     this.cancelGesture();
+    if (this.pinchFrame !== null) cancelAnimationFrame(this.pinchFrame);
+    this.pinchFrame = null;
     const { svg } = this.options.renderer;
     svg.removeEventListener("pointerdown", this.onPointerDown);
     svg.removeEventListener("pointermove", this.onPointerMove);
@@ -1344,8 +1368,8 @@ export class ToolController {
       if (first && second) {
         this.pinch = {
           pointerIds: [first[0], second[0]],
-          distance: pointDistance(first[1], second[1]),
           center: midpoint(first[1], second[1]),
+          distance: Math.max(1, pointDistance(first[1], second[1])),
           zoom: this.options.renderer.viewport.zoom,
         };
       }
@@ -1622,21 +1646,12 @@ export class ToolController {
       this.pointers.has(this.pinch.pointerIds[0]) &&
       this.pointers.has(this.pinch.pointerIds[1])
     ) {
-      const first = this.pointers.get(this.pinch.pointerIds[0]);
-      const second = this.pointers.get(this.pinch.pointerIds[1]);
-      if (!first || !second) return;
-      const center = midpoint(first, second);
-      const distance = Math.max(1, pointDistance(first, second));
-      this.options.renderer.viewport.panByPixels(
-        center[0] - this.pinch.center[0],
-        center[1] - this.pinch.center[1],
-      );
-      this.options.renderer.viewport.zoomAt(
-        center[0],
-        center[1],
-        this.pinch.zoom * (distance / this.pinch.distance),
-      );
-      this.pinch = { ...this.pinch, center };
+      // Each finger reports its own pointermove, so apply the pair once per frame, after
+      // both have moved. Reading them one event at a time would see a skewed spacing.
+      this.pinchFrame ??= requestAnimationFrame(() => {
+        this.pinchFrame = null;
+        this.applyPinch();
+      });
       event.preventDefault();
       return;
     }
@@ -1787,9 +1802,16 @@ export class ToolController {
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
+    // End the pinch while both finger positions are still known.
+    if (this.pinch?.pointerIds.includes(event.pointerId)) {
+      this.endPinch();
+      this.pointers.delete(event.pointerId);
+      safeReleaseCapture(this.options.renderer.svg, event.pointerId);
+      event.preventDefault();
+      return;
+    }
     this.pointers.delete(event.pointerId);
     if (this.pinch) {
-      if (this.pinch.pointerIds.includes(event.pointerId)) this.pinch = null;
       safeReleaseCapture(this.options.renderer.svg, event.pointerId);
       event.preventDefault();
       return;
@@ -1893,8 +1915,8 @@ export class ToolController {
   };
 
   private readonly onPointerCancel = (event: PointerEvent): void => {
+    if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
-    if (this.pinch?.pointerIds.includes(event.pointerId)) this.pinch = null;
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
     safeReleaseCapture(this.options.renderer.svg, event.pointerId);
   };
@@ -1904,8 +1926,42 @@ export class ToolController {
     if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
   };
 
+  private applyPinch(): void {
+    const pinch = this.pinch;
+    if (!pinch) return;
+    const first = this.pointers.get(pinch.pointerIds[0]);
+    const second = this.pointers.get(pinch.pointerIds[1]);
+    if (!first || !second) return;
+    const center = midpoint(first, second);
+    const distance = Math.max(1, pointDistance(first, second));
+    const viewport = this.options.renderer.viewport;
+    viewport.panByPixels(center[0] - pinch.center[0], center[1] - pinch.center[1]);
+    const zoom = pinch.zoom * pinchZoomScale(pinch.distance, distance);
+    if (zoom !== viewport.zoom) viewport.zoomAt(center[0], center[1], zoom);
+    this.pinch = { ...pinch, center };
+  }
+
+  /** Applies any movement still waiting for a frame, then ends the two-finger gesture. */
+  private endPinch(): void {
+    if (this.pinchFrame !== null) {
+      cancelAnimationFrame(this.pinchFrame);
+      this.pinchFrame = null;
+      this.applyPinch();
+    }
+    this.pinch = null;
+  }
+
   private readonly onWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    if (!event.ctrlKey && !event.metaKey) {
+      const [deltaX, deltaY] = wheelScrollPixels(event, {
+        width: this.options.renderer.svg.clientWidth,
+        height: this.options.renderer.svg.clientHeight,
+      });
+      this.options.renderer.viewport.panByPixels(-deltaX, -deltaY);
+      return;
+    }
+    // Ctrl/Cmd + wheel, which trackpads also send for a pinch, still zooms at the pointer.
     const normalized =
       event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16 : event.deltaY;
     const factor = Math.exp(-normalized * 0.0015);

@@ -28,6 +28,7 @@ import {
   expandPartialEraserSectionOperations,
   fitEraserOperationsWithinBatchLimit,
   lineCreationReleaseAction,
+  pinchZoomScale,
   resizedCardGeometry,
   resolveConnectorEndpoint,
   resolveProtractorCenterMove,
@@ -1445,5 +1446,25 @@ describe("captured gesture operations", () => {
         },
       ],
     });
+  });
+});
+
+describe("pinchZoomScale", () => {
+  it("ignores spacing changes within the threshold", () => {
+    expect(pinchZoomScale(100, 100)).toBe(1);
+    expect(pinchZoomScale(100, 109)).toBe(1);
+    expect(pinchZoomScale(100, 91)).toBe(1);
+  });
+
+  it("scales smoothly from the threshold edge", () => {
+    expect(pinchZoomScale(100, 110)).toBeCloseTo(1);
+    expect(pinchZoomScale(100, 220)).toBeCloseTo(2);
+    expect(pinchZoomScale(100, 90)).toBeCloseTo(1);
+    expect(pinchZoomScale(100, 45)).toBeCloseTo(0.5);
+  });
+
+  it("restores the starting zoom when the fingers return to their starting spacing", () => {
+    expect(pinchZoomScale(100, 150)).toBeGreaterThan(1);
+    expect(pinchZoomScale(100, 100)).toBe(1);
   });
 });
