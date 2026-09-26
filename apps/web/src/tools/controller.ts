@@ -4,6 +4,7 @@ import { MAX_BATCH_OPERATIONS } from "@collab/protocol";
 import type { BoardModel, Bounds, ConnectorAnchor } from "../board/model";
 import { itemBounds, translateMatrix } from "../board/model";
 import type { BoardRenderer } from "../board/renderer";
+import { wheelScrollPixels } from "../board/wheel";
 import { STICKY_COLOR_VALUES, UI_COLORS } from "../palette";
 import type {
   BatchItemOperation,
@@ -1082,11 +1083,10 @@ type Gesture =
       operation: ZoneCreateOperation;
     };
 
+/** Two touch points drag the view together; zoom stays with the zoom buttons. */
 type PinchState = {
   pointerIds: readonly [number, number];
-  distance: number;
   center: Point;
-  zoom: number;
 };
 
 export function buildUngroupedCopyOperation(
@@ -1344,9 +1344,7 @@ export class ToolController {
       if (first && second) {
         this.pinch = {
           pointerIds: [first[0], second[0]],
-          distance: pointDistance(first[1], second[1]),
           center: midpoint(first[1], second[1]),
-          zoom: this.options.renderer.viewport.zoom,
         };
       }
       event.preventDefault();
@@ -1626,15 +1624,9 @@ export class ToolController {
       const second = this.pointers.get(this.pinch.pointerIds[1]);
       if (!first || !second) return;
       const center = midpoint(first, second);
-      const distance = Math.max(1, pointDistance(first, second));
       this.options.renderer.viewport.panByPixels(
         center[0] - this.pinch.center[0],
         center[1] - this.pinch.center[1],
-      );
-      this.options.renderer.viewport.zoomAt(
-        center[0],
-        center[1],
-        this.pinch.zoom * (distance / this.pinch.distance),
       );
       this.pinch = { ...this.pinch, center };
       event.preventDefault();
@@ -1906,6 +1898,15 @@ export class ToolController {
 
   private readonly onWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    if (!event.ctrlKey && !event.metaKey) {
+      const [deltaX, deltaY] = wheelScrollPixels(event, {
+        width: this.options.renderer.svg.clientWidth,
+        height: this.options.renderer.svg.clientHeight,
+      });
+      this.options.renderer.viewport.panByPixels(-deltaX, -deltaY);
+      return;
+    }
+    // Ctrl/Cmd + wheel, which trackpads also send for a pinch, still zooms at the pointer.
     const normalized =
       event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16 : event.deltaY;
     const factor = Math.exp(-normalized * 0.0015);

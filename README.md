@@ -10,6 +10,13 @@ provide immutable recovery checkpoints and named snapshots.
 
 ## Space collaboration tools
 
+Press `Esc` or `Ctrl`/`⌘`+`Enter` to finish a text box or sticky note: it is
+saved and left selected with the **Select** tool. Press `Esc` again, or click
+empty space, to deselect. The mouse wheel, two-finger trackpad scrolling, and a
+two-finger touch drag all pan the board (hold `Shift` to scroll sideways with a
+mouse wheel). Zoom with the zoom buttons, or with `Ctrl`/`⌘` + wheel or a
+trackpad pinch.
+
 Alongside freehand drawing, shapes, and plain text, the board supports durable
 sticky notes for brainstorming, exit tickets, sorting, and feedback. Choose
 **Sticky note** or press `N`, click the board, and type immediately. A note may
