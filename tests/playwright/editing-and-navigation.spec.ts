@@ -81,9 +81,12 @@ test("the wheel and two-finger trackpad scrolling pan, while Ctrl + wheel zooms"
 
 type TwoFingerStep = { first: { x: number; y: number }; second: { x: number; y: number } };
 
-/** Dispatches a synthetic two-finger touch gesture: down at the first step, up at the last. */
+/**
+ * Dispatches a synthetic two-finger touch gesture, down at the first step and up at the last.
+ * Each finger reports separately, as on a touchscreen, with one animation frame per step.
+ */
 async function twoFingerGesture(page: Page, steps: TwoFingerStep[]): Promise<void> {
-  await page.locator("#board-canvas").evaluate((node, input) => {
+  await page.locator("#board-canvas").evaluate(async (node, input) => {
     const canvas = node as SVGSVGElement;
     const captured = new Set<number>();
     Object.defineProperties(canvas, {
@@ -106,16 +109,17 @@ async function twoFingerGesture(page: Page, steps: TwoFingerStep[]): Promise<voi
           buttons: type === "pointerup" ? 0 : 1,
         }),
       );
-    input.forEach((step, index) => {
+    for (const [index, step] of input.entries()) {
       const type =
         index === 0 ? "pointerdown" : index === input.length - 1 ? "pointerup" : "pointermove";
       send(type, 41, step.first);
       send(type, 42, step.second);
-    });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
   }, steps);
 }
 
-/** Interpolates two-finger positions in small steps, as a touchscreen reports them. */
+/** Interpolates two-finger positions over `count` equal steps. */
 function twoFingerPath(from: TwoFingerStep, to: TwoFingerStep, count = 20): TwoFingerStep[] {
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
   const steps: TwoFingerStep[] = [];
@@ -138,13 +142,15 @@ test("two fingers pan the board and a pinch zooms it", async ({ page }, testInfo
   const zoomLabel = page.locator("[data-zoom-label]");
   const c = await canvasPoint(page, 0.5, 0.5);
 
-  // Moving both fingers together pans without changing the zoom.
+  // Moving both fingers together pans without changing the zoom, even in fast 30 px jumps
+  // where one finger's event arrives before the other's.
   const before = await canvas.getAttribute("viewBox");
   await twoFingerGesture(
     page,
     twoFingerPath(
       { first: { x: c.x - 40, y: c.y }, second: { x: c.x + 40, y: c.y } },
-      { first: { x: c.x + 20, y: c.y + 80 }, second: { x: c.x + 100, y: c.y + 80 } },
+      { first: { x: c.x + 50, y: c.y + 120 }, second: { x: c.x + 130, y: c.y + 120 } },
+      3,
     ),
   );
   await expect.poll(() => canvas.getAttribute("viewBox")).not.toBe(before);
