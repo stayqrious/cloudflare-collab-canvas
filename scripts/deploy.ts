@@ -59,6 +59,10 @@ export async function deploy(environment: "staging" | "production"): Promise<voi
     const value = process.env[name]?.trim();
     if (value) secrets[name] = value;
   }
+  // Wrangler keeps any secret left out of --secrets-file, so clearing the previous key after a
+  // rotation would leave the retired key accepting sessions. Outside a rotation, overwrite it
+  // with the current key, which accepts nothing the current key does not.
+  secrets.SESSION_SIGNING_KEY_PREVIOUS ??= secrets.SESSION_SIGNING_KEY_CURRENT ?? "";
 
   // Validate everything above before creating resources. Upload runtime secrets atomically
   // with the code, including on a fresh Worker; build secrets are not runtime bindings.
