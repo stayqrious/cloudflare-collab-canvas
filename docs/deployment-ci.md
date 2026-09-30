@@ -105,6 +105,23 @@ See [limits and pricing](https://developers.cloudflare.com/workers/ci-cd/builds/
 Cloudflare references: [build configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
 and [connecting multiple environment Workers](https://developers.cloudflare.com/workers/ci-cd/builds/advanced-setups/).
 
+### Verify a production push
+
+1. Record the current production `/healthz` response and its `versionId` before
+   pushing. A healthy response alone does not prove that a new commit deployed.
+2. Push the intended commit to `main`, then open the production Worker's build
+   history. Confirm the build uses that commit and that validation and deployment
+   both succeed. With `DEPLOYMENT_NAME=spacescale`, the connected Worker must be
+   `spacescale-production`, including after a move from a legacy Worker name.
+3. Check that the production Custom Domain still targets this Worker and that
+   `/healthz` reports the version from the successful deployment. Skipped GitHub
+   jobs are expected with `AUTOMATION_PROVIDER=cloudflare`; they do not confirm a
+   Cloudflare build succeeded.
+4. Open a disposable production board and verify editing, saved content after
+   reload, a second participant, and view/edit permission changes. Run Playwright
+   against the production URL with `PLAYWRIGHT_BASE_URL` set, and clean up test
+   data where the flow supports deletion.
+
 ## GitHub Actions
 
 Leave `AUTOMATION_PROVIDER` unset or set it to `github`. Disconnect Workers
