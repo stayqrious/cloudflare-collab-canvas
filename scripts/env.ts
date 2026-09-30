@@ -75,6 +75,7 @@ export function assertPublicConfiguration(values: Record<string, string>): void 
   }
   for (const [name, key] of [
     ["SESSION_SIGNING_KEY_CURRENT", values.SESSION_SIGNING_KEY_CURRENT],
+    ["SESSION_SIGNING_KEY_PREVIOUS", values.SESSION_SIGNING_KEY_PREVIOUS],
   ] as const) {
     if (!key) continue;
     const looksBase64 = /^[A-Za-z\d+/]+={0,2}$/u.test(key) && key.length % 4 === 0;

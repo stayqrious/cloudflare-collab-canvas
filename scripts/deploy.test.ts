@@ -106,6 +106,29 @@ describe("shared deployment", () => {
     expect(mocks.run).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["too short", "short-previous-key"],
+    ["a placeholder", "replace-with-a-previous-session-signing-key"],
+  ])("rejects a previous session key that is %s before provisioning anything", async (_, key) => {
+    vi.stubEnv("SESSION_SIGNING_KEY_PREVIOUS", key);
+    await expect(deploy("production")).rejects.toThrow("SESSION_SIGNING_KEY_PREVIOUS");
+    expect(mocks.run).not.toHaveBeenCalled();
+  });
+
+  it("uploads a strong previous session key during a rotation", async () => {
+    const previous = "p".repeat(44);
+    vi.stubEnv("SESSION_SIGNING_KEY_PREVIOUS", previous);
+    let uploaded: Record<string, string> = {};
+    mocks.run.mockImplementation((_command, args) => {
+      if (args.includes("--secrets-file")) {
+        uploaded = JSON.parse(readFileSync(args[args.indexOf("--secrets-file") + 1] ?? "", "utf8"));
+      }
+      return { status: 0 };
+    });
+    await deploy("production");
+    expect(uploaded.SESSION_SIGNING_KEY_PREVIOUS).toBe(previous);
+  });
+
   it("rejects invalid organisation keys without creating resources or exposing their value", async () => {
     vi.stubEnv("ORGANISATION_SIGNING_KEYS", "private-invalid-value");
     await expect(deploy("staging")).rejects.not.toThrow("private-invalid-value");

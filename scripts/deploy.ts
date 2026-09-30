@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   deploymentConfigurationFromEnvironment,
   generatedWranglerConfigPath,
+  isConfiguredValue,
   parseEnvironmentArguments,
 } from "./deployment-config.ts";
 import { assertPublicConfiguration, loadLocalEnv, requireEnvironment } from "./env.ts";
@@ -35,7 +36,19 @@ export async function deploy(environment: "staging" | "production"): Promise<voi
     "ORGANISATION_SIGNING_KEYS",
     ...(configuration.turnstileEnabled ? ["TURNSTILE_SECRET_KEY"] : []),
   ]);
-  assertPublicConfiguration({ ...required, APP_HOSTNAME: configuration.hostname });
+  // The previous session key still verifies sessions during a rotation, so it gets the same
+  // placeholder and strength checks as the current one whenever it is set.
+  const previousSessionKey = process.env.SESSION_SIGNING_KEY_PREVIOUS?.trim();
+  if (previousSessionKey && !isConfiguredValue(previousSessionKey)) {
+    throw new Error(
+      "SESSION_SIGNING_KEY_PREVIOUS is a placeholder. Set a real key or leave it empty.",
+    );
+  }
+  assertPublicConfiguration({
+    ...required,
+    ...(previousSessionKey ? { SESSION_SIGNING_KEY_PREVIOUS: previousSessionKey } : {}),
+    APP_HOSTNAME: configuration.hostname,
+  });
   const secrets: Record<string, string> = {};
   for (const name of [
     "SESSION_SIGNING_KEY_CURRENT",
