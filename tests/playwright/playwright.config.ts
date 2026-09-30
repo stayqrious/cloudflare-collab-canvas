@@ -33,6 +33,7 @@ export default defineConfig({
           cwd: repositoryRoot,
           url: `${localBaseUrl}/healthz`,
           ignoreHTTPSErrors: true,
+          stdout: "pipe",
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
         },

@@ -59,14 +59,17 @@ test("a delimiter opens the maths field, and its TeX lands back in the text", as
     const field = document.querySelector("math-field") as HTMLElement & {
       executeCommand?: (command: string) => void;
     };
-    field?.executeCommand?.("toggleVirtualKeyboard");
+    field?.executeCommand?.("showVirtualKeyboard");
   });
-  const keyboard = await page.evaluate(() => {
-    const virtual = (window as unknown as { mathVirtualKeyboard?: { visible?: boolean } })
-      .mathVirtualKeyboard;
-    return { present: Boolean(virtual), visible: virtual?.visible === true };
-  });
-  expect(keyboard).toEqual({ present: true, visible: true });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const virtual = (window as unknown as { mathVirtualKeyboard?: { visible?: boolean } })
+          .mathVirtualKeyboard;
+        return { present: Boolean(virtual), visible: virtual?.visible === true };
+      }),
+    )
+    .toEqual({ present: true, visible: true });
 
   // The board's content security policy has to accommodate the library, not be broken by it.
   const violations = await page.evaluate(

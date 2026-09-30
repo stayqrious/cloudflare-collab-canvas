@@ -36,6 +36,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (vars.AUTOMATION_PROVIDER != 'cloudflare' && github.event_name != 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      WRANGLER_LOG_PATH: ${{ runner.temp }}/spacescale-wrangler.log
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,8 +48,17 @@ jobs:
       - if: github.event_name == 'pull_request'
         run: npx playwright install --with-deps chromium
       - if: github.event_name == 'pull_request'
-        run: npm run test:e2e -- --project=chromium --project=mobile-chromium
+        run: npm run test:e2e -- --project=chromium --project=mobile-chromium --max-failures=5
       - if: github.event_name == 'workflow_dispatch'
         run: npx playwright install --with-deps
       - if: github.event_name == 'workflow_dispatch'
-        run: npm run test:e2e
+        run: npm run test:e2e -- --max-failures=5
+      - name: Save browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-diagnostics
+          path: |
+            ${{ runner.temp }}/spacescale-wrangler.log
+            playwright-report/
+          retention-days: 3
