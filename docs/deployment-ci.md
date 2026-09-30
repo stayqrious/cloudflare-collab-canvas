@@ -43,13 +43,18 @@ environment's secrets, hostname, Durable Objects, and R2 buckets separate.
    token with Workers Scripts Edit, Workers R2 Storage Edit, Zone Read, WAF Edit,
    and Workers Routes Edit for the target account/zone. The deployment scripts
    accept both user-owned and account-owned tokens; the latter also work for
-   local and GitHub deployment.
+   local and GitHub deployment. If managing Builds connections through the API,
+   also grant Account **Workers CI Edit** (called `Workers CI Write` in the API).
 2. If the two Workers do not exist yet, bootstrap each once from a trusted local
    checkout. Use Node 22.19.0 or newer, `npm ci`, and `npm run deployment:check`,
    then run `npm run deployment:deploy -- --env staging` and the production
    equivalent using their separate ignored environment files. These commands
    deploy and attach the configured hostnames; choose the initial cutover time
    deliberately. The prior installation's boards do not migrate automatically.
+   If a hostname already belongs to another Worker, explicitly move its Custom
+   Domain to the new Worker after deployment, then rerun the deployment command.
+   Cloudflare rejects the initial attachment with HTTP 409 until that cutover;
+   the script does not automatically take over another Worker's hostname.
 3. In GitHub **Settings → Secrets and variables → Actions → Variables**, add
    the **repository variable** `AUTOMATION_PROVIDER=cloudflare`. This skips all
    automatic jobs in this repository's CI and Deploy workflows before a runner
