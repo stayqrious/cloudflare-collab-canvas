@@ -8,11 +8,25 @@ test("a delimiter opens the maths field, and its TeX lands back in the text", as
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   await page.addInitScript(() => {
-    const store = window as unknown as { __cspViolations: string[] };
+    const store = window as unknown as { __cspViolations: string[]; __mathFieldsAdded: number };
     store.__cspViolations = [];
+    store.__mathFieldsAdded = 0;
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeName === "MATH-FIELD") store.__mathFieldsAdded += 1;
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
     document.addEventListener("securitypolicyviolation", (event) => {
       store.__cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`);
     });
+  });
+  // Several input/selection events can arrive before the lazy library download finishes.
+  // A later waiter must not replace the field that the participant is about to focus.
+  await page.route("**/assets/mathlive.min-*.js", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue();
   });
 
   await createBoard(page, "Maths keyboard");
@@ -34,6 +48,11 @@ test("a delimiter opens the maths field, and its TeX lands back in the text", as
   // MathLive on WebKit may retain an empty superscript placeholder before the exponent. Both
   // serializations represent the same formula and are accepted by MathJax.
   await expect(editor).toHaveValue(/^Solve \$\$x\^(?:\{\})?2\+1\$\$$/u);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { __mathFieldsAdded: number }).__mathFieldsAdded,
+    ),
+  ).toBe(1);
 
   // MathLive's on-screen keyboard is the point of the field, so it has to open.
   await page.evaluate(() => {

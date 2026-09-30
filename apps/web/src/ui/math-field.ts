@@ -194,6 +194,9 @@ export class MathFieldPanel {
       return null;
     }
     if (this.destroyed) return null;
+    // Input and selection events can request the panel while the lazy import is still loading.
+    // Reuse the field created by the first waiter instead of replacing a focused maths editor.
+    if (this.field) return this.field;
     const field = new module.MathfieldElement();
     field.addEventListener("input", () => this.options.onChange(field.value));
     field.addEventListener("keydown", (event) => {
