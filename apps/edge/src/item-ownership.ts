@@ -1,11 +1,13 @@
+import { type Bounds, boundsContain, itemBounds } from "@collab/geometry";
 import {
   BoardDomainError,
   type ItemRecord,
+  type ItemWrite,
   type ParsedItemOperation,
   type PreparedOperation,
   prepareItemOperation,
 } from "./domain";
-import type { BoardItem, BoardRole, ZoneGeometry } from "./types";
+import type { BoardItem, BoardRole, ItemEffect, ZoneGeometry } from "./types";
 
 type SectionItem = BoardItem & { kind: "zone"; geometry: ZoneGeometry };
 
@@ -79,6 +81,27 @@ function zoneLockChange(
   const geometry = operation.patch.geometry as Partial<typeof source.geometry>;
   const locked = geometry.locked === true;
   return locked === (source.geometry.locked === true) ? null : { section: source, locked };
+}
+
+/**
+ * Lock state of every Section a batch creates or copies, keyed by the new
+ * item ID. These Sections are absent from the pre-batch `records`, so a later
+ * child in the same batch could otherwise lock them unnoticed.
+ */
+function batchSectionLockStates(
+  operations: readonly ParsedItemOperation[],
+  records: ReadonlyMap<string, ItemRecord>,
+): Map<string, boolean> {
+  const states = new Map<string, boolean>();
+  for (const child of operations) {
+    if (child.kind === "item.create" && child.item.kind === "zone") {
+      states.set(child.item.id, (child.item.geometry as { locked?: unknown }).locked === true);
+    } else if (child.kind === "item.copy") {
+      const source = asSection(liveItem(records, child.sourceItemId));
+      if (source !== undefined) states.set(child.newItemId, source.geometry.locked === true);
+    }
+  }
+  return states;
 }
 
 function isPureZoneLockChange(operation: ParsedItemOperation, section: SectionItem): boolean {
@@ -163,6 +186,7 @@ export function assertSectionLockMutation(
     throw new BoardDomainError("FORBIDDEN", "Only an owner can lock or unlock a Section.");
   }
 
+  const batchSectionLocks = batchSectionLockStates(operations, records);
   for (const child of operations) {
     if (
       child.kind === "item.create" &&
@@ -171,6 +195,18 @@ export function assertSectionLockMutation(
       context.role !== "owner"
     ) {
       throw new BoardDomainError("FORBIDDEN", "Only an owner can create a locked Section.");
+    }
+
+    // A lock change must be its own single operation, so one that targets a
+    // Section created or copied earlier in this batch is never allowed.
+    if (child.kind === "item.update" && child.patch.geometry !== undefined) {
+      const lockedAtCreation = batchSectionLocks.get(child.itemId);
+      if (
+        lockedAtCreation !== undefined &&
+        ((child.patch.geometry as { locked?: unknown }).locked === true) !== lockedAtCreation
+      ) {
+        throw new BoardDomainError("FORBIDDEN", "Only an owner can lock or unlock a Section.");
+      }
     }
 
     const source = mutationSource(child, records);
@@ -264,9 +300,98 @@ export function isOwnSectionDetach(
   return section !== undefined && section.createdBy === actorId;
 }
 
+function boundsEqual(left: Bounds, right: Bounds): boolean {
+  return (
+    left.minX === right.minX &&
+    left.minY === right.minY &&
+    left.maxX === right.maxX &&
+    left.maxY === right.maxY
+  );
+}
+
+/**
+ * Section membership is assigned by geometry, so every member a mutation
+ * leaves inside a Section must lie within that Section's prospective bounds.
+ * Without this an editor could attach an item anywhere on the board to
+ * another participant's Section. A member whose bounds and membership are
+ * both untouched is left alone so a stray member can still be edited and
+ * re-homed by the client. A missing Section is reported by the topology check.
+ */
+export function assertSectionMembersContained(
+  writes: ReadonlyMap<string, ItemWrite>,
+  records: ReadonlyMap<string, ItemRecord>,
+): void {
+  for (const write of writes.values()) {
+    const sectionId = write.item.sectionId;
+    if (write.deleted || write.item.kind === "zone" || sectionId === undefined) continue;
+    const sectionWrite = writes.get(sectionId);
+    const section = asSection(
+      sectionWrite === undefined
+        ? liveItem(records, sectionId)
+        : sectionWrite.deleted
+          ? undefined
+          : sectionWrite.item,
+    );
+    if (section === undefined) continue;
+    const before = liveItem(records, write.item.id);
+    if (
+      before !== undefined &&
+      before.sectionId === sectionId &&
+      sectionWrite === undefined &&
+      boundsEqual(itemBounds(before), write.bounds)
+    ) {
+      continue;
+    }
+    if (!boundsContain(sectionWrite?.bounds ?? itemBounds(section), write.bounds)) {
+      throw new BoardDomainError("INVALID_FRAME", "A Section member must lie within its Section.", {
+        sectionId,
+        itemId: write.item.id,
+      });
+    }
+  }
+}
+
+/**
+ * Editors may add an item to a group only when every live member of that
+ * group is their own (or the group is new). Otherwise an editor could bind
+ * their item to another participant's group, after which neither could move
+ * the group closure. `currentItems` is the live board before the effects are
+ * applied, and `target` selects the state the effects are moving towards.
+ */
+export function assertGroupMembershipOwnership(
+  effects: readonly ItemEffect[],
+  target: "before" | "after",
+  currentItems: Iterable<BoardItem>,
+  context: ItemOwnershipContext,
+): void {
+  if (context.role === "owner") return;
+  const source = target === "after" ? "before" : "after";
+  const joins = effects.flatMap((effect) => {
+    const next = effect[target];
+    const previous = effect[source];
+    if (!next.exists || next.item.groupId === undefined) return [];
+    if (previous.exists && previous.item.groupId === next.item.groupId) return [];
+    return [{ itemId: effect.itemId, groupId: next.item.groupId }];
+  });
+  if (joins.length === 0) return;
+  const joinedGroupIds = new Set(joins.map((join) => join.groupId));
+  for (const member of currentItems) {
+    if (member.groupId === undefined || !joinedGroupIds.has(member.groupId)) continue;
+    if (member.createdBy === context.actorId) continue;
+    const join = joins.find((candidate) => candidate.groupId === member.groupId);
+    throw new BoardDomainError(
+      "FORBIDDEN",
+      "You can add items only to groups made of work that you created.",
+      { itemId: join?.itemId ?? member.id, groupId: member.groupId },
+    );
+  }
+}
+
 /**
  * Keeps authorization and reduction as one call so a forbidden child makes a
- * batch fail before token allocation or any other reducer work begins.
+ * batch fail before token allocation or any other reducer work begins. The
+ * prepared writes are then checked for Section containment, which needs the
+ * reduced geometry.
  */
 export function prepareOwnedItemOperation(
   operation: ItemMutationOperation,
@@ -274,5 +399,7 @@ export function prepareOwnedItemOperation(
   options: OwnedItemPreparationOptions,
 ): PreparedOperation {
   assertItemMutationOwnership(operation, records, options);
-  return prepareItemOperation(operation, records, options);
+  const prepared = prepareItemOperation(operation, records, options);
+  assertSectionMembersContained(prepared.writes, records);
+  return prepared;
 }

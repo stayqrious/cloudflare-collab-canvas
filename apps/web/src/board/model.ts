@@ -1,9 +1,13 @@
 import { applyAuthoritativeOperation } from "@collab/board-core";
 import {
+  itemBounds as canonicalItemBounds,
   lineArrowheadPoints,
   type OutlineGeometry,
   type OutlineGeometryKind,
   protractorSnapPoints,
+  textLayoutEstimateSource,
+  VIDEO_EMBED_HEIGHT,
+  VIDEO_EMBED_WIDTH,
   visibleOutlinePaths,
   zoneGeometryContainsPoint,
 } from "@collab/geometry";
@@ -27,6 +31,7 @@ import type {
   Point,
   ServerAction,
   TableGeometry,
+  TextGeometry,
 } from "../types";
 import { isBoardItem } from "../types";
 
@@ -45,6 +50,40 @@ export type ConnectorAnchor = {
 
 type ModelListener = (changedIds: ReadonlySet<string> | null) => void;
 type RebaseListener = (error: Error | null) => void;
+
+type RenderedTextMeasurement = {
+  signature: string;
+  width: number;
+  height: number;
+};
+
+const renderedTextMeasurements = new WeakMap<TextGeometry, RenderedTextMeasurement>();
+
+function textMeasurementSignature(item: Extract<BoardItem, { kind: "text" }>): string {
+  return JSON.stringify([
+    item.geometry.text,
+    item.style.fontSize,
+    item.style.fontFamily,
+    item.style.fontWeight,
+    item.style.fontStyle,
+    item.style.textDecoration,
+  ]);
+}
+
+function renderedTextMeasurement(
+  item: Extract<BoardItem, { kind: "text" }>,
+): RenderedTextMeasurement | undefined {
+  const measurement = renderedTextMeasurements.get(item.geometry);
+  return measurement?.signature === textMeasurementSignature(item) ? measurement : undefined;
+}
+
+function preserveRenderedTextMeasurement(previous: BoardItem | undefined, next: BoardItem): void {
+  if (previous?.kind !== "text" || next.kind !== "text") return;
+  const measurement = renderedTextMeasurement(previous);
+  if (measurement?.signature === textMeasurementSignature(next)) {
+    renderedTextMeasurements.set(next.geometry, measurement);
+  }
+}
 
 export class BoardModel {
   private authoritative = new Map<string, BoardItem>();
@@ -130,6 +169,81 @@ export class BoardModel {
     const computed = itemBounds(item);
     this.bounds.set(id, computed);
     return computed;
+  }
+
+  setRenderedTextSize(id: string, expectedVersion: number, width: number, height: number): boolean {
+    const item = this.rendered.get(id);
+    if (
+      item?.kind !== "text" ||
+      item.version !== expectedVersion ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      return false;
+    }
+    const previous = renderedTextMeasurement(item);
+    if (previous?.width === width && previous.height === height) return false;
+    renderedTextMeasurements.set(item.geometry, {
+      signature: textMeasurementSignature(item),
+      width,
+      height,
+    });
+    this.bounds.delete(id);
+    return true;
+  }
+
+  renderedTextSectionMembershipOperation(
+    id: string,
+    expectedVersion: number,
+  ): Extract<BatchItemOperation, { kind: "item.update" }> | null {
+    const item = this.rendered.get(id);
+    const authoritative = this.authoritative.get(id);
+    if (
+      item?.kind !== "text" ||
+      item.version <= 0 ||
+      item.version !== expectedVersion ||
+      renderedTextMeasurement(item) === undefined ||
+      authoritative?.kind !== "text" ||
+      authoritative.version !== expectedVersion ||
+      authoritative.sectionId !== item.sectionId ||
+      [...this.optimistic.values()].some((command) => operationIds(command.op).has(id))
+    ) {
+      return null;
+    }
+    let sectionId: string | undefined;
+    if (item.sectionId !== undefined) {
+      const section = this.rendered.get(item.sectionId);
+      // Detaching and attaching both require the shared canonical estimate to agree with the
+      // local measurement, so their preconditions can never hold at once. Without that, two
+      // clients whose MathJax measurements straddle a Section edge take turns detaching and
+      // reattaching the same formula forever, writing an unbounded stream of item.update
+      // history. A dangling sectionId still detaches so the reference is cleaned up.
+      if (
+        section?.kind === "zone" &&
+        (boundsContains(itemBounds(section), itemBounds(item)) ||
+          boundsContains(canonicalBounds(section), canonicalBounds(item)))
+      ) {
+        return null;
+      }
+    } else {
+      sectionId = [...this.rendered.values()]
+        .filter(
+          (candidate): candidate is Extract<BoardItem, { kind: "zone" }> =>
+            candidate.kind === "zone" &&
+            boundsContains(itemBounds(candidate), itemBounds(item)) &&
+            boundsContains(canonicalBounds(candidate), canonicalBounds(item)),
+        )
+        .sort((left, right) => right.z - left.z || left.id.localeCompare(right.id))[0]?.id;
+      if (sectionId === undefined) return null;
+    }
+    return {
+      kind: "item.update",
+      itemId: item.id,
+      expectedVersion: item.version,
+      patch: { sectionId: sectionId ?? null },
+    };
   }
 
   queue(command: CommitFrame, actorId: string): void {
@@ -367,6 +481,7 @@ export class BoardModel {
       rebaseError = error instanceof Error ? error : new Error("Optimistic rebase failed.");
     }
 
+    for (const [id, item] of next) preserveRenderedTextMeasurement(previous.get(id), item);
     this.rendered = next;
     const affected = changed ? new Set(changed) : new Set<string>();
     if (!changed) {
@@ -906,10 +1021,21 @@ function geometryBounds(item: BoardItem): Bounds {
     case "stamp":
       return stampBounds(item.geometry);
     case "text": {
-      const lines = item.geometry.text.split("\n");
-      const width =
+      if (item.geometry.embed === "video") {
+        return {
+          minX: item.geometry.x,
+          minY: item.geometry.y - item.style.fontSize,
+          maxX: item.geometry.x + VIDEO_EMBED_WIDTH,
+          maxY: item.geometry.y - item.style.fontSize + VIDEO_EMBED_HEIGHT,
+        };
+      }
+      const lines = textLayoutEstimateSource(item.geometry.text, item.style.fontSize).split("\n");
+      const estimatedWidth =
         Math.max(1, ...lines.map((line) => [...line].length)) * item.style.fontSize * 0.61;
-      const height = Math.max(1, lines.length) * item.style.fontSize * 1.2;
+      const estimatedHeight = Math.max(1, lines.length) * item.style.fontSize * 1.2;
+      const measurement = renderedTextMeasurement(item);
+      const width = measurement?.width ?? estimatedWidth;
+      const height = measurement?.height ?? estimatedHeight;
       return {
         minX: item.geometry.x,
         minY: item.geometry.y - item.style.fontSize,
@@ -1088,6 +1214,13 @@ function boundsContains(outer: Bounds, inner: Bounds): boolean {
     outer.maxX >= inner.maxX &&
     outer.maxY >= inner.maxY
   );
+}
+
+function canonicalBounds(item: BoardItem): Bounds {
+  return canonicalItemBounds({
+    ...item,
+    transform: [...item.transform],
+  } as Parameters<typeof canonicalItemBounds>[0]);
 }
 
 function unionBounds(a: Bounds, b: Bounds): Bounds {

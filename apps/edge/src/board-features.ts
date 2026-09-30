@@ -20,5 +20,7 @@ export function normalizePersistedBoardFeatures(value: unknown): BoardFeatures {
       ? {}
       : { objectTransforms: DEFAULT_BOARD_FEATURES.objectTransforms }),
     ...(Object.hasOwn(value, "grouping") ? {} : { grouping: DEFAULT_BOARD_FEATURES.grouping }),
+    ...(Object.hasOwn(value, "videos") ? {} : { videos: DEFAULT_BOARD_FEATURES.videos }),
+    ...(Object.hasOwn(value, "aiTools") ? {} : { aiTools: DEFAULT_BOARD_FEATURES.aiTools }),
   });
 }

@@ -68,14 +68,15 @@ addresses, or use an explicitly test-scoped rate-limit exemption.
 For staging, remote targeting must be deliberate:
 
 ```sh
-LOAD_BASE_URL=https://staging-cloud-collab.spacescale.net \
+LOAD_BASE_URL=https://staging.example.test \
+LOAD_REMOTE_HOSTNAME=staging.example.test \
 LOAD_ALLOW_REMOTE=1 \
 npm run load
 ```
 
-The committed staging hostname is the only accepted remote target, and it
-requires both HTTPS and the explicit opt-in. The `spacescale.net` production
-domain and every other remote hostname are categorically rejected. The
+`LOAD_REMOTE_HOSTNAME` is the only accepted remote target and requires both
+HTTPS and explicit opt-in. When `APP_HOSTNAME` identifies production, that host
+is categorically rejected even if it is also supplied as the load target. The
 isolated staging Worker deliberately disables Turnstile so Playwright
 automation needs no challenge tokens. It still uses its own Durable Object
 namespace, R2 bucket, session key, and classroom integration key.
@@ -108,7 +109,8 @@ eviction through a test-environment control hook:
 LOAD_EVICTION_URL=https://staging-control.example/evict-board-room \
 LOAD_EVICTION_AUTHORIZATION='Bearer test-control-secret' \
 LOAD_REQUIRE_EVICTION=1 \
-LOAD_BASE_URL=https://staging-cloud-collab.spacescale.net \
+LOAD_BASE_URL=https://staging.example.test \
+LOAD_REMOTE_HOSTNAME=staging.example.test \
 LOAD_ALLOW_REMOTE=1 \
 npm run load
 ```

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  environment: "staging" as "staging" | "production",
+  environment: "staging" as "development" | "staging" | "production",
   assetScenario: "existing" as "existing" | "missing" | "conflict",
   assetLookupCount: 0,
   wafScenario: "existing" as "existing" | "missing-ruleset" | "missing-rule" | "drifted",
+  requiredFailure: false,
   requiredCalls: [] as string[][],
   requestPaths: [] as string[],
   requestCalls: [] as Array<{
@@ -13,7 +14,13 @@ const mocks = vi.hoisted(() => ({
     body: string | undefined;
   }>,
   output: [] as string[],
+  loadedEnvFiles: [] as string[],
+  assertPublicConfiguration: vi.fn(),
   assertTurnstileSiteKeyForEnvironment: vi.fn(),
+  writeGeneratedWranglerConfig: vi.fn(
+    (configuration: { environment: string }) =>
+      `.generated/wrangler.${configuration.environment}.jsonc`,
+  ),
   spawnSync: vi.fn(() => ({ status: 0 })),
 }));
 
@@ -34,8 +41,8 @@ function configuredValue(name: string): string {
         previous: [],
       },
     }),
-    R2_BUCKET_NAME: staging ? "staging-cloud-collab" : "collab-canvas-snapshots",
-    APP_HOSTNAME: staging ? "staging-cloud-collab.spacescale.net" : "spacescale.net",
+    DEPLOYMENT_NAME: "example",
+    APP_HOSTNAME: staging ? "staging.example.test" : "production.example.test",
     TURNSTILE_SITE_KEY: "real-turnstile-site-key",
     TURNSTILE_SECRET_KEY: "real-turnstile-secret-key",
   };
@@ -45,11 +52,15 @@ function configuredValue(name: string): string {
 }
 
 vi.mock("./env.ts", () => ({
-  assertPublicConfiguration: vi.fn(),
+  assertPublicConfiguration: mocks.assertPublicConfiguration,
   assertTurnstileSiteKeyForEnvironment: mocks.assertTurnstileSiteKeyForEnvironment,
-  loadLocalEnv: vi.fn(),
+  loadLocalEnv: vi.fn((path = ".env") => {
+    mocks.loadedEnvFiles.push(path);
+  }),
+  readLocalEnv: vi.fn(() => ({})),
   requireEnvironment: vi.fn((names: readonly string[]) => {
     mocks.requiredCalls.push([...names]);
+    if (mocks.requiredFailure) throw new Error("Missing configured environment variables");
     return Object.fromEntries(names.map((name) => [name, configuredValue(name)]));
   }),
   publicApiFailure: vi.fn((label: string) => new Error(label)),
@@ -62,16 +73,13 @@ vi.mock("./env.ts", () => ({
       body: init.body === undefined ? undefined : String(init.body),
     });
     const hostname = configuredValue("APP_HOSTNAME");
-    const bucketName = configuredValue("R2_BUCKET_NAME");
+    const bucketName = `example-${mocks.environment}-snapshots`;
     const assetBucketName =
-      mocks.environment === "staging" ? "staging-cloud-collab-assets" : "collab-canvas-assets";
+      mocks.environment === "staging" ? "example-staging-assets" : "example-production-assets";
     const account = "a".repeat(32);
     const bucketLookupPath = `/accounts/${account}/r2/buckets/${encodeURIComponent(bucketName)}`;
     const assetLookupPath = `/accounts/${account}/r2/buckets/${encodeURIComponent(assetBucketName)}`;
-    const workerService =
-      mocks.environment === "production"
-        ? "cloudflare-collab-canvas"
-        : "cloudflare-collab-canvas-staging";
+    const workerService = `example-${mocks.environment}`;
     const zoneId = "b".repeat(32);
     const rulesetId = "c".repeat(32);
     const wafRuleId = "d".repeat(32);
@@ -92,8 +100,8 @@ vi.mock("./env.ts", () => ({
     if (path.startsWith("/zones?")) {
       const requestedZone = new URL(`https://api.test${path}`).searchParams.get("name");
       result =
-        requestedZone === "spacescale.net"
-          ? [{ id: zoneId, name: "spacescale.net", status: "active" }]
+        requestedZone === "example.test"
+          ? [{ id: zoneId, name: "example.test", status: "active" }]
           : [];
     } else if (
       path === `/zones/${zoneId}/rulesets/phases/http_request_firewall_custom/entrypoint`
@@ -139,6 +147,8 @@ vi.mock("./env.ts", () => ({
     else if (path.endsWith("/workers/scripts")) result = [];
     else if (path.includes("/workers/domains?")) {
       result = [{ hostname, service: workerService, cert_id: "certificate" }];
+    } else if (method === "PUT" && path.endsWith("/workers/domains")) {
+      result = { hostname, service: workerService, cert_id: "certificate" };
     } else if (path.endsWith("/r2/buckets?per_page=1000")) {
       result = {
         buckets: [bucketName, assetBucketName].map((name) => ({ name, jurisdiction: "default" })),
@@ -182,6 +192,31 @@ vi.mock("./env.ts", () => ({
   }),
 }));
 
+vi.mock("./deployment-config.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./deployment-config.ts")>()),
+  deploymentConfigurationFromEnvironment: vi.fn(
+    (environment: "development" | "staging" | "production") => {
+      mocks.environment = environment === "development" ? "staging" : environment;
+      const staging = mocks.environment === "staging";
+      return {
+        environment,
+        workerName: `example-${environment}`,
+        bucketName: `example-${environment}-snapshots`,
+        assetBucketName: staging ? "example-staging-assets" : "example-production-assets",
+        jurisdiction: "default",
+        hostname: configuredValue("APP_HOSTNAME"),
+        turnstileEnabled: !staging,
+        boardCreationEnabled: true,
+        allowedOrigins: "*",
+        webhookAllowedOrigins: "",
+        ...(!staging ? { turnstileSiteKey: "real-turnstile-site-key" } : {}),
+      };
+    },
+  ),
+  parseDeploymentEnvironment: vi.fn(() => mocks.environment),
+  writeGeneratedWranglerConfig: mocks.writeGeneratedWranglerConfig,
+}));
+
 const originalArgv = [...process.argv];
 const originalExitCode = process.exitCode;
 
@@ -191,16 +226,20 @@ beforeEach(() => {
   mocks.assetScenario = "existing";
   mocks.assetLookupCount = 0;
   mocks.wafScenario = "existing";
+  mocks.requiredFailure = false;
   mocks.requiredCalls.length = 0;
   mocks.requestPaths.length = 0;
   mocks.requestCalls.length = 0;
   mocks.output.length = 0;
+  mocks.loadedEnvFiles.length = 0;
+  mocks.assertPublicConfiguration.mockReset();
   mocks.assertTurnstileSiteKeyForEnvironment.mockReset();
+  mocks.writeGeneratedWranglerConfig.mockClear();
   mocks.spawnSync.mockReset();
   mocks.spawnSync.mockReturnValue({ status: 0 });
   process.exitCode = 0;
   process.env.ALLOWED_ORIGINS = "*";
-  delete process.env.R2_BUCKET_NAME;
+  delete process.env.DEPLOYMENT_NAME;
   delete process.env.APP_HOSTNAME;
   delete process.env.BOARD_CREATION_ENABLED;
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -222,14 +261,41 @@ beforeEach(() => {
 afterEach(() => {
   process.argv = [...originalArgv];
   process.exitCode = originalExitCode;
+  delete process.env.DEPLOYMENT_ENVIRONMENT;
   delete process.env.ALLOWED_ORIGINS;
-  delete process.env.R2_BUCKET_NAME;
+  delete process.env.DEPLOYMENT_NAME;
   delete process.env.APP_HOSTNAME;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe.sequential("Cloudflare command Turnstile configuration", () => {
+  it("initializes development locally without Cloudflare credentials", async () => {
+    mocks.environment = "development";
+    process.argv = ["node", "bootstrap-cloudflare.ts", "--env", "development"];
+
+    await import("./bootstrap-cloudflare.ts");
+
+    expect(mocks.requiredCalls).toHaveLength(0);
+    expect(mocks.requestPaths).toHaveLength(0);
+    expect(JSON.parse(mocks.output.at(-1) ?? "{}")).toMatchObject({
+      environment: "development",
+      resources: { mode: "local", created: false },
+    });
+  });
+
+  it("stops before configuration or API mutation when credentials are missing", async () => {
+    mocks.requiredFailure = true;
+    process.argv = ["node", "bootstrap-cloudflare.ts", "--env", "staging"];
+
+    await expect(import("./bootstrap-cloudflare.ts")).rejects.toThrow(
+      "Missing configured environment variables",
+    );
+
+    expect(mocks.writeGeneratedWranglerConfig).not.toHaveBeenCalled();
+    expect(mocks.requestPaths).toHaveLength(0);
+  });
+
   it("bootstraps staging without requiring a Turnstile site key", async () => {
     process.argv = ["node", "bootstrap-cloudflare.ts", "--env", "staging"];
 
@@ -238,9 +304,7 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
     expect(mocks.requiredCalls).toEqual([["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]]);
     expect(mocks.assertTurnstileSiteKeyForEnvironment).not.toHaveBeenCalled();
     expect(mocks.requestPaths.some((path) => path.includes("/challenges/"))).toBe(false);
-    expect(mocks.requestPaths.some((path) => path.includes("staging-cloud-collab-assets"))).toBe(
-      true,
-    );
+    expect(mocks.requestPaths.some((path) => path.includes("example-staging-assets"))).toBe(true);
   });
 
   it("creates the zone custom-rules entrypoint when it is absent", async () => {
@@ -261,7 +325,7 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
           action_parameters: { phases: ["http_request_sbfm"] },
           enabled: true,
           expression:
-            '(http.host eq "staging-cloud-collab.spacescale.net" and starts_with(http.request.uri.path, "/api/v1/organisations/"))',
+            '(http.host eq "staging.example.test" and starts_with(http.request.uri.path, "/api/v1/organisations/"))',
         },
       ],
     });
@@ -269,7 +333,6 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
       applicable: true,
       created: true,
       updated: false,
-      zoneName: "spacescale.net",
     });
   });
 
@@ -314,14 +377,17 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
     });
   });
 
-  it("provisions production without requiring deploy-only public configuration", async () => {
+  it("validates production public configuration before provisioning", async () => {
     mocks.environment = "production";
     process.argv = ["node", "bootstrap-cloudflare.ts", "--env", "production"];
 
     await import("./bootstrap-cloudflare.ts");
 
     expect(mocks.requiredCalls).toEqual([["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]]);
-    expect(mocks.assertTurnstileSiteKeyForEnvironment).not.toHaveBeenCalled();
+    expect(mocks.assertTurnstileSiteKeyForEnvironment).toHaveBeenCalledWith(
+      "real-turnstile-site-key",
+      "production",
+    );
     expect(mocks.spawnSync).not.toHaveBeenCalled();
   });
 
@@ -331,15 +397,21 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
 
     await import("./bootstrap-cloudflare.ts");
 
-    expect(mocks.requiredCalls).toEqual([
-      ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
-      ["TURNSTILE_SITE_KEY"],
-    ]);
+    expect(mocks.requiredCalls).toEqual([["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]]);
     expect(mocks.assertTurnstileSiteKeyForEnvironment).toHaveBeenCalledWith(
       "real-turnstile-site-key",
       "production",
     );
     expect(mocks.spawnSync).toHaveBeenCalledOnce();
+    expect(JSON.parse(mocks.output.at(-1) ?? "{}")).toMatchObject({
+      deployment: "complete",
+      customDomain: {
+        applicable: true,
+        created: false,
+        updated: false,
+        certificateAssigned: true,
+      },
+    });
   });
 
   it("does not mutate existing private buckets on a provisioning rerun", async () => {
@@ -349,8 +421,7 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
 
     expect(mocks.requestCalls.filter((call) => call.method === "POST")).toHaveLength(0);
     expect(JSON.parse(mocks.output.at(-1) ?? "{}")).toMatchObject({
-      created: false,
-      assetCreated: false,
+      resources: { snapshotBucketCreated: false, assetBucketCreated: false },
     });
   });
 
@@ -363,11 +434,10 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
     const postCalls = mocks.requestCalls.filter((call) => call.method === "POST");
     expect(postCalls).toHaveLength(1);
     expect(JSON.parse(postCalls[0]?.body ?? "{}")).toEqual({
-      name: "staging-cloud-collab-assets",
+      name: "example-staging-assets",
     });
     expect(JSON.parse(mocks.output.at(-1) ?? "{}")).toMatchObject({
-      created: false,
-      assetCreated: true,
+      resources: { snapshotBucketCreated: false, assetBucketCreated: true },
     });
   });
 
@@ -380,8 +450,7 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
     expect(mocks.requestCalls.filter((call) => call.method === "POST")).toHaveLength(1);
     expect(mocks.assetLookupCount).toBe(2);
     expect(JSON.parse(mocks.output.at(-1) ?? "{}")).toMatchObject({
-      created: false,
-      assetCreated: false,
+      resources: { snapshotBucketCreated: false, assetBucketCreated: false },
     });
   });
 
@@ -398,6 +467,37 @@ describe.sequential("Cloudflare command Turnstile configuration", () => {
       JSON.stringify({ check: "turnstile", enabled: false, skipped: true }),
     );
     expect(mocks.output.join("")).toContain('"configuredAssetBucketExists":true');
+  });
+
+  it("loads the resolved environment file before .env when --env is omitted", async () => {
+    process.env.DEPLOYMENT_ENVIRONMENT = "staging";
+    process.argv = ["node", "check-cloudflare-access.ts"];
+
+    await import("./check-cloudflare-access.ts");
+
+    expect(mocks.loadedEnvFiles).toEqual([".env.staging", ".env"]);
+  });
+
+  it("loads the requested environment file before .env", async () => {
+    mocks.environment = "production";
+    process.argv = ["node", "check-cloudflare-access.ts", "--env", "production"];
+
+    await import("./check-cloudflare-access.ts");
+
+    expect(mocks.loadedEnvFiles).toEqual([".env.production", ".env"]);
+  });
+
+  it("validates the account identifier and session key with the public configuration", async () => {
+    await import("./check-cloudflare-access.ts");
+
+    expect(mocks.assertPublicConfiguration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+        SESSION_SIGNING_KEY_CURRENT: "s".repeat(32),
+        ALLOWED_ORIGINS: "*",
+        APP_HOSTNAME: "staging.example.test",
+      }),
+    );
   });
 
   it("keeps production access checks strict and probes both Turnstile credentials", async () => {

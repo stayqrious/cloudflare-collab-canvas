@@ -49,7 +49,7 @@ export function optionalTitle(value: unknown, fallback = "Untitled board"): stri
   return title;
 }
 
-function validateUnicodeText(value: string, field: string): void {
+export function validateUnicodeText(value: string, field: string): void {
   try {
     validatePlainText(value, field);
   } catch (error) {
@@ -58,6 +58,16 @@ function validateUnicodeText(value: string, field: string): void {
     }
     throw error;
   }
+}
+
+/**
+ * True when the text contains a C0/C1 control character other than the
+ * newline and tab that multi-line text fields accept.
+ */
+export function containsDisallowedControlCharacter(value: string): boolean {
+  return [...value].some(
+    (character) => /\p{Cc}/u.test(character) && character !== "\n" && character !== "\t",
+  );
 }
 
 export function requireSafeInteger(

@@ -21,11 +21,14 @@ import {
   normalizeStampGeometry,
   normalizeStickyGeometry,
   normalizeTableGeometry,
+  normalizeTextGeometry,
   normalizeTransform,
   normalizeZoneGeometry,
+  parseVideoEmbedReference,
   polygonPoints,
   protractorSnapPoints,
   tableGeometryContainsPoint,
+  textLayoutEstimateSource,
   transformBounds,
   translateTransform,
   visibleOutlinePaths,
@@ -60,6 +63,51 @@ describe("geometry normalization", () => {
       width: 4.56,
       height: 8,
     });
+  });
+
+  it("accepts only supported video URLs with the explicit embed marker", () => {
+    expect(parseVideoEmbedReference("https://youtu.be/dQw4w9WgXcQ?t=10")).toEqual({
+      provider: "youtube",
+      videoId: "dQw4w9WgXcQ",
+      sourceUrl: "https://youtu.be/dQw4w9WgXcQ?t=10",
+    });
+    expect(parseVideoEmbedReference("https://vimeo.com/76979871/abc123def4")).toEqual({
+      provider: "vimeo",
+      videoId: "76979871",
+      sourceUrl: "https://vimeo.com/76979871/abc123def4",
+      vimeoHash: "abc123def4",
+    });
+    expect(
+      parseVideoEmbedReference("https://player.vimeo.com/video/76979871?h=abc123def4"),
+    ).toEqual({
+      provider: "vimeo",
+      videoId: "76979871",
+      sourceUrl: "https://player.vimeo.com/video/76979871?h=abc123def4",
+      vimeoHash: "abc123def4",
+    });
+    expect(
+      normalizeTextGeometry({
+        x: 10,
+        y: 20,
+        text: "https://vimeo.com/76979871",
+        embed: "video",
+      }),
+    ).toMatchObject({ embed: "video" });
+    expect(() =>
+      normalizeTextGeometry({ x: 10, y: 20, text: "not a video", embed: "video" }),
+    ).toThrow(/supported HTTPS YouTube or Vimeo/);
+    expect(() =>
+      normalizeTextGeometry({
+        x: 10,
+        y: 20,
+        text: "https://example.com/video",
+        embed: "video",
+      }),
+    ).toThrow(/supported HTTPS YouTube or Vimeo/);
+    expect(parseVideoEmbedReference("https://vimeo.com/76979871/bad/hash")).toBeNull();
+    expect(parseVideoEmbedReference("https://vimeo.com/76979871/a?h=b")).toBeNull();
+    expect(parseVideoEmbedReference("https://vimeo.com/76979871?h=")).toBeNull();
+    expect(parseVideoEmbedReference("https://vimeo.com/76979871/abc123def4?h=")).toBeNull();
   });
 
   it("canonicalizes legacy rectangles and persists an explicit square subtype", () => {
@@ -597,6 +645,119 @@ describe("bounds and transforms", () => {
         style: { kind: "stamp" },
       }),
     ).toEqual({ minX: 76, minY: 6, maxX: 84, maxY: 14 });
+  });
+
+  it("uses the canonical video-card size for explicitly embedded text", () => {
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: {
+          x: 100,
+          y: 40,
+          text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+          embed: "video",
+        },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 100, minY: 20, maxX: 460, maxY: 252 });
+  });
+
+  it("counts explicit TeX dimensions in canonical text bounds", () => {
+    // Collapsing \hspace to one glyph let a crafted item claim the width of a few letters
+    // while MathJax rendered about 20 em, so a Section could accept a formula that spills out.
+    expect(textLayoutEstimateSource("$$\\hspace{20em}x$$", 20)).toHaveLength(35);
+    // A lone $ is a dollar sign, so this one is plain text and estimates as itself.
+    expect(textLayoutEstimateSource("$\\hspace{20em}x$", 20)).toBe("$\\hspace{20em}x$");
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 0, y: 40, text: "$$\\hspace{20em}x$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 0, minY: 20, maxX: 420, maxY: 44 });
+    // Absolute units resolve against the font size, so tiny kerns stay tiny.
+    expect(textLayoutEstimateSource("$$\\kern 2pt x$$", 20)).toBe("x x");
+
+    // Negative movement extends the bounds to the left instead of disappearing from them.
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 0, y: 40, text: "$$x\\kern-20em y$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: -400, minY: 20, maxX: 36, maxY: 44 });
+    const negativeThinSpaceBounds = itemBounds({
+      kind: "text",
+      geometry: { x: 0, y: 40, text: "$$x\\!y$$" },
+      transform: [1, 0, 0, 1, 0, 0],
+      style: { kind: "text", fontSize: 20 },
+    });
+    expect(negativeThinSpaceBounds.minX).toBeCloseTo(-10 / 3);
+    expect(negativeThinSpaceBounds.maxX).toBe(24);
+
+    // Vertical space and rule heights extend the estimate downwards.
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 0, y: 40, text: "$$\\vspace{4em}x$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 0, minY: 20, maxX: 12, maxY: 140 });
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 0, y: 40, text: "$$\\rule{5em}{3em}$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 0, minY: -20, maxX: 108, maxY: 116 });
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 0, y: 440, text: "$$\\rule[20em]{1em}{1em}$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 0, minY: 20, maxX: 24, maxY: 468 });
+
+    // A sized command with no dimension we model is over- rather than under-reported.
+    expect(textLayoutEstimateSource("$$\\makebox{x}$$", 20)).toBe(`${"x".repeat(64)}x`);
+
+    // A hostile dimension cannot expand the estimate without bound.
+    expect(textLayoutEstimateSource("$$\\hspace{999999in}x$$", 20)).toHaveLength(4097);
+    const repeatedDimensions = `$$${"\\hspace{999999in}".repeat(200)}x$$`;
+    expect(repeatedDimensions.length).toBeLessThanOrEqual(5_000);
+    expect(textLayoutEstimateSource(repeatedDimensions, 20)).toHaveLength(4097);
+
+    // The budget applies across separate formula fragments in the same text item too.
+    const repeatedFormulae = `${"$$\\hspace{999999in}$$".repeat(200)}x`;
+    expect(repeatedFormulae.length).toBeLessThanOrEqual(5_000);
+    expect(textLayoutEstimateSource(repeatedFormulae, 20)).toHaveLength(4097);
+  });
+
+  it("does not count zero-width TeX syntax in canonical text bounds", () => {
+    expect(textLayoutEstimateSource("Result: $$\\displaystyle x$$")).toBe("Result:  x");
+    expect(textLayoutEstimateSource("$$\\frac{1}{2}$$")).toBe("12");
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 100, y: 40, text: "$$\\displaystyle x$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 100, minY: 20, maxX: 124, maxY: 44 });
+    expect(
+      itemBounds({
+        kind: "text",
+        geometry: { x: 100, y: 40, text: "$$\\frac{1}{2}$$" },
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { kind: "text", fontSize: 20 },
+      }),
+    ).toEqual({ minX: 100, minY: 20, maxX: 124, maxY: 44 });
   });
 
   it("rejects transformed sticky bounds outside the finite world envelope", () => {

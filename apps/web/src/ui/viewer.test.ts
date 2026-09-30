@@ -135,8 +135,8 @@ describe("canonical read-only Space exports", () => {
       readCanonicalSpaceExportResponse(new Response("No", { status: 403 })),
     ).rejects.toThrow("HTTP 403");
     await expect(
-      readCanonicalSpaceExportFile({ size: 21 * 1_024 * 1_024, text: async () => "" }),
-    ).rejects.toThrow("larger than 20 MiB");
+      readCanonicalSpaceExportFile({ size: 27 * 1_024 * 1_024, text: async () => "" }),
+    ).rejects.toThrow("larger than 27 MiB");
   });
 });
 

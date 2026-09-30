@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  chooseMoreTool,
   closeAccessDrawer,
   createBoard,
   createInvite,
@@ -24,8 +25,10 @@ test("tables insert, edit collaboratively, copy, delete, and reload", async ({
     await openInvite(editor, editorInvite);
     await expect(editor.getByTestId("tool-table")).toBeEnabled();
 
-    await page.getByTestId("tool-table").click();
-    const picker = page.getByTestId("table-picker");
+    // Editors may only edit their own work, so the editor inserts the table and
+    // the owner (who may edit anything) fills in the header cell.
+    await chooseMoreTool(editor, "tool-table");
+    const picker = editor.getByTestId("table-picker");
     await expect(picker).toBeVisible();
     await expect(picker.getByLabel("Table columns")).toHaveValue("3");
     await expect(picker.getByLabel("Table rows")).toHaveValue("3");
@@ -33,10 +36,10 @@ test("tables insert, edit collaboratively, copy, delete, and reload", async ({
     await picker.getByRole("button", { name: "Choose placement" }).click();
     await expect(picker).toBeHidden();
 
-    const canvas = page.locator("#board-canvas");
+    const canvas = editor.locator("#board-canvas");
     const canvasBounds = await canvas.boundingBox();
     if (!canvasBounds) throw new Error("Canvas has no layout bounds.");
-    await page.mouse.click(
+    await editor.mouse.click(
       canvasBounds.x + canvasBounds.width * 0.62,
       canvasBounds.y + canvasBounds.height * 0.54,
     );
@@ -48,8 +51,9 @@ test("tables insert, edit collaboratively, copy, delete, and reload", async ({
     await expect(ownerTables.first()).toHaveAttribute("data-table-rows", "3");
     await expect(ownerTables.first()).toHaveAttribute("data-table-columns", "3");
     await expect(ownerTables.first()).toHaveAttribute("aria-label", "Table, 3 rows by 3 columns");
-    await expect(page.getByTestId("tool-select")).toHaveAttribute("aria-pressed", "true");
+    await expect(editor.getByTestId("tool-select")).toHaveAttribute("aria-pressed", "true");
 
+    await page.getByTestId("tool-select").click();
     const ownerFirstCell = ownerTables
       .first()
       .locator('[data-table-cell][data-table-row="0"][data-table-column="0"]');
@@ -77,12 +81,12 @@ test("tables insert, edit collaboratively, copy, delete, and reload", async ({
       ownerTables.first().locator('[data-table-cell][data-table-row="1"][data-table-column="1"]'),
     ).toHaveAttribute("aria-label", /Student evidence/u);
 
-    await page.getByRole("button", { name: "Copy selected items" }).click();
+    await page.keyboard.press("Control+d");
     await expect(ownerTables).toHaveCount(2);
     await expect(editorTables).toHaveCount(2);
     const copyId = await ownerTables.last().getAttribute("data-item-id");
     expect(copyId).toBeTruthy();
-    await page.getByRole("button", { name: "Delete selected items" }).click();
+    await page.keyboard.press("Delete");
     await expect(ownerTables).toHaveCount(1);
     await expect(editor.locator(`[data-item-id="${copyId}"]`)).toHaveCount(0);
 

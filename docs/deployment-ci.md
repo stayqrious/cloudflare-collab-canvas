@@ -1,118 +1,129 @@
 # Deployment and CI
 
-This repository intentionally uses a lightweight release flow while the product
-has no production consumers. A working development build may be promoted; broad
-validation is available on demand and is not a deployment gate.
+SpaceScale supports **Cloudflare Workers Builds** and **GitHub Actions**. Choose
+one automatic provider for both environments. Both call the same deployment
+command, so switching providers preserves the Worker, Durable Objects, buckets,
+domains, and signing keys.
 
-## Workflows
+| Branch | Environment | Worker when `DEPLOYMENT_NAME=spacescale` |
+| --- | --- | --- |
+| `staging` | staging | `spacescale-staging` |
+| `main` | production | `spacescale-production` |
 
-`.github/workflows/ci.yml` is manual-only through `workflow_dispatch`. When
-explicitly started it runs the full repository check, verifies generated Worker
-binding types, and runs Playwright. Pull requests and branch pushes do not wait
-for this workflow.
-
-`.github/workflows/deploy.yml` runs directly on pushes to:
-
-- `staging`, targeting `staging-cloud-collab.spacescale.net`
-- `main`, targeting `spacescale.net`
-
-Each job:
-
-1. checks out the pushed `${{ github.sha }}`;
-2. installs the pinned dependencies;
-3. verifies the environment-scoped Cloudflare credentials;
-4. idempotently creates or reuses the snapshot and private image R2 buckets;
-5. builds the web assets;
-6. uploads a Worker version;
-7. deploys that version directly at 100%; and
-8. makes up to five small `/healthz` requests that check only `ok` and the
-   service identity.
-
-The deployment workflow does not depend on CI, exact-SHA attestations,
-approvals, candidate traffic, browser or load suites, convergence loops,
-automated rollback, or a schema-compatibility gate. Fix forward and redeploy if
-a release has a defect. Because these are new, unused deployments, resetting an
-unused environment is also acceptable when faster than repairing its data.
-
-Moving the same commit from `development` to `staging` and then `main` is
-recommended for traceability, but the workflow does not enforce that order.
-
-## GitHub environments
-
-Create `staging` and `production` GitHub environments. They may point to
-different Cloudflare accounts and should use distinct credentials.
-
-| Environment | Kind | Name | Value |
-| --- | --- | --- | --- |
-| Staging | Secret | `CLOUDFLARE_ACCOUNT_ID` | Account containing the isolated staging Worker and buckets. |
-| Staging | Secret | `CLOUDFLARE_API_TOKEN` | Staging account token. |
-| Staging | Secret | `ORGANISATION_SIGNING_KEYS` | JSON registry uploaded as an encrypted Worker-version secret. |
-| Staging | Variable | `ALLOWED_ORIGINS` | Comma-separated iframe origins; blank denies all and `*` allows all. |
-| Staging | Variable | `WEBHOOK_ALLOWED_ORIGINS` | Comma-separated exact HTTPS webhook receiver origins; blank denies all, with no wildcard support. |
-| Production | Secret | `CLOUDFLARE_ACCOUNT_ID` | Account containing the production Worker and buckets. |
-| Production | Secret | `CLOUDFLARE_API_TOKEN` | Production account token. |
-| Production | Secret | `ORGANISATION_SIGNING_KEYS` | JSON registry uploaded as an encrypted Worker-version secret. |
-| Production | Variable | `TURNSTILE_SITE_KEY` | Public key for the production Turnstile widget. |
-| Production | Variable | `ALLOWED_ORIGINS` | Comma-separated iframe origins; blank denies all and `*` allows all. |
-| Production | Variable | `WEBHOOK_ALLOWED_ORIGINS` | Comma-separated exact HTTPS webhook receiver origins; blank denies all, with no wildcard support. |
-
-Because every deployment verifies or provisions both R2 buckets, each API token
-needs these account permissions:
-
-- **Workers Scripts: Edit**
-- **Workers R2 Storage: Edit**
-
-Correct existing private buckets are reused without mutation. Bucket bootstrap
-also rejects a bucket with an enabled `r2.dev` or custom public domain.
-
-The workflow passes `ORGANISATION_SIGNING_KEYS` through Wrangler's
-`--secrets-file`; it is encrypted as a Worker-version secret and never written
-to the repository or logs. Install the remaining Worker runtime secrets once
-with Wrangler or the Cloudflare dashboard:
-
-| Worker | Required runtime secrets |
-| --- | --- |
-| Staging | `SESSION_SIGNING_KEY_CURRENT`; Organisation registry supplied by the GitHub environment |
-| Production | `SESSION_SIGNING_KEY_CURRENT`, `TURNSTILE_SECRET_KEY`; Organisation registry supplied by the GitHub environment |
-
-`SESSION_SIGNING_KEY_PREVIOUS` is optional during a controlled session-key
-rotation. Never share session or Organisation signing keys across environments.
-
-## Environment isolation
-
-The committed deployment contract is:
-
-| Environment | Hostname | Snapshot bucket | Image bucket | Turnstile |
-| --- | --- | --- | --- | --- |
-| Development | `localhost` | `cloudflare-collab-canvas-dev-snapshots` | `cloudflare-collab-canvas-dev-assets` | Disabled |
-| Staging | `staging-cloud-collab.spacescale.net` | `staging-cloud-collab` | `staging-cloud-collab-assets` | Disabled |
-| Production | `spacescale.net` | `collab-canvas-snapshots` | `collab-canvas-assets` | Adaptive, invisible |
-
-Staging is deliberately automation-friendly. It has no Turnstile challenge so
-Playwright and AI-driven testing can create disposable boards. Keep it isolated
-from production data, signing keys, Durable Objects, and R2 buckets.
-
-Production requires both `TURNSTILE_SITE_KEY` at deployment and
-`TURNSTILE_SECRET_KEY` at runtime. Configure both from the same widget and allow
-`spacescale.net` on that widget. Set the widget mode to **Invisible**. The web
-client loads it only after the Worker marks a request as suspicious.
-
-## Normal release
-
-Run only the focused development checks appropriate to the change, then push:
+## Shared deployment
 
 ```sh
-git push origin development
-git push origin development:staging
-git push origin development:main
+npm run deployment:check
+npm run deployment:deploy -- --env staging
+# For production, use --env production instead.
 ```
 
-The final two pushes trigger their environment deployments. A full validation
-run can be dispatched manually whenever requested.
+`deployment:check` runs the full repository check (lint, types, unit and edge
+tests, production dry-run build, protocol and security checks), then verifies
+Cloudflare binding types. It does not contact deployment APIs.
 
-## Cloudflare Workers Builds
+`deployment:deploy` validates configuration and runtime secrets before making
+changes, initializes private R2 buckets and the server-API WAF rule, builds the
+web assets, and runs `wrangler deploy` against the generated environment config.
+This supports initial Worker and Durable Object creation as well as updates.
+It uploads runtime secrets with the code using a temporary mode-0600 secrets
+file, removes that file even if upload fails, finalizes the Custom Domain only
+after deployment succeeds, and probes `/healthz` up to five times. A failed
+health probe fails the deployment command; it does not automatically roll back.
 
-Workers Builds may pull the repository and deploy with secrets stored at the
-Worker level. It remains an optional alternative. Do not enable it for a Worker
-that is also targeted by the GitHub deployment workflow, or both systems may
-race to deploy different commits.
+Provide configuration through the selected provider's build environment or
+ignored `.env.staging` / `.env.production` files. The same names and required
+values apply to both providers; see [launch.md](launch.md). Keep each
+environment's secrets, hostname, Durable Objects, and R2 buckets separate.
+
+## Cloudflare Workers Builds (no automatic GitHub runner usage)
+
+1. Complete the Cloudflare, key, and configuration setup in [launch.md](launch.md).
+   Workers Builds currently supports **user-owned API tokens**. Select a custom
+   token with Workers Scripts Edit, Workers R2 Storage Edit, Zone Read, WAF Edit,
+   and Workers Routes Edit for the target account/zone. The deployment scripts
+   accept both user-owned and account-owned tokens; the latter also work for
+   local and GitHub deployment. If managing Builds connections through the API,
+   also grant Account **Workers CI Edit** (called `Workers CI Write` in the API).
+2. If the two Workers do not exist yet, bootstrap each once from a trusted local
+   checkout. Use Node 22.19.0 or newer, `npm ci`, and `npm run deployment:check`,
+   then run `npm run deployment:deploy -- --env staging` and the production
+   equivalent using their separate ignored environment files. These commands
+   deploy and attach the configured hostnames; choose the initial cutover time
+   deliberately. The prior installation's boards do not migrate automatically.
+   If a hostname already belongs to another Worker, explicitly move its Custom
+   Domain to the new Worker after deployment, then rerun the deployment command.
+   Cloudflare rejects the initial attachment with HTTP 409 until that cutover;
+   the script does not automatically take over another Worker's hostname.
+3. In GitHub **Settings → Secrets and variables → Actions → Variables**, add
+   the **repository variable** `AUTOMATION_PROVIDER=cloudflare`. This skips all
+   automatic jobs in this repository's CI and Deploy workflows before a runner
+   starts. Manual **CI → Run workflow** remains available and uses GitHub minutes.
+4. In Cloudflare **Workers & Pages**, open each existing Worker, then
+   **Settings → Build**, and connect the same GitHub repository. Use these settings:
+
+   | Setting | Staging Worker | Production Worker |
+   | --- | --- | --- |
+   | Root directory | repository root | repository root |
+   | Production branch | `staging` | `main` |
+   | Build command | `npm run deployment:check` | `npm run deployment:check` |
+   | Deploy command | `npm run deployment:deploy -- --env staging` | `npm run deployment:deploy -- --env production` |
+   | Preview/non-production branch builds | disabled | disabled |
+
+   "Production branch" is Cloudflare's name for the branch that deploys that
+   particular Worker; selecting `staging` there does not affect the production Worker.
+   Keep Node at 22.19.0 or newer. Cloudflare installs dependencies before the build.
+   No committed Wrangler file is needed: the deploy script generates one and
+   passes its explicit path to Wrangler. Do not use the default deploy command.
+5. Add each environment's configuration under **Build variables and secrets**.
+   Use the tables in [launch.md](launch.md), plus `TURNSTILE_ENABLED=false` for
+   staging and `true` for production. Set `BOARD_CREATION_ENABLED=true` normally.
+   Select the scoped token as the build's API token; provide `CLOUDFLARE_ACCOUNT_ID`
+   as a build variable. Workers Builds supplies `CLOUDFLARE_API_TOKEN` from the
+   selected token. Add the session/Organisation/Turnstile runtime secrets as
+   **build secrets**: the shared script transfers them to encrypted Worker
+   bindings on every deployment. Build secrets alone are not runtime bindings.
+6. Trigger a staging build and verify its health and changed features. Merge
+   the tested code into `main` when ready; Cloudflare deploys production.
+7. Adjust branch protection to match the selected checks. Do not rely on skipped
+   GitHub `validate`/`browser` jobs as validation. The configured Cloudflare build
+   gates deployment with `deployment:check`; use required reviews and staging
+   validation before merging. Browser E2E remains available locally with
+   `npm run test:e2e` or through the manual GitHub CI workflow.
+
+Disable preview builds on both Workers: this application uses persistent,
+separate staging and production resources. The deploy command also rejects a
+Workers Builds branch other than `staging` for staging or `main` for production.
+It must not be used as a preview command against production storage.
+
+Cloudflare builds have their own quota and timeout, not unlimited execution.
+As of September 2026: Free includes 3,000 build minutes/month, Paid includes
+6,000 then $0.005/minute; builds have a 20-minute timeout and each build variable
+is limited to 5 KB. Keep the Organisation registry within that per-variable limit.
+See [limits and pricing](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/).
+
+Cloudflare references: [build configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
+and [connecting multiple environment Workers](https://developers.cloudflare.com/workers/ci-cd/builds/advanced-setups/).
+
+## GitHub Actions
+
+Leave `AUTOMATION_PROVIDER` unset or set it to `github`. Disconnect Workers
+Builds on the two target Workers before enabling automatic GitHub deployment.
+This avoids independent builds racing to deploy different commits.
+
+Create GitHub environments `staging` and `production`, with the variables and
+secrets in [launch.md](launch.md). Restrict production deployment to `main`.
+`.github/workflows/deploy.yml` validates every `staging`/`main` push with
+`npm run check`, then deploys that exact SHA through the shared command. Staging
+has Turnstile disabled; production requires a real widget's site and secret keys.
+
+`.github/workflows/ci.yml` validates pull requests into `main` and pushes to
+`main`, including binding-type verification. Pull requests run Chromium and
+mobile Chromium E2E; manual dispatch runs all browser projects. Require the
+`validate` and `browser` pull-request checks when using this provider. Newer
+runs supersede older automatic runs for the same event/ref.
+
+To switch back to Cloudflare, set the repository variable to `cloudflare`, wait
+for any in-flight GitHub deployments to finish, then enable the Workers Builds
+connections. Preserve all deployment names, account IDs, jurisdictions, and
+signing keys. Switching the build runner does not require fresh storage.

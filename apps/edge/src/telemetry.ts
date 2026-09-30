@@ -16,7 +16,7 @@ export type DurableObjectTelemetryContext = RuntimeTelemetryContext & {
 /**
  * Returns the common indexed fields for gateway telemetry. The fallback values
  * make malformed local test bindings visible without dropping required fields;
- * deployed environments always bind both values through wrangler.jsonc.
+ * deployed environments always bind both values through the setup-generated Wrangler config.
  */
 export async function runtimeTelemetryContext(
   env: RuntimeMetadataEnv,

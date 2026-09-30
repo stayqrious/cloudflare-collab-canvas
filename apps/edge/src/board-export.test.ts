@@ -1,6 +1,11 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { MAX_SNAPSHOT_BYTES } from "@collab/protocol";
+import {
+  MAX_LIVE_ITEMS,
+  MAX_SECTION_EXPORT_INDEX_BYTES,
+  MAX_SNAPSHOT_BYTES,
+  MAX_ZONE_TITLE_CODE_POINTS,
+} from "@collab/protocol";
 import { describe, expect, it } from "vitest";
 import { appendSectionExportSummaries, buildSectionExportSummaries } from "./board-export";
 import type { BoardItem } from "./types";
@@ -110,5 +115,24 @@ describe("canonical board exports", () => {
 
     expect(body.length).toBeGreaterThan(serializedSnapshot.length);
     expect(body.endsWith(`,"sections":${JSON.stringify(sections)}}`)).toBe(true);
+  });
+
+  it("keeps the worst-case Section index within the documented export bound", () => {
+    const uuid = (index: number) =>
+      `018f0000-0000-7000-8000-${index.toString(16).padStart(12, "0")}`;
+    const widestTitle = "\u{1F9E0}".repeat(MAX_ZONE_TITLE_CODE_POINTS);
+    const indexBytes = (items: BoardItem[]) =>
+      new TextEncoder().encode(JSON.stringify(buildSectionExportSummaries(items))).byteLength + 16;
+
+    const allSections = Array.from({ length: MAX_LIVE_ITEMS }, (_, index) =>
+      section(uuid(index), widestTitle, true),
+    );
+    expect(indexBytes(allSections)).toBeLessThanOrEqual(MAX_SECTION_EXPORT_INDEX_BYTES);
+
+    const oneSectionWithMembers = [
+      section(uuid(0), widestTitle),
+      ...Array.from({ length: MAX_LIVE_ITEMS - 1 }, (_, index) => sticky(uuid(index + 1), uuid(0))),
+    ];
+    expect(indexBytes(oneSectionWithMembers)).toBeLessThanOrEqual(MAX_SECTION_EXPORT_INDEX_BYTES);
   });
 });

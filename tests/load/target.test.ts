@@ -1,15 +1,10 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { STAGING_LOAD_HOSTNAME, validateLoadTarget } from "./target.ts";
+import { validateLoadTarget } from "./target.ts";
+
+const REMOTE_TEST_HOST = "load-test.example.test";
+const PROTECTED_HOST = "production.example.test";
 
 describe("load target validation", () => {
-  it("keeps the remote allowlist aligned with committed staging configuration", () => {
-    const environments = JSON.parse(readFileSync("config/environments.json", "utf8")) as {
-      staging: { hostname: string };
-    };
-    expect(STAGING_LOAD_HOSTNAME).toBe(environments.staging.hostname);
-  });
-
   it.each(["http://localhost:8787", "https://127.0.0.1:8787", "http://[::1]:8787"])(
     "allows the local target %s without remote opt-in",
     (target) => {
@@ -17,28 +12,30 @@ describe("load target validation", () => {
     },
   );
 
-  it("allows only the committed staging host with explicit remote opt-in", () => {
-    expect(() => validateLoadTarget(`https://${STAGING_LOAD_HOSTNAME}`, true)).not.toThrow();
-    expect(() => validateLoadTarget("https://staging.example.test", true)).toThrow(
-      "Remote load tests may target only the committed staging host",
-    );
-    expect(() => validateLoadTarget("https://preview.spacescale.net", true)).toThrow(
-      "Remote load tests may target only the committed staging host",
-    );
+  it("allows only the setup-provided remote host with explicit opt-in", () => {
+    expect(() =>
+      validateLoadTarget(`https://${REMOTE_TEST_HOST}`, true, REMOTE_TEST_HOST, PROTECTED_HOST),
+    ).not.toThrow();
+    expect(() =>
+      validateLoadTarget("https://another.example.test", true, REMOTE_TEST_HOST, PROTECTED_HOST),
+    ).toThrow("Remote load tests may target only the explicitly configured test host");
   });
 
-  it("requires explicit opt-in and HTTPS for staging", () => {
-    expect(() => validateLoadTarget(`https://${STAGING_LOAD_HOSTNAME}`, false)).toThrow(
-      "Remote load tests require --allow-remote/LOAD_ALLOW_REMOTE=1",
+  it("requires a configured host, explicit opt-in, and HTTPS for remote tests", () => {
+    expect(() => validateLoadTarget(`https://${REMOTE_TEST_HOST}`, true)).toThrow(
+      "Remote load tests may target only the explicitly configured test host",
     );
-    expect(() => validateLoadTarget(`http://${STAGING_LOAD_HOSTNAME}`, true)).toThrow(
-      "Remote load targets must use HTTPS",
-    );
+    expect(() =>
+      validateLoadTarget(`https://${REMOTE_TEST_HOST}`, false, REMOTE_TEST_HOST, PROTECTED_HOST),
+    ).toThrow("Remote load tests require --allow-remote/LOAD_ALLOW_REMOTE=1");
+    expect(() =>
+      validateLoadTarget(`http://${REMOTE_TEST_HOST}`, true, REMOTE_TEST_HOST, PROTECTED_HOST),
+    ).toThrow("Remote load targets must use HTTPS");
   });
 
-  it("always blocks the production hostname", () => {
-    expect(() => validateLoadTarget("https://spacescale.net", true)).toThrow(
-      "The production spacescale.net host is never a valid load-test target",
-    );
+  it("always blocks the setup-provided production hostname", () => {
+    expect(() =>
+      validateLoadTarget(`https://${PROTECTED_HOST}`, true, PROTECTED_HOST, PROTECTED_HOST),
+    ).toThrow("The configured production host is never a valid load-test target");
   });
 });

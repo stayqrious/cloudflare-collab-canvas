@@ -8,6 +8,7 @@
       "!apps/web/dist",
       "!coverage",
       "!.wrangler",
+      "!.generated",
       "!playwright-report",
       "!test-results",
       "!apps/edge/worker-configuration.d.ts"

@@ -1,6 +1,17 @@
+import { parseVideoEmbedReference } from "@collab/geometry";
+
 export type SafeLinkToken =
   | { kind: "text"; text: string }
   | { kind: "link"; text: string; href: string };
+
+export type VideoEmbed = {
+  provider: "youtube" | "vimeo";
+  sourceUrl: string;
+  embedUrl: string;
+  title: string;
+};
+
+export { VIDEO_EMBED_HEIGHT, VIDEO_EMBED_WIDTH } from "@collab/geometry";
 
 const HTTP_URL_CANDIDATE = /https?:\/\/[^\s<>"']+/giu;
 
@@ -40,7 +51,8 @@ function withoutTrailingSentencePunctuation(candidate: string): string {
   return value;
 }
 
-function safeHref(candidate: string): string | null {
+/** An absolute http(s) URL without credentials, normalized, or null for anything else. */
+export function safeHttpHref(candidate: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(candidate);
@@ -75,7 +87,7 @@ export function tokenizeSafeLinks(value: string): SafeLinkToken[] {
 
     const displayText = withoutTrailingSentencePunctuation(matched);
     const trailingText = matched.slice(displayText.length);
-    const href = displayText.length > 0 ? safeHref(displayText) : null;
+    const href = displayText.length > 0 ? safeHttpHref(displayText) : null;
     if (href === null) appendText(tokens, matched);
     else {
       tokens.push({ kind: "link", text: displayText, href });
@@ -86,4 +98,44 @@ export function tokenizeSafeLinks(value: string): SafeLinkToken[] {
 
   appendText(tokens, value.slice(offset));
   return tokens;
+}
+
+/**
+ * Applies the one set of player settings every embedded video uses. The sandbox grants only what
+ * the YouTube and Vimeo players need to run and to open their own pages in a new tab; they can
+ * never navigate the board, submit forms, or open dialogs over it.
+ */
+export function configureVideoFrame(frame: HTMLIFrameElement, title: string): void {
+  frame.title = title;
+  frame.loading = "lazy";
+  frame.referrerPolicy = "strict-origin-when-cross-origin";
+  frame.setAttribute(
+    "sandbox",
+    "allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox",
+  );
+  frame.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+  frame.allowFullscreen = true;
+}
+
+/** Converts a complete YouTube or Vimeo URL into a privacy-conscious embed URL. */
+export function videoEmbedFromText(value: string): VideoEmbed | null {
+  const reference = parseVideoEmbedReference(value);
+  if (reference === null) return null;
+  if (reference.provider === "vimeo") {
+    return {
+      provider: "vimeo",
+      sourceUrl: reference.sourceUrl,
+      // dnt=1 asks Vimeo not to track the viewer, the counterpart of YouTube's nocookie host.
+      embedUrl: `https://player.vimeo.com/video/${reference.videoId}?${
+        reference.vimeoHash === undefined ? "" : `h=${encodeURIComponent(reference.vimeoHash)}&`
+      }dnt=1`,
+      title: "Vimeo video",
+    };
+  }
+  return {
+    provider: "youtube",
+    sourceUrl: reference.sourceUrl,
+    embedUrl: `https://www.youtube-nocookie.com/embed/${reference.videoId}`,
+    title: "YouTube video",
+  };
 }

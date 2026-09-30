@@ -1,11 +1,7 @@
-# Local-only values loaded directly by `npm run dev`; never deploy these values.
-SESSION_SIGNING_KEY_CURRENT="local-development-signing-key-change-before-sharing"
+# `npm run config:setup -- --env development` creates private `.generated/.dev.vars`
+# automatically. These placeholders document the generated file's shape only.
+SESSION_SIGNING_KEY_CURRENT="replace-with-generated-local-key"
 SESSION_SIGNING_KEY_PREVIOUS=""
-# Local-only organisation registry. Each organisation has one stable derivation
-# key plus a current launch-signing key and optional previous rotation keys.
-# Never deploy or share these example values.
-ORGANISATION_SIGNING_KEYS='{"demo":{"derivation_key":"local-development-organisation-derivation-key-change-before-sharing","current":{"key_id":"local-v1","key":"local-development-organisation-signing-key-change-before-sharing"},"previous":[]}}'
+ORGANISATION_SIGNING_KEYS='{"demo":{"derivation_key":"replace-with-generated-local-key","current":{"key_id":"local-v1","key":"replace-with-generated-local-key"},"previous":[]}}'
 # Default-deny. Put an exact HTTPS receiver origin here only when testing webhooks.
 WEBHOOK_ALLOWED_ORIGINS=""
-# Cloudflare's always-pass test secret. Never deploy it.
-TURNSTILE_SECRET_KEY="1x0000000000000000000000000000000AA"

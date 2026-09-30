@@ -583,8 +583,8 @@ function button(documentValue: Document, label: string, className: string): HTML
 }
 
 export const ORGANISATION_ADMIN_CSS = `
-  [data-organisation-admin="true"] { color: #172033; background: #f4f6fb; min-height: 100vh; }
-  .ssa-admin { box-sizing: border-box; width: min(1440px, 100%); min-height: 100vh; margin: 0 auto; padding: 32px; font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  [data-organisation-admin="true"] { color: #172033; background: #f4f6fb; overflow: auto; }
+  .ssa-admin { box-sizing: border-box; width: min(1440px, 100%); min-height: 100%; margin: 0 auto; padding: 32px; font: 15px/1.5 "Rubik Variable", Rubik, ui-sans-serif, system-ui, sans-serif; }
   .ssa-admin *, .ssa-admin *::before, .ssa-admin *::after { box-sizing: border-box; }
   .ssa-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
   .ssa-header__identity { display: flex; align-items: center; gap: 14px; min-width: 0; }

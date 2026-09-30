@@ -1,12 +1,15 @@
 import { expect, type Page, test } from "@playwright/test";
 import {
   canvasPoint,
+  chooseMoreTool,
   closeAccessDrawer,
   createBoard,
   createInvite,
+  expandToolPermissions,
   isolatedContextOptions,
   moveItem,
   openInvite,
+  openMoreTools,
   waitForBoard,
 } from "./helpers";
 
@@ -23,9 +26,10 @@ async function enableImages(page: Page): Promise<void> {
   await page.getByTestId("settings-button").click();
   const drawer = page.getByTestId("settings-drawer");
   await expect(drawer).toBeVisible();
+  await expandToolPermissions(page);
+  // Images are on by default; the helper only confirms the setting and the tool are live.
   const toggle = drawer.getByRole("checkbox", { name: "Enable Images" });
-  await expect(toggle).not.toBeChecked();
-  await toggle.check();
+  await expect(toggle).toBeChecked();
   await expect(page.getByTestId("tool-image")).toBeEnabled();
   await drawer.getByRole("button", { name: "Close settings" }).click();
   await expect(drawer).toBeHidden();
@@ -33,7 +37,7 @@ async function enableImages(page: Page): Promise<void> {
 
 async function uploadWithPicker(page: Page): Promise<void> {
   const chooser = page.waitForEvent("filechooser");
-  await page.getByTestId("tool-image").click();
+  await chooseMoreTool(page, "tool-image");
   await (await chooser).setFiles(PNG_FILE);
 }
 
@@ -89,7 +93,7 @@ test("image cards converge, remain private, persist, and obey live classroom pol
   test.skip(testInfo.project.name !== "chromium", "Focused Image Card QA runs in Chromium.");
 
   const boardUrl = await createBoard(page, "Image card lab");
-  await expect(page.getByTestId("tool-image")).toBeDisabled();
+  await expect(page.getByTestId("tool-image")).toBeEnabled();
   await enableImages(page);
 
   const editorInvite = await createInvite(page);
@@ -149,10 +153,10 @@ test("image cards converge, remain private, persist, and obey live classroom pol
 
     const moved = await moveItem(page, ownerImages.first(), 44, 24);
     await expect(editor.locator(`[data-item-id="${imageId}"]`)).toHaveAttribute("transform", moved);
-    await page.getByRole("button", { name: "Copy selected items" }).click();
+    await page.keyboard.press("Control+d");
     await expect(ownerImages).toHaveCount(2);
     await expect(editorImages).toHaveCount(2);
-    await page.getByRole("button", { name: "Delete selected items" }).click();
+    await page.keyboard.press("Delete");
     await expect(ownerImages).toHaveCount(1);
     await expect(editorImages).toHaveCount(1);
 
@@ -189,6 +193,7 @@ test("image cards converge, remain private, persist, and obey live classroom pol
     await page.getByTestId("settings-button").click();
     const drawer = page.getByTestId("settings-drawer");
     await expect(drawer).toBeVisible();
+    await expandToolPermissions(page);
     await drawer.locator("button[data-policy='owner_only']").click();
     await expect(editor.getByTestId("tool-image")).toBeDisabled();
     await expect(page.getByTestId("tool-image")).toBeEnabled();
@@ -252,6 +257,7 @@ test("failed, offline, paste, drop, and responsive image flows stay usable", asy
   await expect(images.last()).toHaveAttribute("data-image-state", "ready");
 
   await page.setViewportSize({ width: 360, height: 640 });
+  await openMoreTools(page);
   const imageTool = page.getByTestId("tool-image");
   await imageTool.scrollIntoViewIfNeeded();
   await expect(imageTool).toHaveAttribute("aria-label", "Add image (I)");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tokenizeSafeLinks } from "./links";
+import { safeHttpHref, tokenizeSafeLinks, videoEmbedFromText } from "./links";
 
 describe("tokenizeSafeLinks", () => {
   it("preserves ordinary and empty text", () => {
@@ -64,5 +64,69 @@ describe("tokenizeSafeLinks", () => {
     const value =
       "example.com //example.com javascript:alert(1) data:text/plain,x mailto:a@example.com";
     expect(tokenizeSafeLinks(value)).toEqual([{ kind: "text", text: value }]);
+  });
+});
+
+describe("videoEmbedFromText", () => {
+  it("normalizes supported YouTube URLs to the privacy-enhanced player", () => {
+    expect(videoEmbedFromText("https://www.youtube.com/watch?v=dQw4w9WgXcQ")).toMatchObject({
+      provider: "youtube",
+      embedUrl: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    });
+    expect(videoEmbedFromText("https://youtu.be/dQw4w9WgXcQ?t=10")).toMatchObject({
+      provider: "youtube",
+      embedUrl: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    });
+  });
+
+  it("normalizes public Vimeo links", () => {
+    expect(videoEmbedFromText("https://vimeo.com/76979871")).toMatchObject({
+      provider: "vimeo",
+      embedUrl: "https://player.vimeo.com/video/76979871?dnt=1",
+    });
+  });
+
+  it("preserves Vimeo unlisted-video hashes", () => {
+    expect(videoEmbedFromText("https://vimeo.com/76979871/abc123def4")).toMatchObject({
+      provider: "vimeo",
+      embedUrl: "https://player.vimeo.com/video/76979871?h=abc123def4&dnt=1",
+    });
+    expect(
+      videoEmbedFromText("https://player.vimeo.com/video/76979871?h=abc123def4"),
+    ).toMatchObject({
+      provider: "vimeo",
+      embedUrl: "https://player.vimeo.com/video/76979871?h=abc123def4&dnt=1",
+    });
+  });
+
+  it("rejects non-HTTPS, credentialed, malformed, and unsupported URLs", () => {
+    expect(videoEmbedFromText("http://youtu.be/dQw4w9WgXcQ")).toBeNull();
+    expect(videoEmbedFromText("https://user:secret@youtu.be/dQw4w9WgXcQ")).toBeNull();
+    expect(videoEmbedFromText("https://example.com/video/123456")).toBeNull();
+    expect(videoEmbedFromText("not a url")).toBeNull();
+  });
+});
+
+describe("safeHttpHref", () => {
+  it("keeps absolute http and https links, normalized", () => {
+    expect(safeHttpHref("https://example.com/source")).toBe("https://example.com/source");
+    expect(safeHttpHref("HTTPS://Example.com")).toBe("https://example.com/");
+    expect(safeHttpHref("http://example.com/a b")).toBe("http://example.com/a%20b");
+  });
+
+  it("refuses scripts, other schemes, relative and protocol-relative links, and credentials", () => {
+    for (const candidate of [
+      "javascript:alert(1)",
+      "JaVaScRiPt:alert(1)",
+      "data:text/html,hi",
+      "file:///etc/passwd",
+      "mailto:a@example.com",
+      "//evil.example/x",
+      "/api/v1/boards",
+      "java&#x09;script:alert(1)",
+      "https://user:pass@example.com",
+    ]) {
+      expect(safeHttpHref(candidate), candidate).toBeNull();
+    }
   });
 });

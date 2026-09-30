@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createBoard } from "./helpers";
+import { chooseMoreTool, createBoard } from "./helpers";
 
 test("the table chooser is modal, cancellable, and returns to Select after placement", async ({
   page,
@@ -17,7 +17,7 @@ test("the table chooser is modal, cancellable, and returns to Select after place
   const selectTool = page.getByTestId("tool-select");
   const picker = page.getByRole("dialog", { name: "Choose a table size" });
 
-  await tableTool.click();
+  await chooseMoreTool(page, "tool-table");
   await expect(picker).toBeVisible();
   await expect(picker).toHaveAttribute("open", "");
   expect(await picker.evaluate((dialog) => dialog.matches(":modal"))).toBe(true);
@@ -26,7 +26,7 @@ test("the table chooser is modal, cancellable, and returns to Select after place
   await expect(picker).toBeHidden();
   await expect(selectTool).toHaveAttribute("aria-pressed", "true");
 
-  await tableTool.click();
+  await chooseMoreTool(page, "tool-table");
   const choosePlacement = picker.getByRole("button", { name: "Choose placement" });
   await choosePlacement.focus();
   await page.keyboard.press("Escape");
@@ -34,13 +34,13 @@ test("the table chooser is modal, cancellable, and returns to Select after place
   await expect(selectTool).toHaveAttribute("aria-pressed", "true");
   await expect(selectTool).toBeFocused();
 
-  await tableTool.click();
+  await chooseMoreTool(page, "tool-table");
   await picker.getByRole("button", { name: "Cancel" }).focus();
   await page.keyboard.press("Escape");
   await expect(picker).toBeHidden();
   await expect(selectTool).toBeFocused();
 
-  await tableTool.click();
+  await chooseMoreTool(page, "tool-table");
   await picker.getByLabel("Table columns").selectOption("4");
   await picker.getByLabel("Table rows").selectOption("2");
   await choosePlacement.click();

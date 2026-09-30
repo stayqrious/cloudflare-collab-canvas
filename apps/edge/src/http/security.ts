@@ -56,7 +56,11 @@ export function withSecurityHeaders(
   );
   headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; frame-ancestors " +
+    // The style hashes allow only the deterministic styles emitted by pinned MathJax 4.1.3.
+    // style-src-attr is relaxed on its own because MathLive lays its maths field and on-screen
+    // keyboard out with inline style attributes. It permits nothing that can run: stylesheets and
+    // <style> blocks stay bound by style-src, so the hashes above still gate every one of them.
+    "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src-attr 'unsafe-inline'; style-src 'self' 'sha256-e5jd7xQq9aULFFMD0eTEu9T1k/67HYr2XT/IFRaDiI0=' 'sha256-3ZSLWaOQtqrQ6iNoyQlBEIKBi4iPfnn6qanv5SmcYbg=' 'sha256-bgFI+8WNpZyQTg52T+OSNh5Vbm0kkPnj/kOliAUyReE=' 'sha256-khzm1f0RgYGW/mmWtJrCL6sPH/UAtSpOwXMy3ZMP/7g=' 'sha256-1vpkuyno8q93JaTq08t8TmhBkkzmlLq7oQUIJpOeDIQ='; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; frame-src https://challenges.cloudflare.com https://www.youtube-nocookie.com https://player.vimeo.com; object-src 'none'; base-uri 'none'; frame-ancestors " +
       frameAncestors +
       "; form-action 'self'",
   );

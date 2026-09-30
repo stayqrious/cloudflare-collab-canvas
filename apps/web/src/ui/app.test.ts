@@ -1,7 +1,8 @@
 import { DEFAULT_BOARD_FEATURES } from "@collab/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { ACTIVITY_TEMPLATES } from "../activities/templates";
 import { ApiError } from "../transport/api";
-import type { BoardItem, BoardSnapshot, DurableOperation } from "../types";
+import type { BoardComment, BoardItem, BoardSnapshot, DurableOperation } from "../types";
 import {
   actorFromAccessChanged,
   attributedDataDownloadAllowed,
@@ -10,21 +11,32 @@ import {
   buildCreatorNameMap,
   buildElementColourOperations,
   buildTextStyleOperations,
+  CommentStore,
+  canActorComment,
+  canResolveComment,
   clampImageAlt,
   clampStickyText,
+  conflictingMoveIssue,
+  deriveCommentStates,
   effectiveTextFontWeight,
+  elementColour,
+  globalShortcutFor,
   imageUploadIssue,
   localSvg,
   MAX_IMAGE_UPLOAD_BYTES,
   managedInvitationStorageKey,
+  objectCommentVisible,
   operationAllowedForActor,
   organisationTemplateManagementForRole,
+  PendingCommitTracker,
   STAMP_CHOICES,
   STICKY_COLORS,
   savedAuthoritativeItems,
   serializeAttributedData,
   tableCellDraftFromOperation,
+  templateAvailabilityIssue,
   templateFeatureIssue,
+  templateHiddenByVoting,
   withAdaptiveTurnstile,
   zoneTitleDraftFromOperation,
 } from "./app";
@@ -194,6 +206,41 @@ describe("template feature preflight", () => {
     expect(
       templateFeatureIssue([{ kind: "rectangle", transform: [0, 1, -1, 0, 200, 100] }], features),
     ).toMatch(/Scale and rotate/u);
+  });
+
+  it("hides both vote-seeding templates when voting is off, and only those", () => {
+    const features = { ...DEFAULT_BOARD_FEATURES, voting: false };
+    // K-W-L has a table but seeds no vote, so a table is not what makes a template vote-seeding.
+    expect(templateHiddenByVoting("vote-with-stamps", features)).toBe(true);
+    expect(templateHiddenByVoting("collective-inquiry-demo", features)).toBe(true);
+    expect(templateHiddenByVoting("kwl", features)).toBe(false);
+    expect(templateHiddenByVoting("vote-with-stamps", DEFAULT_BOARD_FEATURES)).toBe(false);
+  });
+
+  it("gives the menu and the WebMCP catalogue one answer for every template", () => {
+    // The activities menu and read_templates both ask this, so a template can never be offered
+    // in one place and refused in the other.
+    for (const features of [
+      DEFAULT_BOARD_FEATURES,
+      { ...DEFAULT_BOARD_FEATURES, voting: false },
+      { ...DEFAULT_BOARD_FEATURES, templates: false },
+      { ...DEFAULT_BOARD_FEATURES, tables: false },
+    ]) {
+      for (const template of ACTIVITY_TEMPLATES) {
+        const issue = templateAvailabilityIssue(template, features);
+        // Anything hidden must also be refused, or the menu would show a dead button.
+        if (templateHiddenByVoting(template.id, features)) expect(issue).not.toBeNull();
+      }
+    }
+    const kwl = ACTIVITY_TEMPLATES.find(({ id }) => id === "kwl");
+    if (!kwl) throw new Error("The K-W-L template is missing.");
+    expect(templateAvailabilityIssue(kwl, DEFAULT_BOARD_FEATURES)).toBeNull();
+    expect(templateAvailabilityIssue(kwl, { ...DEFAULT_BOARD_FEATURES, templates: false })).toMatch(
+      /Enable templates/u,
+    );
+    expect(templateAvailabilityIssue(kwl, { ...DEFAULT_BOARD_FEATURES, tables: false })).toMatch(
+      /Tables/u,
+    );
   });
 });
 
@@ -680,6 +727,122 @@ describe("sticky note UI configuration", () => {
     ).toBeNull();
   });
 
+  it("refuses per-note moves the board's own propagation would tear apart", () => {
+    const note: Extract<BoardItem, { kind: "sticky" }> = {
+      id: "sticky-a",
+      kind: "sticky",
+      z: 1,
+      version: 4,
+      createdBy: "student-a",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: { kind: "sticky", fill: "#fde68a", textColor: "#292524", fontSize: 20, opacity: 1 },
+      geometry: { x: 10, y: 20, width: 180, height: 140, text: "First" },
+    };
+    const section: Extract<BoardItem, { kind: "zone" }> = {
+      id: "zone-1",
+      kind: "zone",
+      z: 0,
+      version: 2,
+      createdBy: "teacher",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: {
+        kind: "zone",
+        borderColor: "#0284c7",
+        fill: "#e0f2fe",
+        textColor: "#0c4a6e",
+        fontSize: 18,
+        opacity: 1,
+      },
+      geometry: { x: 0, y: 0, width: 800, height: 600, title: "Ideas" },
+    };
+    const move = (x: number) => ({ x, y: 0 });
+
+    // Two members of one group sent to different places would drift apart while still grouped.
+    const grouped = { ...note, groupId: "group-1" };
+    const peer = { ...grouped, id: "sticky-b", version: 6 };
+    expect(
+      conflictingMoveIssue(
+        [grouped, peer],
+        new Map([
+          ["sticky-a", move(10)],
+          ["sticky-b", move(40)],
+        ]),
+        [grouped, peer],
+      ),
+    ).toContain("pull that unit apart");
+    // The same shift keeps the unit intact, and naming one member is how a drag moves a group.
+    expect(
+      conflictingMoveIssue(
+        [grouped, peer],
+        new Map([
+          ["sticky-a", move(10)],
+          ["sticky-b", move(10)],
+        ]),
+        [grouped, peer],
+      ),
+    ).toBeNull();
+    expect(
+      conflictingMoveIssue([grouped], new Map([["sticky-a", move(10)]]), [grouped, peer]),
+    ).toBeNull();
+
+    // A note asked to stay put is a different shift, not an absence of one: the moving member
+    // would otherwise carry it along while the result claimed it had not budged.
+    expect(
+      conflictingMoveIssue(
+        [grouped, peer],
+        new Map([
+          ["sticky-a", move(0)],
+          ["sticky-b", move(40)],
+        ]),
+        [grouped, peer],
+      ),
+    ).toContain("pull that unit apart");
+
+    // A note grouped with a Section carries that Section, which carries the Section's own
+    // members — so a member named with a different shift conflicts two relations away.
+    const groupedWithSection = { ...note, groupId: "group-2" };
+    const sectionInGroup = { ...section, groupId: "group-2" };
+    const insideSection = { ...note, id: "sticky-c", version: 9, sectionId: "zone-1" };
+    const board = [groupedWithSection, sectionInGroup, insideSection];
+    expect(
+      conflictingMoveIssue(
+        [groupedWithSection, insideSection],
+        new Map([
+          ["sticky-a", move(10)],
+          ["sticky-c", move(40)],
+        ]),
+        board,
+      ),
+    ).toContain("pull that unit apart");
+
+    // Propagation runs one way: a Section carries its members, but a member never carries the
+    // Section, so two notes that merely share one stay independent however far apart they go.
+    const alsoInside = { ...insideSection, id: "sticky-d", version: 11 };
+    expect(
+      conflictingMoveIssue(
+        [insideSection, alsoInside],
+        new Map([
+          ["sticky-c", move(10)],
+          ["sticky-d", move(900)],
+        ]),
+        [section, insideSection, alsoInside],
+      ),
+    ).toBeNull();
+
+    // Notes in no group and no Section are independent.
+    const loose = { ...note, id: "sticky-e" };
+    expect(
+      conflictingMoveIssue(
+        [note, loose],
+        new Map([
+          ["sticky-a", move(10)],
+          ["sticky-e", move(900)],
+        ]),
+        [note, loose],
+      ),
+    ).toBeNull();
+  });
+
   it("preserves unrelated text style while changing colour, family, and size", () => {
     const text: Extract<BoardItem, { kind: "text" }> = {
       id: "text-a",
@@ -697,6 +860,15 @@ describe("sticky note UI configuration", () => {
       },
       geometry: { x: 10, y: 20, text: "Question" },
     };
+    const video: Extract<BoardItem, { kind: "text" }> = {
+      ...text,
+      id: "video-a",
+      geometry: {
+        ...text.geometry,
+        text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        embed: "video",
+      },
+    };
 
     expect(buildElementColourOperations([text], "#874fff")).toEqual([
       {
@@ -706,6 +878,9 @@ describe("sticky note UI configuration", () => {
         patch: { style: { ...text.style, color: "#874fff" } },
       },
     ]);
+    expect(elementColour(video)).toBeNull();
+    expect(buildElementColourOperations([video], "#874fff")).toEqual([]);
+    expect(buildElementColourOperations([text, video], "#874fff")).toEqual([]);
     expect(buildTextStyleOperations([text], { fontFamily: "handwritten", fontSize: 52 })).toEqual([
       {
         kind: "item.update",
@@ -716,6 +891,7 @@ describe("sticky note UI configuration", () => {
         },
       },
     ]);
+    expect(buildTextStyleOperations([video], { fontFamily: "serif", fontSize: 72 })).toEqual([]);
 
     const sticky: Extract<BoardItem, { kind: "sticky" }> = {
       id: "sticky-a",
@@ -870,6 +1046,37 @@ describe("sticky note UI configuration", () => {
     };
 
     expect(localSvg(snapshot, "Rotated sticky")).toContain('viewBox="118 -22 114 164"');
+  });
+
+  it("keeps literal TeX source inside the local recovery SVG viewBox", () => {
+    const source = "$$\\displaystyle x$$";
+    const fontSize = 20;
+    const snapshot: BoardSnapshot = {
+      format: "cf-whiteboard-json",
+      version: 1,
+      seq: 1,
+      items: [
+        {
+          id: "018f47a1-7a2b-7c3d-8e4f-123456789abf",
+          kind: "text",
+          z: 1,
+          version: 1,
+          createdBy: "018f47a1-7a2b-7c3d-8e4f-123456789abc",
+          transform: [1, 0, 0, 1, 0, 0],
+          style: {
+            kind: "text",
+            color: "#112233",
+            fontSize,
+            fontFamily: "sans",
+            opacity: 1,
+          },
+          geometry: { x: 100, y: 40, text: source },
+        },
+      ],
+    };
+    const maxX = 100 + Array.from(source).length * fontSize * 0.6;
+
+    expect(localSvg(snapshot, "Math recovery")).toContain(`viewBox="68 -12 ${maxX - 100 + 64} 88"`);
   });
 });
 
@@ -1027,5 +1234,198 @@ describe("stamp UI configuration", () => {
     expect(svg).toContain('fill="#8e4ec6"');
     expect(svg).toContain('opacity="0.75"');
     expect(svg).not.toContain("<text");
+  });
+});
+
+describe("object comment visibility", () => {
+  it("shows only open comments by default and reveals hidden states on request", () => {
+    expect(objectCommentVisible("open", false)).toBe(true);
+    expect(objectCommentVisible("resolved", false)).toBe(false);
+    expect(objectCommentVisible("orphaned", false)).toBe(false);
+    expect(objectCommentVisible("resolved", true)).toBe(true);
+    expect(objectCommentVisible("orphaned", true)).toBe(true);
+  });
+});
+
+describe("object comment permissions", () => {
+  it("mirrors the server gate: drawing roles may comment, and a lock does not block them", () => {
+    expect(canActorComment("ready", "owner", "editors_enabled")).toBe(true);
+    expect(canActorComment("connecting", "editor", "editors_enabled")).toBe(true);
+    expect(canActorComment("ready", "viewer", "editors_enabled")).toBe(false);
+    expect(canActorComment("ready", "editor", "owner_only")).toBe(false);
+    expect(canActorComment("ready", "owner", "locked")).toBe(true);
+    expect(canActorComment("ready", "editor", "locked")).toBe(true);
+    expect(canActorComment("ready", "viewer", "locked")).toBe(false);
+    expect(canActorComment("archived", "owner", "editors_enabled")).toBe(false);
+    expect(canActorComment("reload_required", "owner", "editors_enabled")).toBe(false);
+    expect(canActorComment("stopped", "owner", "editors_enabled")).toBe(false);
+  });
+
+  it("offers Resolve only to the comment author or a board owner", () => {
+    const authored = { author: { id: "a_author", displayName: "Author" } };
+    expect(canResolveComment(authored, "a_author", "editor")).toBe(true);
+    expect(canResolveComment(authored, "a_other", "editor")).toBe(false);
+    expect(canResolveComment(authored, "a_other", "viewer")).toBe(false);
+    expect(canResolveComment(authored, "a_other", "owner")).toBe(true);
+  });
+});
+
+function comment(overrides: Partial<BoardComment> = {}): BoardComment {
+  return {
+    id: "c_1",
+    itemId: "item_1",
+    body: "Look here",
+    state: "open",
+    author: { id: "a_1", displayName: "Ada" },
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    ...overrides,
+  };
+}
+
+describe("object comment states", () => {
+  it("shows an open comment as orphaned only while its object is missing", () => {
+    const open = comment();
+    const resolved = comment({ id: "c_2", state: "resolved" });
+    const serverOrphaned = comment({ id: "c_3", state: "orphaned" });
+    const missing = deriveCommentStates([open, resolved, serverOrphaned], () => false);
+    expect(missing.map((value) => value.state)).toEqual(["orphaned", "resolved", "orphaned"]);
+    const present = deriveCommentStates([open, resolved, serverOrphaned], () => true);
+    expect(present.map((value) => value.state)).toEqual(["open", "resolved", "orphaned"]);
+    expect(present[0]).toBe(open);
+  });
+
+  it("flips a locally orphaned comment back to open when a rejected delete restores its object", () => {
+    const items = new Set(["item_1"]);
+    const store = new CommentStore((itemId) => items.has(itemId));
+    const load = store.beginLoad();
+    expect(store.completeLoad(load, [comment()])).toBe(true);
+    expect(store.comments[0]?.state).toBe("open");
+
+    items.delete("item_1");
+    expect(store.reconcile()).toBe(true);
+    expect(store.comments[0]?.state).toBe("orphaned");
+    expect(store.reconcile()).toBe(false);
+
+    items.add("item_1");
+    expect(store.reconcile()).toBe(true);
+    expect(store.comments[0]?.state).toBe("open");
+  });
+
+  it("keeps a local write ahead of an older in-flight load", () => {
+    const store = new CommentStore(() => true);
+    const stale = store.beginLoad();
+    store.upsert(comment({ id: "c_new", createdAt: 2_000, updatedAt: 2_000 }));
+    expect(store.comments.map((value) => value.id)).toEqual(["c_new"]);
+
+    expect(store.completeLoad(stale, [comment({ id: "c_old" })])).toBe(false);
+    expect(store.comments.map((value) => value.id)).toEqual(["c_new"]);
+    expect(store.isLatestLoad(stale)).toBe(true);
+
+    const fresh = store.beginLoad();
+    expect(store.isLatestLoad(stale)).toBe(false);
+    expect(store.completeLoad(fresh, [comment({ id: "c_old" }), comment({ id: "c_new" })])).toBe(
+      true,
+    );
+    expect(store.comments.map((value) => value.id)).toEqual(["c_old", "c_new"]);
+  });
+
+  it("reports a resolved comment as a change without flipping its state", () => {
+    const store = new CommentStore(() => true);
+    store.completeLoad(store.beginLoad(), [comment()]);
+    store.upsert(comment({ state: "resolved", updatedAt: 3_000 }));
+    expect(store.comments[0]?.state).toBe("resolved");
+    expect(store.reconcile()).toBe(false);
+  });
+});
+
+describe("tool commit tracking", () => {
+  it("withdraws a queued command on timeout and reports the failure", () => {
+    vi.useFakeTimers();
+    try {
+      const tracker = new PendingCommitTracker(30_000);
+      const resolve = vi.fn();
+      const withdraw = vi.fn(() => true);
+      tracker.track("cmd_1", resolve, withdraw);
+      vi.advanceTimersByTime(29_999);
+      expect(withdraw).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(withdraw).toHaveBeenCalledWith("cmd_1");
+      expect(resolve).toHaveBeenCalledWith(false);
+      tracker.finish("cmd_1", true);
+      expect(resolve).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports success when the server already answered before the timeout fired", () => {
+    vi.useFakeTimers();
+    try {
+      const tracker = new PendingCommitTracker(30_000);
+      const resolve = vi.fn();
+      tracker.track("cmd_1", resolve, () => false);
+      vi.advanceTimersByTime(30_000);
+      expect(resolve).toHaveBeenCalledWith(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the timer on an authoritative answer and settles the rest on destroy", () => {
+    vi.useFakeTimers();
+    try {
+      const tracker = new PendingCommitTracker(30_000);
+      const acked = vi.fn();
+      const abandoned = vi.fn();
+      const withdraw = vi.fn(() => true);
+      tracker.track("cmd_1", acked, withdraw);
+      tracker.track("cmd_2", abandoned, withdraw);
+      tracker.finish("cmd_1", true);
+      expect(acked).toHaveBeenCalledWith(true);
+      tracker.finishAll(false);
+      expect(abandoned).toHaveBeenCalledWith(false);
+      vi.advanceTimersByTime(30_000);
+      expect(withdraw).not.toHaveBeenCalled();
+      expect(acked).toHaveBeenCalledTimes(1);
+      expect(abandoned).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("global keyboard shortcuts", () => {
+  const idle = {
+    editing: false,
+    toolsMenuOpen: false,
+    shapeMenuOpen: false,
+    followingSpotlight: false,
+  };
+  const escapeKey = { key: "Escape", ctrlKey: false, metaKey: false, shiftKey: false };
+
+  it("lets Escape close menus and stop spotlight-follow even from an input", () => {
+    expect(globalShortcutFor(escapeKey, { ...idle, editing: true, toolsMenuOpen: true })).toBe(
+      "close-tools-menu",
+    );
+    expect(globalShortcutFor(escapeKey, { ...idle, editing: true, shapeMenuOpen: true })).toBe(
+      "close-shape-menu",
+    );
+    expect(globalShortcutFor(escapeKey, { ...idle, editing: true, followingSpotlight: true })).toBe(
+      "stop-following-spotlight",
+    );
+    expect(globalShortcutFor(escapeKey, { ...idle, editing: true })).toBeNull();
+  });
+
+  it("keeps undo and redo out of text fields while honouring them elsewhere", () => {
+    const undo = { key: "z", ctrlKey: true, metaKey: false, shiftKey: false };
+    expect(globalShortcutFor(undo, idle)).toBe("undo");
+    expect(globalShortcutFor({ ...undo, shiftKey: true }, idle)).toBe("redo");
+    expect(globalShortcutFor({ ...undo, key: "y" }, idle)).toBe("redo");
+    expect(
+      globalShortcutFor({ ...undo, key: "y", ctrlKey: false, metaKey: true }, idle),
+    ).toBeNull();
+    expect(globalShortcutFor(undo, { ...idle, editing: true })).toBeNull();
+    expect(globalShortcutFor({ ...undo, ctrlKey: false }, idle)).toBeNull();
   });
 });

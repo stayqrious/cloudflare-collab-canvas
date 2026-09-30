@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_RENDERED_VOTE_TABLES, VOTE_TABLE_STYLE } from "../activities/voting";
 import type { BoardItem, TableItem } from "../types";
+import { VIDEO_EMBED_WIDTH } from "./links";
 import {
+  BoardRenderer,
   CanvasViewport,
+  commentMarkerNode,
   creatorBadge,
   creatorInitials,
   lineNode,
@@ -81,6 +84,351 @@ describe("canvas text rendering", () => {
   });
 });
 
+describe("lightweight movement previews", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", {
+      createElement: (name: string) => fakeSvgNode(name),
+      createElementNS: (_namespace: string, name: string) => fakeSvgNode(name),
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("renders a lightweight card without creating another video iframe", () => {
+    const item: Extract<BoardItem, { kind: "text" }> = {
+      id: "video-item",
+      kind: "text",
+      z: 1,
+      version: 1,
+      createdBy: "owner",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: {
+        kind: "text",
+        color: "#111827",
+        fontSize: 20,
+        fontFamily: "sans",
+        opacity: 0.4,
+      },
+      geometry: {
+        x: 20,
+        y: 40,
+        text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        embed: "video",
+      },
+    };
+    const localLayer = fakeSvgNode("g");
+    const setSelection = vi.fn();
+    const renderer = {
+      clearLocalLayer: () => localLayer.replaceChildren(),
+      imageAssets: { load: vi.fn() },
+      localLayer,
+      model: { getItem: (id: string) => (id === item.id ? item : undefined) },
+      setSelection,
+    } as unknown as BoardRenderer;
+
+    BoardRenderer.prototype.showMovePreview.call(renderer, [item.id], 24, 12);
+
+    const preview = localLayer.children[0];
+    expect(preview?.classList.values.has("move-preview")).toBe(true);
+    expect(preview?.classList.values.has("video-embed-preview-item")).toBe(true);
+    expect(preview?.attributes.get("opacity")).toBe("0.4");
+    const foreign = preview?.children.find((child) => child.name === "foreignObject");
+    const card = foreign?.children[0];
+    expect(card?.children.some((child) => child.name === "iframe")).toBe(false);
+    expect(card?.children[1]?.className).toBe("video-embed-preview");
+    expect(card?.children[1]?.textContent).toBe("Video preview");
+    expect(setSelection).toHaveBeenCalledWith([item.id], { x: 24, y: 12 });
+  });
+
+  it("repositions a rendered video card in place so its player is not reloaded", () => {
+    const iframes: FakeSvgNode[] = [];
+    vi.stubGlobal("document", {
+      createElement: (name: string) => {
+        const node = fakeSvgNode(name);
+        if (name === "iframe") iframes.push(node);
+        return node;
+      },
+      createElementNS: (_namespace: string, name: string) => fakeSvgNode(name),
+    });
+
+    const item: Extract<BoardItem, { kind: "text" }> = {
+      id: "video-item",
+      kind: "text",
+      z: 1,
+      version: 1,
+      createdBy: "owner",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: {
+        kind: "text",
+        color: "#111827",
+        fontSize: 20,
+        fontFamily: "sans",
+        opacity: 1,
+      },
+      geometry: {
+        x: 20,
+        y: 40,
+        text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        embed: "video",
+      },
+    };
+    const drawingArea = fakeSvgNode("g");
+    const itemNodes = new Map<string, FakeSvgNode>();
+    const insertInPaintOrder = vi.fn((node: FakeSvgNode) => drawingArea.append(node));
+    const renderer = {
+      drawingArea,
+      imageAssets: { load: vi.fn(), retain: vi.fn() },
+      insertInPaintOrder,
+      itemNodes,
+      model: {
+        getItem: (id: string) => (id === item.id ? item : undefined),
+        items: new Map([[item.id, item]]),
+      },
+      renderCommentMarkers: vi.fn(),
+      renderVoteCounts: vi.fn(),
+      resolveCreatorName: () => "",
+      selectedIds: new Set<string>(),
+      setSelection: vi.fn(),
+    } as unknown as BoardRenderer;
+    const render = (
+      BoardRenderer.prototype as unknown as {
+        render: (this: BoardRenderer, changedIds: ReadonlySet<string> | null) => void;
+      }
+    ).render;
+
+    render.call(renderer, new Set([item.id]));
+    const created = itemNodes.get(item.id);
+    expect(iframes).toHaveLength(1);
+    expect(insertInPaintOrder).toHaveBeenCalledTimes(1);
+
+    item.geometry.x = 120;
+    render.call(renderer, new Set([item.id]));
+
+    // Rebuilding or re-inserting the node would detach the iframe and restart playback.
+    expect(itemNodes.get(item.id)).toBe(created);
+    expect(iframes).toHaveLength(1);
+    expect(insertInPaintOrder).toHaveBeenCalledTimes(1);
+    const foreign = created?.children.find((child) => child.name === "foreignObject");
+    const border = created?.children.find((child) =>
+      child.classList.values.has("video-embed-border"),
+    );
+    const dragFrame = created?.children.find((child) =>
+      child.classList.values.has("video-embed-drag-frame"),
+    );
+    expect(foreign?.attributes.get("x")).toBe("120");
+    expect(dragFrame?.attributes.get("x")).toBe("120");
+    expect(dragFrame?.dataset.videoDragFrame).toBe("true");
+    expect(border?.attributes.get("x")).toBe("120");
+  });
+
+  it("rebuilds a video card when the item points at a different video", () => {
+    const iframes: FakeSvgNode[] = [];
+    vi.stubGlobal("document", {
+      createElement: (name: string) => {
+        const node = fakeSvgNode(name);
+        if (name === "iframe") iframes.push(node);
+        return node;
+      },
+      createElementNS: (_namespace: string, name: string) => fakeSvgNode(name),
+    });
+
+    const item: Extract<BoardItem, { kind: "text" }> = {
+      id: "video-item",
+      kind: "text",
+      z: 1,
+      version: 1,
+      createdBy: "owner",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: {
+        kind: "text",
+        color: "#111827",
+        fontSize: 20,
+        fontFamily: "sans",
+        opacity: 1,
+      },
+      geometry: {
+        x: 20,
+        y: 40,
+        text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        embed: "video",
+      },
+    };
+    const drawingArea = fakeSvgNode("g");
+    const itemNodes = new Map<string, FakeSvgNode>();
+    const renderer = {
+      drawingArea,
+      imageAssets: { load: vi.fn(), retain: vi.fn() },
+      insertInPaintOrder: vi.fn((node: FakeSvgNode) => drawingArea.append(node)),
+      itemNodes,
+      model: {
+        getItem: (id: string) => (id === item.id ? item : undefined),
+        items: new Map([[item.id, item]]),
+      },
+      renderCommentMarkers: vi.fn(),
+      renderVoteCounts: vi.fn(),
+      resolveCreatorName: () => "",
+      selectedIds: new Set<string>(),
+      setSelection: vi.fn(),
+    } as unknown as BoardRenderer;
+    const render = (
+      BoardRenderer.prototype as unknown as {
+        render: (this: BoardRenderer, changedIds: ReadonlySet<string> | null) => void;
+      }
+    ).render;
+
+    render.call(renderer, new Set([item.id]));
+    const created = itemNodes.get(item.id);
+
+    item.geometry.text = "https://vimeo.com/76979871";
+    render.call(renderer, new Set([item.id]));
+
+    expect(itemNodes.get(item.id)).not.toBe(created);
+    expect(iframes).toHaveLength(2);
+  });
+
+  it("renders formula source without queueing MathJax work", () => {
+    const item: Extract<BoardItem, { kind: "text" }> = {
+      id: "math-item",
+      kind: "text",
+      z: 1,
+      version: 1,
+      createdBy: "owner",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: {
+        kind: "text",
+        color: "#111827",
+        fontSize: 20,
+        fontFamily: "sans",
+        opacity: 1,
+      },
+      geometry: { x: 20, y: 40, text: "$$x^2$$" },
+    };
+    const localLayer = fakeSvgNode("g");
+    const renderer = {
+      clearLocalLayer: () => localLayer.replaceChildren(),
+      imageAssets: { load: vi.fn() },
+      localLayer,
+      model: { getItem: (id: string) => (id === item.id ? item : undefined) },
+      setSelection: vi.fn(),
+    } as unknown as BoardRenderer;
+
+    BoardRenderer.prototype.showMovePreview.call(renderer, [item.id], 24, 12);
+
+    const preview = localLayer.children[0];
+    expect(preview?.classList.values.has("move-preview")).toBe(true);
+    expect(preview?.classList.values.has("board-math-preview")).toBe(true);
+    expect(preview?.attributes.get("aria-hidden")).toBe("true");
+    expect(preview?.dataset.mathState).toBeUndefined();
+    expect(preview?.children[0]?.textContent).toBe("$$x^2$$");
+  });
+
+  it("keeps sticky, table, and Section formula previews free of MathJax work", () => {
+    const items: BoardItem[] = [
+      {
+        id: "math-sticky",
+        kind: "sticky",
+        z: 1,
+        version: 1,
+        createdBy: "owner",
+        transform: [1, 0, 0, 1, 0, 0],
+        style: {
+          kind: "sticky",
+          fill: "#fde68a",
+          textColor: "#292524",
+          fontSize: 20,
+          opacity: 1,
+        },
+        geometry: { x: 10, y: 20, width: 180, height: 140, text: "$$x^2$$" },
+      },
+      {
+        id: "math-table",
+        kind: "table",
+        z: 2,
+        version: 1,
+        createdBy: "owner",
+        transform: [1, 0, 0, 1, 0, 0],
+        style: {
+          kind: "table",
+          borderColor: "#64748b",
+          fill: "#ffffff",
+          headerFill: "#dbeafe",
+          textColor: "#0f172a",
+          fontSize: 16,
+          opacity: 1,
+        },
+        geometry: {
+          x: 10,
+          y: 20,
+          columnWidths: [180],
+          rowHeights: [60],
+          cells: [["$$x^2$$"]],
+          headerRow: false,
+        },
+      },
+      {
+        id: "math-zone",
+        kind: "zone",
+        z: 3,
+        version: 1,
+        createdBy: "owner",
+        transform: [1, 0, 0, 1, 0, 0],
+        style: {
+          kind: "zone",
+          borderColor: "#a8a59d",
+          fill: "#e8edff",
+          textColor: "#4f5b75",
+          fontSize: 18,
+          opacity: 0.18,
+        },
+        geometry: { x: 20, y: 30, width: 520, height: 320, title: "$$x^2$$" },
+      },
+    ];
+    const localLayer = fakeSvgNode("g");
+    let current = items[0];
+    const renderer = {
+      clearLocalLayer: () => localLayer.replaceChildren(),
+      imageAssets: { load: vi.fn() },
+      localLayer,
+      model: { getItem: () => current },
+      setSelection: vi.fn(),
+    } as unknown as BoardRenderer;
+
+    for (const item of items) {
+      current = item;
+      BoardRenderer.prototype.showMovePreview.call(renderer, [item.id], 24, 12);
+      const preview = localLayer.children[0];
+      expect(preview).toBeDefined();
+      if (!preview) continue;
+      const descendants = fakeDescendants(preview);
+      expect(
+        descendants.some((node) => node.name === "foreignObject"),
+        item.kind,
+      ).toBe(false);
+      expect(
+        descendants.some((node) =>
+          [...node.classList.values].some((name) => name.endsWith("-math-preview")),
+        ),
+        item.kind,
+      ).toBe(true);
+      expect(
+        descendants.some((node) => node.textContent?.includes("$$x^2$$")),
+        item.kind,
+      ).toBe(true);
+    }
+
+    const sticky = items[0];
+    if (sticky?.kind !== "sticky") throw new Error("Expected sticky fixture.");
+    BoardRenderer.prototype.showLocalSticky.call(renderer, sticky.geometry, sticky.style);
+    const draft = localLayer.children[0];
+    expect(draft).toBeDefined();
+    if (!draft) return;
+    expect(fakeDescendants(draft).some((node) => node.name === "foreignObject")).toBe(false);
+    expect(
+      fakeDescendants(draft).some((node) => node.classList.values.has("sticky-math-preview")),
+    ).toBe(true);
+  });
+});
+
 describe("creator attribution", () => {
   beforeEach(() => {
     vi.stubGlobal("document", {
@@ -119,6 +467,304 @@ describe("creator attribution", () => {
       "private-stable-user-id",
     );
   });
+
+  it("adds an AI disc to the responsible author's badge for assisted content", () => {
+    const item: Extract<BoardItem, { kind: "sticky" }> = {
+      id: "sticky-ai-assisted",
+      kind: "sticky",
+      z: 1,
+      version: 1,
+      createdBy: "responsible-teacher-id",
+      assistedBy: "ai",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: {
+        kind: "sticky",
+        fill: "#eee5ff",
+        textColor: "#38284f",
+        fontSize: 16,
+        opacity: 1,
+      },
+      geometry: { x: 10, y: 20, width: 180, height: 140, text: "Synthesis" },
+    };
+
+    const badge = creatorBadge(item, "Coach Mira") as unknown as FakeSvgNode;
+    expect(badge.classList.values.has("creator-badge-ai")).toBe(true);
+    expect(badge.children[1]?.textContent).toBe("CM");
+    const aiText = badge.children.find((child) => child.textContent === "AI");
+    expect(aiText?.name).toBe("text");
+    expect(badge.children.map((child) => child.textContent)).not.toContain(
+      "responsible-teacher-id",
+    );
+  });
+});
+
+describe("assistance marks", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", {
+      createElement: (name: string) => fakeSvgNode(name),
+      createElementNS: (_namespace: string, name: string) => fakeSvgNode(name),
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  const base = {
+    z: 1,
+    version: 1,
+    createdBy: "responsible-teacher-id",
+    assistedBy: "ai" as const,
+    transform: [1, 0, 0, 1, 0, 0] as [number, number, number, number, number, number],
+  };
+  const textStyle = {
+    kind: "text" as const,
+    color: "#111827",
+    fontSize: 20,
+    fontFamily: "sans" as const,
+    opacity: 1,
+  };
+
+  /** Drives the authoritative render path so `itemNode` is exercised as the board uses it. */
+  function authoritativeRenderer(item: BoardItem, creatorName = "Coach Mira") {
+    const drawingArea = fakeSvgNode("g");
+    const itemNodes = new Map<string, FakeSvgNode>();
+    const renderer = {
+      drawingArea,
+      imageAssets: { load: vi.fn(), retain: vi.fn() },
+      insertInPaintOrder: vi.fn((node: FakeSvgNode) => drawingArea.append(node)),
+      itemNodes,
+      model: {
+        getItem: (id: string) => (id === item.id ? item : undefined),
+        items: new Map([[item.id, item]]),
+        setRenderedTextSize: vi.fn(() => false),
+      },
+      renderCommentMarkers: vi.fn(),
+      renderVoteCounts: vi.fn(),
+      resolveCreatorName: () => creatorName,
+      selectedIds: new Set<string>(),
+      setSelection: vi.fn(),
+    } as unknown as BoardRenderer;
+    const render = (
+      BoardRenderer.prototype as unknown as {
+        render: (this: BoardRenderer, changedIds: ReadonlySet<string> | null) => void;
+      }
+    ).render;
+    return {
+      render: (): FakeSvgNode => {
+        render.call(renderer, new Set([item.id]));
+        const node = itemNodes.get(item.id);
+        if (!node) throw new Error("item was not rendered");
+        return node;
+      },
+    };
+  }
+
+  const marksIn = (node: FakeSvgNode) =>
+    fakeDescendants(node).filter((child) => child.classList.values.has("assistance-mark"));
+
+  const expectSingleMark = (node: FakeSvgNode) => {
+    const marks = marksIn(node);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.attributes.get("aria-hidden")).toBe("true");
+    expect(marks[0]?.attributes.get("pointer-events")).toBe("none");
+    expect(marks[0]?.children.map((child) => child.textContent)).toContain("AI");
+    expect(node.dataset.assistedBy).toBe("ai");
+    expect(node.attributes.get("aria-description")).toBe(
+      "Created by Coach Mira with AI assistance",
+    );
+  };
+
+  it("wraps assisted plain text in a group that carries one mark", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "text-ai",
+      kind: "text",
+      style: textStyle,
+      geometry: { x: 20, y: 40, text: "Summary" },
+    };
+    const node = authoritativeRenderer(item).render();
+    expectSingleMark(node);
+    expect(node.name).toBe("g");
+    expect(node.classList.values.has("board-item-text")).toBe(true);
+    expect(node.attributes.get("transform")).toBe("matrix(1 0 0 1 0 0)");
+    expect(node.children[0]?.name).toBe("text");
+    expect(node.children[0]?.textContent ?? node.children[0]?.children[0]?.textContent).toBe(
+      "Summary",
+    );
+  });
+
+  it("marks an assisted table once", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "table-ai",
+      kind: "table",
+      style: {
+        kind: "table",
+        borderColor: "#20201e",
+        fill: "#ffffff",
+        headerFill: "#f2f0ea",
+        textColor: "#20201e",
+        fontSize: 14,
+        opacity: 1,
+      },
+      geometry: {
+        x: 10,
+        y: 10,
+        columnWidths: [120, 120],
+        rowHeights: [32, 32],
+        cells: [
+          ["Claim", "Evidence"],
+          ["", ""],
+        ],
+      },
+    };
+    const node = authoritativeRenderer(item).render();
+    expectSingleMark(node);
+    expect(marksIn(node)[0]?.attributes.get("transform")).toBe("translate(233 13)");
+  });
+
+  it("marks an assisted section at the right end of its title bar", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "zone-ai",
+      kind: "zone",
+      style: {
+        kind: "zone",
+        borderColor: "#1f5eff",
+        fill: "#e8f0ff",
+        textColor: "#20201e",
+        fontSize: 16,
+        opacity: 1,
+      },
+      geometry: { x: 0, y: 0, width: 400, height: 300, title: "Ideas" },
+    };
+    const node = authoritativeRenderer(item).render();
+    expectSingleMark(node);
+  });
+
+  it("marks an assisted connector outside its top-right point", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "line-ai",
+      kind: "line",
+      style: { kind: "line", color: "#20201e", width: 4, opacity: 1, arrowhead: "none" },
+      geometry: { x1: 0, y1: 50, x2: 100, y2: 0 },
+    };
+    const node = authoritativeRenderer(item).render();
+    expectSingleMark(node);
+    expect(marksIn(node)[0]?.attributes.get("transform")).toBe("translate(102 -12)");
+  });
+
+  it("wraps assisted strokes and outline shapes so they can carry a mark", () => {
+    const pencil: BoardItem = {
+      ...base,
+      id: "pencil-ai",
+      kind: "pencil",
+      style: { kind: "stroke", color: "#20201e", width: 3, opacity: 1 },
+      geometry: {
+        points: [
+          [0, 10],
+          [20, 0],
+          [40, 10],
+        ],
+      },
+    };
+    const rectangle: BoardItem = {
+      ...base,
+      id: "rectangle-ai",
+      kind: "rectangle",
+      style: { kind: "stroke", color: "#20201e", width: 3, opacity: 1 },
+      geometry: { x: 10, y: 20, width: 100, height: 60, shape: "rectangle" },
+    };
+    for (const item of [pencil, rectangle]) {
+      const node = authoritativeRenderer(item).render();
+      expectSingleMark(node);
+      expect(node.name).toBe("g");
+      expect(node.children[0]?.name).toBe(item.kind === "pencil" ? "path" : "rect");
+      expect(node.classList.values.has(`board-item-${item.kind}`)).toBe(true);
+    }
+  });
+
+  it("falls back to the standalone mark on a sticky when no creator name is known", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "sticky-ai-anonymous",
+      kind: "sticky",
+      style: { kind: "sticky", fill: "#fde68a", textColor: "#292524", fontSize: 20, opacity: 1 },
+      geometry: { x: 10, y: 20, width: 180, height: 140, text: "Idea" },
+    };
+    const node = authoritativeRenderer(item, "").render();
+    expect(marksIn(node)).toHaveLength(1);
+    expect(node.dataset.assistedBy).toBe("ai");
+    expect(node.attributes.get("aria-description")).toBe("Created with AI assistance");
+    expect(fakeDescendants(node).some((child) => child.classList.values.has("creator-badge"))).toBe(
+      false,
+    );
+  });
+
+  it("keeps the badge, not a standalone mark, on an assisted sticky with a known creator", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "sticky-ai-badged",
+      kind: "sticky",
+      style: { kind: "sticky", fill: "#fde68a", textColor: "#292524", fontSize: 20, opacity: 1 },
+      geometry: { x: 10, y: 20, width: 180, height: 140, text: "Idea" },
+    };
+    const node = authoritativeRenderer(item).render();
+    expect(marksIn(node)).toHaveLength(0);
+    expect(node.dataset.assistedBy).toBe("ai");
+    expect(node.attributes.get("aria-description")).toBe(
+      "Created by Coach Mira with AI assistance",
+    );
+    const badge = fakeDescendants(node).find((child) =>
+      child.classList.values.has("creator-badge-ai"),
+    );
+    expect(badge).toBeDefined();
+  });
+
+  it("leaves unassisted items unmarked and unwrapped", () => {
+    const { assistedBy: _assistedBy, ...plain } = base;
+    const item: BoardItem = {
+      ...plain,
+      id: "text-plain",
+      kind: "text",
+      style: textStyle,
+      geometry: { x: 20, y: 40, text: "Typed by hand" },
+    };
+    const node = authoritativeRenderer(item).render();
+    expect(marksIn(node)).toHaveLength(0);
+    expect(node.name).toBe("text");
+    expect(node.dataset.assistedBy).toBeUndefined();
+    expect(node.attributes.has("aria-description")).toBe(false);
+  });
+
+  it("keeps exactly one mark on a reused video card and moves it with the card", () => {
+    const item: BoardItem = {
+      ...base,
+      id: "video-ai",
+      kind: "text",
+      style: textStyle,
+      geometry: {
+        x: 20,
+        y: 40,
+        text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        embed: "video",
+      },
+    };
+    const { render } = authoritativeRenderer(item);
+    const created = render();
+    expectSingleMark(created);
+    expect(marksIn(created)[0]?.attributes.get("transform")).toBe(
+      `translate(${20 + VIDEO_EMBED_WIDTH - 52} 24)`,
+    );
+
+    item.geometry.x = 120;
+    const reused = render();
+    expect(reused).toBe(created);
+    expect(marksIn(reused)).toHaveLength(1);
+    expect(marksIn(reused)[0]?.attributes.get("transform")).toBe(
+      `translate(${120 + VIDEO_EMBED_WIDTH - 52} 24)`,
+    );
+  });
 });
 
 describe("connector rendering", () => {
@@ -133,7 +779,13 @@ describe("connector rendering", () => {
   it("renders a plain connector as one shaft", () => {
     const node = lineNode(
       { x1: 0, y1: 0, x2: 100, y2: 0 },
-      { kind: "line", color: "#20201e", width: 4, opacity: 1, arrowhead: "none" },
+      {
+        kind: "line",
+        color: "#20201e",
+        width: 4,
+        opacity: 1,
+        arrowhead: "none",
+      },
     ) as unknown as FakeSvgNode;
 
     expect(node.children).toHaveLength(1);
@@ -144,7 +796,13 @@ describe("connector rendering", () => {
   it("renders a shared-math open arrowhead without closing or filling it", () => {
     const node = lineNode(
       { x1: 0, y1: 0, x2: 100, y2: 0 },
-      { kind: "line", color: "#20201e", width: 4, opacity: 0.8, arrowhead: "arrow" },
+      {
+        kind: "line",
+        color: "#20201e",
+        width: 4,
+        opacity: 0.8,
+        arrowhead: "arrow",
+      },
     ) as unknown as FakeSvgNode;
 
     expect(node.children).toHaveLength(2);
@@ -210,8 +868,14 @@ describe("selection resize handle", () => {
       geometry: { x: 10, y: 20, width: 180, height: 140, text: "Idea" },
     };
 
-    const handle = selectionResizeHandle(item, 2, { x: 4, y: 6 }) as unknown as FakeSvgNode;
-    expect(handle.dataset).toEqual({ resizeHandle: "southeast", itemId: "sticky-a" });
+    const handle = selectionResizeHandle(item, 2, {
+      x: 4,
+      y: 6,
+    }) as unknown as FakeSvgNode;
+    expect(handle.dataset).toEqual({
+      resizeHandle: "southeast",
+      itemId: "sticky-a",
+    });
     expect(handle.attributes.get("aria-hidden")).toBe("true");
     expect(handle.children).toHaveLength(2);
     expect(handle.children[0]?.attributes.get("cx")).toBe("206");
@@ -292,7 +956,7 @@ describe("selection resize handle", () => {
   });
 });
 
-describe("shape and image transform handles", () => {
+describe("object comment markers and shape transform handles", () => {
   beforeEach(() => {
     vi.stubGlobal("document", {
       createElementNS: (_namespace: string, name: string) => fakeSvgNode(name),
@@ -301,6 +965,26 @@ describe("shape and image transform handles", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  it("anchors the open-comment badge to the current object bounds", () => {
+    const initial = commentMarkerNode(
+      "018f0000-0000-7000-8000-000000000c01",
+      2,
+      { minX: 10, minY: 20, maxX: 110, maxY: 80 },
+      1,
+    ) as unknown as FakeSvgNode;
+    const moved = commentMarkerNode(
+      "018f0000-0000-7000-8000-000000000c01",
+      2,
+      { minX: 90, minY: 65, maxX: 190, maxY: 125 },
+      1,
+    ) as unknown as FakeSvgNode;
+
+    expect(initial.attributes.get("aria-label")).toBe("2 open comments on this object");
+    expect(initial.children[0]?.attributes.get("cx")).toBe("118");
+    expect(initial.children[0]?.attributes.get("cy")).toBe("12");
+    expect(moved.children[0]?.attributes.get("cx")).toBe("198");
+    expect(moved.children[0]?.attributes.get("cy")).toBe("57");
+  });
   it("positions scale and rotate handles through an existing object transform", () => {
     const item: Extract<BoardItem, { kind: "rectangle" }> = {
       id: "shape-a",
@@ -352,15 +1036,27 @@ describe("table cell text wrapping", () => {
 
 type FakeSvgNode = {
   name: string;
+  className?: string;
   attributes: Map<string, string>;
   children: FakeSvgNode[];
+  parent?: FakeSvgNode;
   dataset: Record<string, string>;
   textContent: string | null;
   classList: { values: Set<string>; add: (...names: string[]) => void };
   setAttribute: (name: string, value: string) => void;
   append: (...children: FakeSvgNode[]) => void;
+  prepend: (...children: FakeSvgNode[]) => void;
+  addEventListener: (type: string, listener: (event: Event) => void) => void;
+  dispatchEvent: (event: Event) => boolean;
   replaceChildren: (...children: FakeSvgNode[]) => void;
+  replaceWith: (next: FakeSvgNode) => void;
+  remove: () => void;
+  querySelectorAll: () => FakeSvgNode[];
 };
+
+function fakeDescendants(node: FakeSvgNode): FakeSvgNode[] {
+  return [node, ...node.children.flatMap(fakeDescendants)];
+}
 
 function fakeSvgNode(name: string): FakeSvgNode {
   const node: FakeSvgNode = {
@@ -376,10 +1072,37 @@ function fakeSvgNode(name: string): FakeSvgNode {
       },
     },
     setAttribute: (attribute, value) => node.attributes.set(attribute, value),
-    append: (...children) => node.children.push(...children),
+    append: (...children) => {
+      for (const child of children) child.parent = node;
+      node.children.push(...children);
+    },
+    prepend: (...children) => {
+      for (const child of children) child.parent = node;
+      node.children.unshift(...children);
+    },
+    addEventListener: () => undefined,
+    dispatchEvent: () => true,
     replaceChildren: (...children) => {
+      for (const child of children) child.parent = node;
       node.children = [...children];
     },
+    replaceWith: (next) => {
+      const parent = node.parent;
+      if (!parent) return;
+      const index = parent.children.indexOf(node);
+      if (index === -1) return;
+      next.parent = parent;
+      parent.children.splice(index, 1, next);
+      node.parent = undefined;
+    },
+    remove: () => {
+      const parent = node.parent;
+      if (!parent) return;
+      const index = parent.children.indexOf(node);
+      if (index !== -1) parent.children.splice(index, 1);
+      node.parent = undefined;
+    },
+    querySelectorAll: () => [],
   };
   return node;
 }
@@ -683,7 +1406,12 @@ describe("canvas viewport view state", () => {
     const svg = {
       dataset: {} as DOMStringMap,
       style: { setProperty: vi.fn() },
-      getBoundingClientRect: () => ({ left: 10, top: 20, width: 800, height: 600 }),
+      getBoundingClientRect: () => ({
+        left: 10,
+        top: 20,
+        width: 800,
+        height: 600,
+      }),
       setAttribute: (name: string, value: string) => attributes.set(name, value),
     } as unknown as SVGSVGElement;
     const viewport = new CanvasViewport(svg);
@@ -698,19 +1426,30 @@ describe("canvas viewport view state", () => {
     expect(viewport.viewState).toEqual({ center: { x: 120, y: -30 }, zoom: 2 });
     expect(attributes.get("viewBox")).toBe("-80 -180 400 300");
     expect(zoomListener).toHaveBeenLastCalledWith(2);
-    expect(viewListener).toHaveBeenLastCalledWith({ center: { x: 120, y: -30 }, zoom: 2 });
+    expect(viewListener).toHaveBeenLastCalledWith({
+      center: { x: 120, y: -30 },
+      zoom: 2,
+    });
 
     viewport.panByPixels(20, -10);
     expect(viewport.viewState).toEqual({ center: { x: 110, y: -25 }, zoom: 2 });
     expect(zoomListener).toHaveBeenCalledTimes(1);
-    expect(viewListener).toHaveBeenLastCalledWith({ center: { x: 110, y: -25 }, zoom: 2 });
+    expect(viewListener).toHaveBeenLastCalledWith({
+      center: { x: 110, y: -25 },
+      zoom: 2,
+    });
   });
 
   it("rejects non-finite view state and clamps zoom to the supported range", () => {
     const svg = {
       dataset: {} as DOMStringMap,
       style: { setProperty: vi.fn() },
-      getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 300 }),
+      getBoundingClientRect: () => ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 300,
+      }),
       setAttribute: vi.fn(),
     } as unknown as SVGSVGElement;
     const viewport = new CanvasViewport(svg);

@@ -7,3 +7,7 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+declare module "mathjax/tex-svg.js";
+declare module "mathjax/ui/safe.js";
+declare module "mathjax/input/tex/extensions/html.js";

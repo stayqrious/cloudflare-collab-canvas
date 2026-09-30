@@ -1,5 +1,13 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { canvasPoint, createBoard, drag, drawShape, waitForBoard } from "./helpers";
+import {
+  canvasPoint,
+  chooseMoreTool,
+  createBoard,
+  drag,
+  drawShape,
+  expandToolPermissions,
+  waitForBoard,
+} from "./helpers";
 
 const PNG_FILE = {
   name: "transform-test.png",
@@ -143,6 +151,7 @@ test("scaling a shape outside a Section removes its exported membership", async 
   await selectItem(page, shape);
   const scaleHandle = page.locator("#selection-layer [data-scale-handle='southeast']");
   const scaleStart = await handlePoint(scaleHandle, ".selection-scale-hit-target");
+  const transformBefore = await shape.getAttribute("transform");
   await drag(
     page,
     scaleStart,
@@ -152,6 +161,7 @@ test("scaling a shape outside a Section removes its exported membership", async 
     },
     { steps: 12 },
   );
+  await expect.poll(() => shape.getAttribute("transform")).not.toBe(transformBefore);
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
   const after = await exportRelationships(page, boardId);
@@ -195,12 +205,13 @@ test("shapes and images scale and rotate through persistent selection handles", 
 
   await page.getByTestId("settings-button").click();
   const settings = page.getByTestId("settings-drawer");
+  await expandToolPermissions(page);
   const imageToggle = settings.locator("input[data-feature='images']");
   await imageToggle.check();
   await settings.getByRole("button", { name: "Close settings" }).click();
 
   const chooser = page.waitForEvent("filechooser");
-  await page.getByTestId("tool-image").click();
+  await chooseMoreTool(page, "tool-image");
   await (await chooser).setFiles(PNG_FILE);
   const image = page.locator("#drawing-area .board-item-image");
   await expect(image).toHaveCount(1);
@@ -216,6 +227,7 @@ test("shapes and images scale and rotate through persistent selection handles", 
 
   await page.getByTestId("settings-button").click();
   const transformToggle = settings.locator("input[data-feature='objectTransforms']");
+  await expandToolPermissions(page);
   await expect(transformToggle).toBeChecked();
   await transformToggle.uncheck();
   await settings.getByRole("button", { name: "Close settings" }).click();
