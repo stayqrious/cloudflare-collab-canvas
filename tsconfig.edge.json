@@ -5,6 +5,6 @@
     "lib": ["ES2024"],
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["apps/edge/**/*.ts", "apps/edge/**/*.d.ts"],
+  "include": ["apps/edge/**/*.ts", "apps/edge/**/*.d.ts", "scripts/storage-boundaries.test.ts"],
   "exclude": ["node_modules", "dist"]
 }
