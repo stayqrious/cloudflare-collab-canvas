@@ -13,7 +13,7 @@ permissions:
 
 env:
   NODE_VERSION: 22.19.0
-  WRANGLER_VERSION: 4.118.0
+  WRANGLER_VERSION: 4.145.0
 
 jobs:
   # Every push to main deploys, including direct pushes that skipped a pull request, so the
