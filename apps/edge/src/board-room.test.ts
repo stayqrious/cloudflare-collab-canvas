@@ -744,6 +744,43 @@ describe("BoardRoom initialization", () => {
         (frame) => frame.t === "server.rejected" && frame.commandId === copy.commandId,
       ),
     ).toMatchObject({ code: "FORBIDDEN", latestSeq: 1 });
+
+    // Moving the existing video still works, but pointing it at another video does not.
+    const videoUpdate = (
+      commandId: string,
+      actionId: string,
+      geometry: Record<string, unknown>,
+    ) => ({
+      v: 1,
+      t: "client.commit",
+      commandId,
+      actionId,
+      baseSeq: 1,
+      op: { kind: "item.update", itemId: videoId, expectedVersion: 1, patch: { geometry } },
+    });
+    const swap = videoUpdate(
+      "018f0000-0000-7000-8000-0000000000b5",
+      "018f0000-0000-7000-8000-0000000000bd",
+      { x: 10, y: 20, text: "https://youtu.be/aqz-KE-bpKQ", embed: "video" },
+    );
+    connected.socket.send(JSON.stringify(swap));
+    expect(
+      await connected.next(
+        (frame) => frame.t === "server.rejected" && frame.commandId === swap.commandId,
+      ),
+    ).toMatchObject({ code: "FORBIDDEN", latestSeq: 1 });
+
+    const move = videoUpdate(
+      "018f0000-0000-7000-8000-0000000000b6",
+      "018f0000-0000-7000-8000-0000000000bc",
+      { x: 40, y: 50, text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", embed: "video" },
+    );
+    connected.socket.send(JSON.stringify(move));
+    expect(
+      await connected.next(
+        (frame) => frame.t === "server.action" && frame.commandId === move.commandId,
+      ),
+    ).toMatchObject({ seq: 2 });
   });
 
   it("persists feature settings and rejects disabled item creation", async () => {

@@ -6486,8 +6486,18 @@ export class BoardApp {
     }
   }
 
+  /** Drops a video the composer holds once the board turns videos off; the Worker would refuse it. */
+  private syncCommentVideoFeature(): void {
+    if (!this.bootstrap.board.features.videos) {
+      if (this.pendingCommentMedia?.kind === "video") this.pendingCommentMedia = null;
+      this.commentVideoUrl.value = "";
+      this.commentVideoField.hidden = true;
+    }
+    this.renderCommentComposerState();
+  }
+
   private openCommentVideoField(): void {
-    if (this.pendingCommentMedia !== null) return;
+    if (this.pendingCommentMedia !== null || !this.bootstrap.board.features.videos) return;
     this.commentVideoField.hidden = false;
     query(this.commentVideoField, "[data-comment-video-error]", HTMLElement).textContent = "";
     this.commentVideoUrl.focus();
@@ -6495,6 +6505,7 @@ export class BoardApp {
 
   /** Holds a public YouTube or Vimeo link for the next comment, refusing anything else. */
   private attachCommentVideo(): void {
+    if (!this.bootstrap.board.features.videos) return;
     const error = query(this.commentVideoField, "[data-comment-video-error]", HTMLElement);
     const video = videoEmbedFromText(this.commentVideoUrl.value);
     if (!video) {
@@ -6552,7 +6563,7 @@ export class BoardApp {
     query(this.commentComposer, "[data-comment-add-image]", HTMLButtonElement).disabled =
       busy || media !== null || !this.canUploadImages();
     query(this.commentComposer, "[data-comment-add-video]", HTMLButtonElement).disabled =
-      busy || media !== null;
+      busy || media !== null || !this.bootstrap.board.features.videos;
     query(this.commentVideoField, "[data-comment-video-attach]", HTMLButtonElement).disabled = busy;
     this.commentImageAltInput.disabled = busy;
     this.commentVideoUrl.disabled = busy;
@@ -7239,6 +7250,7 @@ export class BoardApp {
   private updatePermissions(): void {
     this.renderParticipantPermissions();
     this.syncWebMcp();
+    this.syncCommentVideoFeature();
     const canEdit = this.canCommit();
     if (!canEdit) this.tools.cancelActiveGesture();
     const archived = this.phase === "archived";

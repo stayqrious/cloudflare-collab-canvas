@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { canvasPoint, createBoard, drawShape, moveItem, openSettingsDrawer } from "./helpers";
+import {
+  canvasPoint,
+  createBoard,
+  drawShape,
+  expandToolPermissions,
+  moveItem,
+  openSettingsDrawer,
+} from "./helpers";
 
 const PNG_FILE = {
   name: "worked-example.png",
@@ -174,6 +181,36 @@ test("a comment can carry a video and a picture", async ({ page }, testInfo) => 
     .poll(() => picture.evaluate((node: HTMLImageElement) => node.currentSrc.length > 0))
     .toBe(true);
   await expect(imageCard.locator("figcaption")).toHaveText("A worked example");
+});
+
+test("turning videos off drops a pending comment video and disables adding one", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Comment media runs in Chromium.");
+
+  await createBoard(page, "Comment videos off");
+  const start = await canvasPoint(page, 0.34, 0.4);
+  const shape = await drawShape(page, "Rectangle", start, { x: start.x + 140, y: start.y + 92 });
+  const bounds = await shape.boundingBox();
+  if (!bounds) throw new Error("The comment target has no layout bounds.");
+  await page.getByRole("button", { name: /^Select/u }).click();
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.getByRole("button", { name: "Comment on selected object" }).click();
+
+  const drawer = page.getByTestId("comments-drawer");
+  await drawer.getByTestId("comment-add-video").click();
+  const videoField = drawer.locator("[data-comment-video-field]");
+  await videoField.getByRole("textbox").fill("https://youtu.be/dQw4w9WgXcQ");
+  await videoField.getByRole("button", { name: "Attach video" }).click();
+  await expect(drawer.getByTestId("comment-attachment")).toContainText("YouTube video attached");
+
+  await expandToolPermissions(page);
+  await page
+    .getByTestId("settings-drawer")
+    .getByRole("checkbox", { name: "Enable Videos" })
+    .uncheck();
+  await expect(drawer.getByTestId("comment-attachment")).toBeHidden();
+  await expect(drawer.getByTestId("comment-add-video")).toBeDisabled();
 });
 
 test("the author or a board owner can delete a comment for everyone", async ({

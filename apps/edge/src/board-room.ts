@@ -6991,7 +6991,11 @@ function assertOperationFeaturesEnabled(
       if (
         embedsVideo(child.patch.geometry) &&
         !features.videos &&
-        !(source !== undefined && !source.deleted && embedsVideo(source.item.geometry))
+        !(
+          source !== undefined &&
+          !source.deleted &&
+          sameVideo(source.item.geometry, child.patch.geometry)
+        )
       ) {
         throw new BoardDomainError("FORBIDDEN", "Video embeds are disabled for this board.");
       }
@@ -7109,6 +7113,18 @@ function geometryContainsVisiblePaths(geometry: unknown): boolean {
 
 function embedsVideo(geometry: unknown): boolean {
   return isRecord(geometry) && geometry.embed === "video";
+}
+
+/** An edit keeps the same video when both geometries embed the same URL, e.g. a move or resize. */
+function sameVideo(current: unknown, next: unknown): boolean {
+  return (
+    isRecord(current) &&
+    isRecord(next) &&
+    current.embed === "video" &&
+    next.embed === "video" &&
+    typeof current.text === "string" &&
+    current.text === next.text
+  );
 }
 
 function assertItemFeatureEnabled(
