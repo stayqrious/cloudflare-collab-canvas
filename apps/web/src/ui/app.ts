@@ -889,6 +889,8 @@ export class BoardApp {
   private readonly rejectedZoneTitleDrafts: ZoneTitleDraftRecovery[] = [];
   private readonly pendingNewZoneTitles = new Set<string>();
   private accessMembers: Member[] = [];
+  private participantMembersRequest = 0;
+  private permissionChangePending = false;
   private managedInvitations: ManagedInvitation[];
   private recoverySnapshots: RecoverySnapshot[] = [];
   private outboxAvailable = true;
@@ -1410,6 +1412,15 @@ export class BoardApp {
 
         <aside class="side-drawer participant-drawer" id="participant-drawer" data-testid="participant-drawer" aria-label="Participants" hidden>
           <div class="drawer-heading"><div><span class="eyebrow">Live Space</span><h2>Participants</h2></div><button type="button" data-close-drawer aria-label="Close participants">×</button></div>
+          <section class="access-section" data-participant-permissions hidden>
+            <h3>Board permissions</h3>
+            <div class="segmented-control" role="group" aria-label="Board permissions">
+              <button type="button" data-policy="locked">View only</button>
+              <button type="button" data-policy="owner_only">Owners only</button>
+              <button type="button" data-policy="editors_enabled">Allow editing</button>
+            </div>
+            <p class="section-note" data-participant-policy-note></p>
+          </section>
           <div class="participant-list" data-participant-list></div>
         </aside>
 
@@ -2522,8 +2533,17 @@ export class BoardApp {
       (event) => {
         this.toggleDrawer(this.participantDrawer, event.currentTarget as HTMLButtonElement);
         this.renderParticipants();
+        if (!this.participantDrawer.hidden) void this.loadParticipantMembers();
       },
     );
+    for (const button of this.participantDrawer.querySelectorAll<HTMLButtonElement>(
+      "[data-policy]",
+    )) {
+      button.addEventListener(
+        "click",
+        () => void this.setPolicy(button.dataset.policy as DrawingPolicy),
+      );
+    }
     this.accessButton.addEventListener("click", () => {
       this.toggleDrawer(this.accessDrawer, this.accessButton);
       if (!this.accessDrawer.hidden) void this.loadAccessPanel();
@@ -3427,6 +3447,7 @@ export class BoardApp {
     if (!this.isToolEnabled(this.tools.tool)) this.tools.setTool("select");
     this.updatePermissions();
     if (!this.settingsDrawer.hidden) this.renderSettingsPanel();
+    if (!this.participantDrawer.hidden) void this.loadParticipantMembers();
   }
 
   private handleOwnerRecovery(token: string, aclVersion: number): void {
@@ -3467,6 +3488,8 @@ export class BoardApp {
   }
 
   private handlePresence(values: Presence[], replace: boolean): void {
+    const knownActorIds = new Set([...this.presences.values()].map((presence) => presence.id));
+    const hasNewParticipant = values.some((presence) => !knownActorIds.has(presence.id));
     this.rememberCreators(values);
     if (replace) {
       this.presences.clear();
@@ -3484,6 +3507,7 @@ export class BoardApp {
       });
     }
     this.renderParticipants();
+    if (hasNewParticipant && !this.participantDrawer.hidden) void this.loadParticipantMembers();
     this.renderer.renderPresence(this.presences.values(), this.bootstrap.actor.id);
   }
 
@@ -4403,6 +4427,7 @@ export class BoardApp {
       const selected = button.dataset.policy === this.bootstrap.board.drawingPolicy;
       button.classList.toggle("active", selected);
       button.setAttribute("aria-pressed", String(selected));
+      button.disabled = this.permissionChangePending;
       button.addEventListener(
         "click",
         () => void this.setPolicy(button.dataset.policy as DrawingPolicy),
@@ -4663,6 +4688,10 @@ export class BoardApp {
   }
 
   private async setPolicy(policy: DrawingPolicy): Promise<void> {
+    if (this.bootstrap.actor.role !== "owner" || this.permissionChangePending) return;
+    this.permissionChangePending = true;
+    this.renderParticipantPermissions();
+    if (!this.settingsDrawer.hidden) this.renderSettingsPanel();
     try {
       const result = await this.api.updateSettings(
         this.bootstrap.board.id,
@@ -4672,9 +4701,12 @@ export class BoardApp {
       this.bootstrap.board.drawingPolicy = policy;
       this.adoptAclVersion(result);
       this.updatePermissions();
-      this.renderSettingsPanel();
     } catch (error) {
       this.apiError(error);
+    } finally {
+      this.permissionChangePending = false;
+      this.renderParticipantPermissions();
+      if (!this.settingsDrawer.hidden) this.renderSettingsPanel();
     }
   }
 
@@ -4912,6 +4944,9 @@ export class BoardApp {
   }
 
   private async changeMemberRole(member: Member, role: Member["role"]): Promise<void> {
+    if (this.bootstrap.actor.role !== "owner" || this.permissionChangePending) return;
+    this.permissionChangePending = true;
+    this.renderParticipantPermissions();
     try {
       const result = await this.api.updateMember(
         this.bootstrap.board.id,
@@ -4921,9 +4956,17 @@ export class BoardApp {
       );
       this.adoptAclVersion(result);
       member.role = role;
+      const cachedMember = this.accessMembers.find((value) => value.id === member.id);
+      if (cachedMember) cachedMember.role = role;
+      if (member.id === this.bootstrap.actor.id) this.bootstrap.actor.role = role;
     } catch (error) {
       this.apiError(error);
-      this.renderAccessPanel();
+    } finally {
+      this.permissionChangePending = false;
+      this.updatePermissions();
+      this.renderParticipants();
+      if (!this.accessDrawer.hidden && this.bootstrap.actor.role === "owner")
+        this.renderAccessPanel();
     }
   }
 
@@ -5121,8 +5164,50 @@ export class BoardApp {
     else this.bootstrap.board.aclVersion += 1;
   }
 
+  private async loadParticipantMembers(): Promise<void> {
+    if (this.bootstrap.actor.role !== "owner") return;
+    const request = ++this.participantMembersRequest;
+    try {
+      const members = await this.api.members(this.bootstrap.board.id);
+      if (request !== this.participantMembersRequest || this.bootstrap.actor.role !== "owner")
+        return;
+      this.accessMembers = members;
+      this.renderParticipants();
+    } catch (error) {
+      if (request === this.participantMembersRequest && this.bootstrap.actor.role === "owner")
+        this.apiError(error);
+    }
+  }
+
+  private renderParticipantPermissions(): void {
+    const controls = query(this.participantDrawer, "[data-participant-permissions]", HTMLElement);
+    const canManage = this.bootstrap.actor.role === "owner" && this.phase !== "archived";
+    controls.hidden = !canManage;
+    const policy = this.bootstrap.board.drawingPolicy;
+    for (const button of controls.querySelectorAll<HTMLButtonElement>("[data-policy]")) {
+      const selected = button.dataset.policy === policy;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+      button.disabled = this.permissionChangePending || this.archivePending;
+    }
+    query(controls, "[data-participant-policy-note]", HTMLElement).textContent =
+      policy === "locked"
+        ? "Everyone can view. Editing is paused for everyone, including owners."
+        : policy === "owner_only"
+          ? "Only owners can edit. Participant roles are kept for when editing resumes."
+          : "Owners and editors can edit. Set a participant to Editor below to let them edit.";
+    for (const select of this.participantList.querySelectorAll("select")) {
+      select.disabled = !canManage || this.permissionChangePending || this.archivePending;
+      select.hidden = !canManage;
+    }
+  }
+
   private renderParticipants(): void {
+    this.renderParticipantPermissions();
+    // Presence updates must not close a role menu while someone is using it.
+    if (this.participantList.contains(document.activeElement)) return;
     this.participantList.replaceChildren();
+    const membersById = new Map(this.accessMembers.map((member) => [member.id, member]));
     const entries = [...this.presences.values()];
     this.participantCount.textContent = String(Math.max(1, entries.length));
     for (const participant of entries) {
@@ -5135,16 +5220,38 @@ export class BoardApp {
       const name = document.createElement("strong");
       name.textContent = participant.displayName;
       const detail = document.createElement("small");
+      const member = membersById.get(participant.id);
       const role =
         participant.id === this.bootstrap.actor.id
           ? `${this.bootstrap.actor.role} · you`
-          : (participant.role ?? "participant");
+          : (member?.role ?? participant.role ?? "participant");
       detail.textContent = participant.activeTool ? `${role} · ${participant.activeTool}` : role;
       identity.append(name, detail);
       const live = document.createElement("i");
       live.className = "live-dot";
       live.title = "Connected";
-      row.append(avatar, identity, live);
+      row.append(avatar, identity);
+      if (
+        this.bootstrap.actor.role === "owner" &&
+        this.phase !== "archived" &&
+        member &&
+        member.role !== "owner"
+      ) {
+        const select = document.createElement("select");
+        select.className = "participant-role";
+        select.setAttribute("aria-label", `Role for ${participant.displayName}`);
+        select.innerHTML =
+          '<option value="viewer">Viewer</option><option value="editor">Editor</option>';
+        select.value = member.role;
+        select.disabled = this.permissionChangePending || this.archivePending;
+        select.addEventListener(
+          "change",
+          () => void this.changeMemberRole(member, select.value as Member["role"]),
+        );
+        select.addEventListener("blur", () => queueMicrotask(() => this.renderParticipants()));
+        row.append(select);
+      }
+      row.append(live);
       this.participantList.append(row);
     }
   }
@@ -5245,6 +5352,7 @@ export class BoardApp {
   }
 
   private updatePermissions(): void {
+    this.renderParticipantPermissions();
     const canEdit = this.canCommit();
     if (!canEdit) this.tools.cancelActiveGesture();
     const archived = this.phase === "archived";
