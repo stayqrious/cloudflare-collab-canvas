@@ -70,6 +70,8 @@ test("a delimiter opens the maths field, and its TeX lands back in the text", as
       }),
     )
     .toEqual({ present: true, visible: true });
+  await expect(editor).toBeVisible();
+  await expect(page.locator("math-field")).toBeFocused();
 
   // The board's content security policy has to accommodate the library, not be broken by it.
   const violations = await page.evaluate(

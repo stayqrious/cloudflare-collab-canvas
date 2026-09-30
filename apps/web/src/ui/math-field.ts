@@ -201,7 +201,11 @@ export class MathFieldPanel {
     field.addEventListener("input", () => this.options.onChange(field.value));
     field.addEventListener("keydown", (event) => {
       const key = (event as KeyboardEvent).key;
-      if (key === "Escape" || key === "Enter") {
+      if (key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.options.onFocusLeft(null);
+      } else if (key === "Enter") {
         event.preventDefault();
         this.options.onDone();
       }
@@ -221,7 +225,17 @@ export class MathFieldPanel {
     if (this.element.hidden) return;
     const next = (event as FocusEvent).relatedTarget as Node | null;
     if (next !== null && this.element.contains(next)) return;
-    this.options.onFocusLeft(next);
+    if (next !== null) {
+      this.options.onFocusLeft(next);
+      return;
+    }
+    // MathLive briefly blurs and refocuses its input when its virtual keyboard opens.
+    // Wait for that synchronous focus transfer before deciding that the edit is finished.
+    queueMicrotask(() => {
+      if (this.destroyed || this.element.hidden) return;
+      const active = document.activeElement;
+      if (!this.contains(active)) this.options.onFocusLeft(active);
+    });
   };
 
   /** Pressing a key must not blur the text editor, which would save and close it. */
