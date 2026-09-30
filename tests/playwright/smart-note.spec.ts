@@ -7,6 +7,7 @@ import {
   expandToolPermissions,
   isolatedContextOptions,
   openInvite,
+  openSettingsDrawer,
   waitForBoard,
 } from "./helpers";
 
@@ -128,13 +129,14 @@ test("shared A5 retains the regular UI and disables tools except Pencil on diffe
     // Mouse-emulating drivers can also start handwriting over the normal title field.
     await drag(page, { x: 300, y: 20 }, { x: 450, y: 40 }, { steps: 4 });
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(3);
+    await openSettingsDrawer(page);
     await page.getByTestId("undo-button").click();
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(2);
     // Existing controls remain usable, including undo and disabling the board setting.
     await page.getByTestId("undo-button").click();
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(1);
     await expect(page.locator("[data-page-corner]")).toHaveCount(4);
-    await page.getByTestId("settings-button").click();
+    await expandToolPermissions(page);
     await page.getByRole("checkbox", { name: "Enable Smart Note", exact: true }).uncheck();
     await expect(student.locator("#board-canvas")).not.toHaveAttribute("data-smart-note", "true");
     await expect(page.getByTestId("tool-eraser")).toBeEnabled();
@@ -267,6 +269,7 @@ test("trusted pen writes at the top and bottom, through the regular header, afte
   await pen("mouseReleased", 450, 550);
   await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(6);
   // Mouse still operates the regular UI after using the stylus.
+  await openSettingsDrawer(page);
   await page.getByTestId("undo-button").click();
   await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(5);
   await page.locator("[data-smart-note-open]").click();
