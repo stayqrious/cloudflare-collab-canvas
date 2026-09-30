@@ -1850,6 +1850,10 @@ button:disabled {
   padding: 10px;
 }
 
+.participant-drawer [data-participant-policy-note] {
+  margin-top: 10px;
+}
+
 .participant-row,
 .member-row {
   display: flex;
@@ -1902,6 +1906,7 @@ button:disabled {
 }
 
 .live-dot {
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
   margin-left: auto;
@@ -2079,6 +2084,18 @@ button:disabled {
   height: 38px;
   min-width: 0;
   padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.participant-role {
+  flex: 0 0 auto;
+  width: 82px;
+  height: 32px;
+  padding: 0 6px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: #fff;

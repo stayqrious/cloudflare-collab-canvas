@@ -107,12 +107,10 @@ test("Organisation participants join one Space with live owner controls and attr
       await expect(frame.locator("#drawing-area [data-item-id]")).toHaveCount(1);
     }
 
-    await coach.getByTestId("access-button").click();
-    const coachAccess = coach.getByTestId("access-drawer");
+    await coach.getByTestId("participants-button").click();
+    const coachAccess = coach.getByTestId("participant-drawer");
     await expect(coachAccess).toBeVisible();
-    await expect(coachAccess.getByRole("combobox", { name: "Role for Coach Dev" })).toHaveValue(
-      "owner",
-    );
+    await expect(coachAccess.getByRole("combobox", { name: "Role for Coach Dev" })).toHaveCount(0);
 
     await coachAccess
       .getByRole("combobox", { name: "Role for Student Asha" })
@@ -149,8 +147,17 @@ test("Organisation participants join one Space with live owner controls and attr
       "aria-pressed",
       "true",
     );
+    await coach.getByTestId("participants-button").click();
+    await expect(coachAccess.locator("button[data-policy='owner_only']")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await coOwnerSettings.locator("button[data-policy='editors_enabled']").click();
     await expect(student.getByRole("button", { name: /^Shapes/u })).toBeEnabled();
+    await expect(coachAccess.locator("button[data-policy='editors_enabled']")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     const activity = await coach.evaluate(
       async ({ historyKey }) => {
