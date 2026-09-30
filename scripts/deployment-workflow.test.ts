@@ -24,7 +24,7 @@ describe("deployment and CI workflows", () => {
     expect(ci).toContain("vars.AUTOMATION_PROVIDER != 'cloudflare'");
     expect(ci).toContain("github.event_name == 'workflow_dispatch'");
     expect(ci).toContain("npm run test:e2e -- --project=chromium --project=mobile-chromium");
-    expect(ci).toContain("run: npm run test:e2e\n");
+    expect(ci).toContain("run: npm run test:e2e -- --max-failures=5\n");
   });
 
   it("deploys every staging and main push at its exact SHA once the full check passes", () => {
