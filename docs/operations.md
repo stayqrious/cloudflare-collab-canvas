@@ -89,7 +89,8 @@ keys or secrets. Staging has no widget pairing to inspect.
 2. generate a new independent 32-byte current key;
 3. install both encrypted values and deploy;
 4. monitor authentication rejection counts for one 30-day session window;
-5. remove the previous key and deploy again.
+5. clear `SESSION_SIGNING_KEY_PREVIOUS` and deploy again. The deploy overwrites the
+   Worker's previous-key secret with the current key, so the retired key stops working.
 
 Never reuse signing keys between environments.
 

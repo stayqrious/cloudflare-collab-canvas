@@ -62,9 +62,13 @@ beforeEach(() => {
       expect(Object.keys(secrets).sort()).toEqual([
         "ORGANISATION_SIGNING_KEYS",
         "SESSION_SIGNING_KEY_CURRENT",
+        "SESSION_SIGNING_KEY_PREVIOUS",
         "TURNSTILE_SECRET_KEY",
       ]);
       expect(secrets.ORGANISATION_SIGNING_KEYS).toBe(process.env.ORGANISATION_SIGNING_KEYS);
+      // Outside a rotation the previous-key slot is overwritten with the current key, because
+      // Wrangler would otherwise keep a retired previous key that is merely left out.
+      expect(secrets.SESSION_SIGNING_KEY_PREVIOUS).toBe(process.env.SESSION_SIGNING_KEY_CURRENT);
       expect(args).not.toContain(process.env.SESSION_SIGNING_KEY_CURRENT);
     }
     return { status: 0 };
