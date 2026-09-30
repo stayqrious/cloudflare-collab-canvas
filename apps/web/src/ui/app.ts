@@ -1243,6 +1243,9 @@ export class BoardApp {
   private accessMembers: Member[] = [];
   private participantMembersRequest = 0;
   private permissionChangePending = false;
+  /** Feature toggles the owner changed that are not saved yet, newest value per feature. */
+  private readonly pendingFeatureChanges = new Map<BoardFeatureKey, boolean>();
+  private featureChangeQueue: Promise<void> = Promise.resolve();
   private managedInvitations: ManagedInvitation[];
   private recoverySnapshots: RecoverySnapshot[] = [];
   private outboxAvailable = true;
@@ -5606,10 +5609,10 @@ export class BoardApp {
       const input = document.createElement("input");
       input.type = "checkbox";
       input.dataset.feature = key;
-      input.checked = this.bootstrap.board.features[key];
+      input.checked = this.pendingFeatureChanges.get(key) ?? this.bootstrap.board.features[key];
       input.disabled = key === "partialEraser" && !this.bootstrap.board.features.eraser;
       input.setAttribute("aria-label", `Enable ${metadata.label}`);
-      input.addEventListener("change", () => void this.setFeature(key, input.checked));
+      input.addEventListener("change", () => this.queueFeatureChange(key, input.checked));
       row.append(input);
       featureGrid.append(row);
     }
@@ -5857,6 +5860,26 @@ export class BoardApp {
       this.renderParticipantPermissions();
       if (!this.settingsDrawer.hidden) this.renderSettingsPanel();
     }
+  }
+
+  /**
+   * Saves feature toggles one at a time. Each save must carry the access version the previous
+   * one returned, so toggles sent together would be refused as stale and flip back.
+   */
+  private queueFeatureChange(feature: BoardFeatureKey, enabled: boolean): void {
+    this.pendingFeatureChanges.set(feature, enabled);
+    this.featureChangeQueue = this.featureChangeQueue.then(async () => {
+      const wanted = this.pendingFeatureChanges.get(feature);
+      if (wanted === undefined) return;
+      if (wanted !== this.bootstrap.board.features[feature]) {
+        await this.setFeature(feature, wanted);
+      }
+      // A newer toggle of the same feature queued its own save; leave its value in place.
+      if (this.pendingFeatureChanges.get(feature) === wanted) {
+        this.pendingFeatureChanges.delete(feature);
+        this.renderSettingsPanel();
+      }
+    });
   }
 
   private async setFeature(feature: BoardFeatureKey, enabled: boolean): Promise<void> {
