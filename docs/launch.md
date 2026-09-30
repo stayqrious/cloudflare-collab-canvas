@@ -1,14 +1,15 @@
 # First launch
 
 This is the one-time runbook for launching SpaceScale on a Cloudflare account
-with the GitHub deployment workflow. It replaces the earlier installation (a
+with Cloudflare Workers Builds or GitHub Actions. It replaces the earlier installation (a
 Worker deployed by Cloudflare Workers Builds from a committed `wrangler.jsonc`)
 with a fresh one whose Worker and bucket names derive from `DEPLOYMENT_NAME`.
 **No board from the earlier installation carries over**: the new Worker is a new
 Durable Object namespace and the new buckets start empty.
 
-After this, every push to `main` deploys production automatically once
-`npm run check` passes. Nothing is ever set on the Worker by hand.
+After setup, the selected provider deploys `staging` and `main` automatically.
+Use the shared deployment command so runtime secrets travel with the code.
+See [deployment-ci.md](deployment-ci.md) for the provider setup and switching steps.
 
 ## 1. Values that can never change after launch
 
@@ -18,15 +19,15 @@ identifiers used to find them.
 
 | Value | Where | Recommended | Why it is permanent |
 | --- | --- | --- | --- |
-| Cloudflare account | `CLOUDFLARE_ACCOUNT_ID` secret | The account that owns the site's DNS zone | Durable Objects and R2 buckets cannot move between accounts. |
-| `DEPLOYMENT_NAME` | GitHub `production` variable | `spacescale` | Derives the Worker (`spacescale-production`) and both buckets (`spacescale-production-snapshots`, `spacescale-production-assets`). A different name is a different Worker, so a different Durable Object namespace, and empty buckets. 3–42 characters: lowercase letters, digits, internal hyphens. |
-| `R2_BUCKET_JURISDICTION` | GitHub `production` variable | `default` | A bucket's jurisdiction is fixed when it is created. Use `eu` only if data must stay in the EU; `fedramp` only for FedRAMP accounts. |
+| Cloudflare account | `CLOUDFLARE_ACCOUNT_ID` | The account that owns the site's DNS zone | Durable Objects and R2 buckets cannot move between accounts. |
+| `DEPLOYMENT_NAME` | Production build variable | `spacescale` | Derives the Worker (`spacescale-production`) and both buckets (`spacescale-production-snapshots`, `spacescale-production-assets`). A different name is a different Worker, so a different Durable Object namespace, and empty buckets. 3–42 characters: lowercase letters, digits, internal hyphens. |
+| `R2_BUCKET_JURISDICTION` | Production build variable | `default` | A bucket's jurisdiction is fixed when it is created. Use `eu` only if data must stay in the EU; `fedramp` only for FedRAMP accounts. |
 | Each Organisation's `organisation_id` and `derivation_key` | Inside the `ORGANISATION_SIGNING_KEYS` secret | One entry per partner, keys from `openssl rand -base64 32` | They derive every Organisation board, participant, and recovery ID. Changing either makes that Organisation's Spaces unreachable. Launch-signing keys (`current`/`previous`) can rotate; these two cannot. |
 
 `APP_HOSTNAME` can technically change, but every shared board link, partner
 embed, and the Turnstile widget point at it, so treat it as fixed too.
 
-These can change at any time by editing the GitHub environment and pushing to
+These can change at any time by editing the selected build environment and pushing to
 `main` (or re-running the latest deploy):
 
 - `ALLOWED_ORIGINS`, `WEBHOOK_ALLOWED_ORIGINS`
@@ -37,6 +38,8 @@ These can change at any time by editing the GitHub environment and pushing to
   [signing-key rotation](../how_to_embed_me.md#signing-key-rotation)
 
 ## 2. Cloudflare
+
+Enable R2 on the target account and ensure the hostname belongs to an active DNS zone.
 
 1. **Stop the old deployment path.** Dashboard → **Workers & Pages** → the
    current Worker (`cloudflare-collab-canvas`) → **Settings** → **Build** →
@@ -52,11 +55,14 @@ These can change at any time by editing the GitHub environment and pushing to
    - Zone → **Zone: Read** (only the zone that owns `APP_HOSTNAME`)
    - Zone → **WAF: Edit** (only that zone)
 
-   Copy the token once.
+   For Workers Builds, create a **user-owned token** under **My Profile → API Tokens**
+   with the same scopes plus **Zone → Workers Routes: Edit**. Select it as the
+   build API token; Workers Builds does not yet support account-owned tokens.
+   The scripts accept either token type. Copy the token once.
 4. **Account ID.** Dashboard → the account → **Account home** → copy
    **Account ID**.
 
-The workflow creates the buckets, the Worker, and the Custom Domain itself. It
+The shared `deployment:deploy` command creates the buckets, Worker, and Custom Domain. It
 moves the hostname from the old Worker to the new one when it finalizes; you do
 not need to detach it first.
 
@@ -84,9 +90,13 @@ into an ignored `.env.production`. Its registry uses the Organisation ID
 is permanent. Share only an Organisation's `key_id` and `current.key` with that
 partner, never its `derivation_key`.
 
-## 4. GitHub
+## 4. Build variables and secrets
 
-Repository → **Settings** → **Environments** → **New environment** →
+For Cloudflare Workers Builds, put the values below in each Worker's **Build variables
+and secrets**, following [the Cloudflare setup steps](deployment-ci.md#cloudflare-workers-builds-no-automatic-github-runner-usage).
+Use `TURNSTILE_ENABLED=false` for staging and `true` for production.
+
+For GitHub Actions: repository → **Settings** → **Environments** → **New environment** →
 `production`. Under **Deployment branches and tags**, allow only `main`.
 
 Environment **secrets**:
@@ -112,7 +122,7 @@ Environment **variables**:
 | `WEBHOOK_ALLOWED_ORIGINS` | Comma-separated `https://` origins of approved webhook receivers, or blank |
 
 `BOARD_CREATION_ENABLED` and `TURNSTILE_ENABLED` are fixed to `true` for
-production in `.github/workflows/deploy.yml`.
+production in `.github/workflows/deploy.yml`. Set them explicitly in Workers Builds.
 
 A `staging` environment is optional. If you want one, repeat this section with a
 separate token, different keys, `TURNSTILE_SECRET_KEY` unset, and its own
@@ -121,10 +131,10 @@ with `-staging` resources, so it can never touch production data.
 
 ## 5. Launch
 
-1. Merge the pull request into `main`. The **Deploy** workflow runs
-   `npm run check`, then the `production` job: it creates both buckets, uploads
-   the Worker with all its secrets, deploys it at 100%, attaches `APP_HOSTNAME`,
-   and probes `/healthz`.
+1. Configure exactly one automatic provider using [deployment-ci.md](deployment-ci.md).
+   Verify staging first, then merge into `main`. The selected provider checks
+   the code and calls `deployment:deploy`, which provisions storage, deploys the
+   Worker with its runtime secrets, attaches `APP_HOSTNAME`, and probes `/healthz`.
 2. Open `https://<APP_HOSTNAME>`, create a Space, and check drawing, a sticky
    note, a text box with a formula such as `\(x^2\)`, an image upload, and a
    comment. Open the invite link in a second browser to see changes arrive live.
@@ -132,10 +142,9 @@ with `-staging` resources, so it can never touch production data.
    **Settings → Tool permissions → AI tools** only where the school has approved
    it (see [classroom AI safety](classroom-ai-safety.md)).
 
-## 6. Remove the old installation
+## 6. Retain the old installation for rollback
 
-Once the new site is verified, delete what the earlier installation left behind:
-
-- Worker `cloudflare-collab-canvas` (this deletes its Durable Objects and boards)
-- R2 buckets `collab-canvas-snapshots` and `collab-canvas-assets` (empty each
-  bucket first; Cloudflare only deletes empty buckets)
+Keep the earlier Worker and R2 buckets until you have separately decided how to
+archive or retire the old boards. The new installation does not migrate them.
+Deleting the old Worker deletes its Durable Objects and boards. Disconnect its
+old automatic build connection so it does not deploy the new branch unexpectedly.

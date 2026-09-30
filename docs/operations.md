@@ -17,15 +17,15 @@ provision a Cloudflare dashboard or alert.
 2. Create one dedicated production Turnstile widget. Allow only the configured
    production `APP_HOSTNAME`, and copy its public site key and Siteverify secret from
    the same widget. Staging deliberately has no Turnstile widget or credentials.
-3. Give each GitHub environment token **Workers Scripts: Edit** and **Workers
+3. Give each build environment token **Workers Scripts: Edit** and **Workers
    R2 Storage: Edit**. Automatic deployment uses those permissions to create or
    verify both private buckets on every run. Add the environment-specific
-   `ORGANISATION_SIGNING_KEYS` JSON as a GitHub environment secret; the workflow
+   `ORGANISATION_SIGNING_KEYS` JSON as a build secret; the workflow
    uploads it as an encrypted Worker-version secret.
 4. Run `npm run deployment:init -- --env <staging|production>` to validate the
-   environment, generate its config, and create or verify both buckets. Then
-   install runtime secrets with `npx wrangler secret put <NAME> --config
-   .generated/wrangler.<environment>.jsonc`.
+   environment, generate its config, and create or verify both buckets. Use
+   `npm run deployment:deploy -- --env <staging|production>` for the complete
+   deployment including runtime secrets, domain attachment, and health checks.
 5. Optionally run `npm run cf:check` for a separate access check. Local
    development uses `npm run deployment:init -- --env development` and never
    needs Cloudflare credentials.
@@ -37,18 +37,18 @@ provision a Cloudflare dashboard or alert.
    behavior. Browser, image, export, reconnect, and load checks are optional and
    run only on demand.
 9. Open a pull request from the same SHA into `main` when ready. Merging
-   requires an approval and the `validate` job; moving the SHA through
+   requires the review/check policy configured for the selected provider; moving the SHA through
    `staging` first is recommended but not an enforced gate.
 
 Resolved public resource mappings are never committed. Supply only
 `DEPLOYMENT_NAME`, the hostname, and the remaining switches through ignored
-environment files or GitHub environment variables. `deployment:init` validates
+environment files or the selected provider's build variables. `deployment:init` validates
 the complete environment before it writes the ignored Wrangler file or contacts
 Cloudflare. Keep `BOARD_CREATION_ENABLED=true` normally; set it to `false` in
 the deployment environment for an intentional creation freeze.
 
 Set `ALLOWED_ORIGINS` to a comma-separated list of exact parent application
-origins in local configuration and in each GitHub environment. It is public
+origins in local configuration and in each build environment. It is public
 configuration, not a secret. Missing, blank, path-bearing, wildcard-pattern, or
 malformed values deny framing. A literal `*` allows every iframe parent.
 Normal board pages remain non-embeddable.

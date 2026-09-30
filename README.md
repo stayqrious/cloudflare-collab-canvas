@@ -478,45 +478,32 @@ plan Bot Fight Mode cannot be skipped by a WAF custom rule; use Super Bot Fight
 Mode for a path exception, or disable Bot Fight Mode if it challenges legitimate
 server clients.
 
-To deploy only after successful provisioning:
+To validate and deploy with runtime secrets from the selected build environment
+or ignored `.env.production` file:
 
 ```sh
-npm run deployment:init -- --env production --deploy
+npm run deployment:check
+npm run deployment:deploy -- --env production
 ```
 
-GitHub Actions is the one deployment path. Every push to `main` deploys
-production (and every push to `staging` deploys staging): the workflow runs the
-full `npm run check` first, then checks out that exact SHA, idempotently creates
-or reuses both private R2 buckets, builds the web assets, uploads a Worker version
-together with every runtime secret from the GitHub environment, deploys it at
-100%, attaches the custom domain, and makes a small five-attempt health probe.
-It does not stage a candidate, run load suites, or automate rollback; fix forward.
-Do not also connect the Worker to Cloudflare Workers Builds, or two systems would
-race to deploy it. The first launch, including every value to set and which of
-them can never change afterwards, is in [docs/launch.md](docs/launch.md).
+Both Cloudflare Workers Builds and GitHub Actions use this command. It provisions
+private storage, builds the web assets, deploys the Worker and runtime secrets
+atomically (including the first deployment), then attaches the domain and checks
+health. Use `--env staging` with separate staging values for staging.
+
+For Cloudflare automation, connect separate staging/production Workers to the
+`staging`/`main` branches and set the GitHub repository variable
+`AUTOMATION_PROVIDER=cloudflare` to skip automatic GitHub runners. Leave it unset
+or set it to `github` to retain Actions automation. Only one provider should
+automatically deploy each Worker. Full instructions are in
+[docs/deployment-ci.md](docs/deployment-ci.md) and [docs/launch.md](docs/launch.md).
 
 Runtime secrets (`SESSION_SIGNING_KEY_CURRENT`, `ORGANISATION_SIGNING_KEYS`, the
-production `TURNSTILE_SECRET_KEY`, and an optional `SESSION_SIGNING_KEY_PREVIOUS`)
-live only in the GitHub environment and are uploaded with each version, so
-nothing is set on the Worker by hand. The commands below are only for a manual
-deployment without the workflow.
-
-Install runtime secrets for a manual production deployment:
-
-```sh
-npm run deployment:init -- --env production
-npx wrangler secret put SESSION_SIGNING_KEY_CURRENT --config .generated/wrangler.production.jsonc
-npx wrangler secret put ORGANISATION_SIGNING_KEYS --config .generated/wrangler.production.jsonc
-npx wrangler secret put TURNSTILE_SECRET_KEY --config .generated/wrangler.production.jsonc
-```
-
-Install distinct staging secrets explicitly against the staging environment:
-
-```sh
-npm run deployment:init -- --env staging
-npx wrangler secret put SESSION_SIGNING_KEY_CURRENT --config .generated/wrangler.staging.jsonc
-npx wrangler secret put ORGANISATION_SIGNING_KEYS --config .generated/wrangler.staging.jsonc
-```
+production `TURNSTILE_SECRET_KEY`, and optional `SESSION_SIGNING_KEY_PREVIOUS`)
+come from Cloudflare **Build secrets**, GitHub environment secrets, or the
+ignored local environment file. The shared command uploads them with every
+Worker deployment. Cloudflare build secrets are not runtime bindings until
+that deployment step runs.
 
 Before initialization, provide the selected environment's deployment name,
 hostname, switches, and credentials through ignored environment files or CI

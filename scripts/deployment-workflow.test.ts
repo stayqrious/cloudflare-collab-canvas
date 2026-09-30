@@ -21,7 +21,8 @@ describe("deployment and CI workflows", () => {
     );
     expect(ci).toContain("npm run check");
     expect(ci).toContain("npm run cf:types -- --check");
-    expect(ci).toContain("browser:\n    if: github.event_name != 'push'");
+    expect(ci).toContain("vars.AUTOMATION_PROVIDER != 'cloudflare'");
+    expect(ci).toContain("github.event_name == 'workflow_dispatch'");
     expect(ci).toContain("npm run test:e2e -- --project=chromium --project=mobile-chromium");
     expect(ci).toContain("run: npm run test:e2e\n");
   });
@@ -37,18 +38,11 @@ describe("deployment and CI workflows", () => {
     expect(deploy).toContain("if: github.ref == 'refs/heads/main'");
   });
 
-  it("provisions private buckets and deploys each uploaded version directly at 100%", () => {
-    expect(deploy).toContain("npm run deployment:init -- --env staging");
-    expect(deploy).toContain("npm run deployment:init -- --env production");
-    expect(deploy).toContain("npm run deployment:init -- --env staging --finalize");
-    expect(deploy).toContain("npm run deployment:init -- --env production --finalize");
-    expect(deploy).not.toContain("npm run config:setup");
-    expect(deploy).not.toContain("npm run cf:bootstrap");
-    expect(deploy).toContain("--config .generated/wrangler.staging.jsonc");
-    expect(deploy).toContain("--config .generated/wrangler.production.jsonc");
-    expect(occurrences(deploy, "wrangler versions upload")).toBe(2);
-    expect(occurrences(deploy, "$" + "{{ steps.upload.outputs.version_id }}@100")).toBe(2);
-    expect(deploy).not.toContain("--strict");
+  it("uses the shared deploy command and skips automatic Actions when Cloudflare owns deployment", () => {
+    expect(deploy).toContain("npm run deployment:deploy -- --env staging");
+    expect(deploy).toContain("npm run deployment:deploy -- --env production");
+    expect(deploy).toContain("if: vars.AUTOMATION_PROVIDER != 'cloudflare'");
+    expect(deploy).not.toContain("wrangler versions upload");
   });
 
   it("keeps mappings environment-scoped and Turnstile explicit", () => {
@@ -72,19 +66,6 @@ describe("deployment and CI workflows", () => {
     ]) {
       expect(occurrences(deploy, `${name}: $` + `{{ secrets.${name} }}`)).toBe(2);
     }
-    expect(occurrences(deploy, "--secrets-file")).toBe(2);
     expect(deploy).toContain("Configure the production Turnstile secret key");
-  });
-
-  it("uses only a small post-deploy health probe", () => {
-    expect(occurrences(deploy, "for attempt in 1 2 3 4 5")).toBe(2);
-    expect(occurrences(deploy, ".ok == true and .service ==")).toBe(2);
-    expect(deploy).not.toContain("test:e2e");
-    expect(deploy).not.toContain("load:smoke");
-    expect(deploy).not.toContain("cloudflare/staging");
-    expect(deploy).not.toContain("candidate");
-    expect(deploy).not.toContain("rollback");
-    expect(deploy).not.toContain("convergence");
-    expect(deploy).not.toContain("Version-Overrides");
   });
 });

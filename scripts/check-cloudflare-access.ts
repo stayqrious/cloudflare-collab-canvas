@@ -1,3 +1,4 @@
+import { verifyCloudflareToken } from "./cloudflare-token.ts";
 import {
   deploymentConfigurationFromEnvironment,
   parseDeploymentEnvironment,
@@ -60,7 +61,7 @@ function report(value: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-const token = await cloudflareRequest<{ status?: string }>(`/accounts/${account}/tokens/verify`);
+const token = await verifyCloudflareToken(account);
 report({
   check: "public_configuration",
   environment: environmentName,

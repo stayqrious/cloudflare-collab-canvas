@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { verifyCloudflareToken } from "./cloudflare-token.ts";
 import {
   deploymentConfigurationFromEnvironment,
   type DeploymentConfiguration as EnvironmentConfiguration,
@@ -426,12 +427,14 @@ async function initializeDeployment(): Promise<void> {
 
   const generatedConfigPath = writeGeneratedWranglerConfig(configuration);
   const account = encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID ?? "");
-  const tokenCheck = await cloudflareRequest<{ status?: string }>(
-    `/accounts/${account}/tokens/verify`,
-  );
-  if (!tokenCheck.envelope.success || tokenCheck.envelope.result?.status !== "active") {
+  const tokenCheck = await verifyCloudflareToken(account);
+  if (
+    !tokenCheck.response.ok ||
+    !tokenCheck.envelope.success ||
+    tokenCheck.envelope.result?.status !== "active"
+  ) {
     throw publicApiFailure(
-      "Cloudflare account token verification",
+      "Cloudflare token verification",
       tokenCheck.response,
       tokenCheck.envelope,
     );

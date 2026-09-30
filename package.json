@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A live, collaborative environment where people and AI agents work together—built for education and adaptable to any team",
+  "description": "A live, collaborative environment where people and AI agents work together\u2014built for education and adaptable to any team",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -38,7 +38,9 @@
     "security:scan": "tsx scripts/check-secret-leaks.ts",
     "cf:check": "tsx scripts/check-cloudflare-access.ts",
     "cf:types": "npm run config:setup -- --env development && wrangler types apps/edge/worker-configuration.d.ts --config .generated/wrangler.development.jsonc --env-file .dev.vars.example --include-runtime false --env-interface CloudflareBindings",
-    "docs:env-check": "tsx scripts/check-env-docs.ts"
+    "docs:env-check": "tsx scripts/check-env-docs.ts",
+    "deployment:deploy": "tsx scripts/deploy.ts",
+    "deployment:check": "npm run check && npm run cf:types -- --check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

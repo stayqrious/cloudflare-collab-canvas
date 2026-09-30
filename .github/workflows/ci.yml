@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   validate:
+    if: vars.AUTOMATION_PROVIDER != 'cloudflare' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,7 +33,7 @@ jobs:
   # Pull requests run the browser suite in Chromium and mobile Chromium, which covers the new
   # surface area on every change; a manual dispatch runs every browser project.
   browser:
-    if: github.event_name != 'push'
+    if: github.event_name == 'workflow_dispatch' || (vars.AUTOMATION_PROVIDER != 'cloudflare' && github.event_name != 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

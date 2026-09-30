@@ -19,6 +19,7 @@ jobs:
   # Every push to main deploys, including direct pushes that skipped a pull request, so the
   # full repository check gates both deploy jobs rather than relying on branch protection.
   validate:
+    if: vars.AUTOMATION_PROVIDER != 'cloudflare'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -83,70 +84,8 @@ jobs:
           : "${APP_HOSTNAME:?Configure the staging application hostname}"
           test "$(node -p "require('./node_modules/wrangler/package.json').version")" = "$WRANGLER_VERSION"
 
-      - name: Initialize staging resources
-        run: npm run deployment:init -- --env staging
-
-      - run: npm run build:web
-
-      - name: Upload staging Worker version
-        id: upload
-        shell: bash
-        run: |
-          set -euo pipefail
-          output="$RUNNER_TEMP/wrangler-staging-upload.jsonl"
-          secrets_file="$RUNNER_TEMP/wrangler-staging-secrets.json"
-          # Every runtime secret comes from the GitHub environment and is uploaded with each
-          # version, so the Worker never depends on secrets set by hand. Blank optional ones
-          # are left out rather than uploaded empty.
-          jq -n \
-            --arg registry "$ORGANISATION_SIGNING_KEYS" \
-            --arg session "$SESSION_SIGNING_KEY_CURRENT" \
-            --arg previous "$SESSION_SIGNING_KEY_PREVIOUS" \
-            --arg turnstile "$TURNSTILE_SECRET_KEY" \
-            '{ORGANISATION_SIGNING_KEYS: $registry, SESSION_SIGNING_KEY_CURRENT: $session}
-              + (if $previous == "" then {} else {SESSION_SIGNING_KEY_PREVIOUS: $previous} end)
-              + (if $turnstile == "" then {} else {TURNSTILE_SECRET_KEY: $turnstile} end)' \
-            > "$secrets_file"
-          chmod 600 "$secrets_file"
-          WRANGLER_OUTPUT_FILE_PATH="$output" npx --no-install wrangler versions upload \
-            --config .generated/wrangler.staging.jsonc \
-            --secrets-file "$secrets_file" \
-            --tag "staging-${GITHUB_SHA:0:12}" \
-            --message "staging ${GITHUB_SHA}"
-          version="$(jq -r 'select(.type == "version-upload") | .version_id' "$output" | tail -n 1)"
-          test -n "$version"
-          test "$version" != "null"
-          echo "version_id=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy staging version at 100%
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx --no-install wrangler versions deploy \
-            "${{ steps.upload.outputs.version_id }}@100" \
-            --config .generated/wrangler.staging.jsonc \
-            --yes \
-            --message "staging ${GITHUB_SHA}"
-
-      - name: Finalize staging Custom Domain
-        run: npm run deployment:init -- --env staging --finalize
-
-      - name: Probe staging health
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            if curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
-              --connect-timeout 5 --max-time 15 \
-              "https://${APP_HOSTNAME}/healthz?deploy=${GITHUB_RUN_ID}-${attempt}" |
-              jq -e '.ok == true and .service == "cloudflare-collab-canvas-edge"' >/dev/null
-            then
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "Staging health probe failed" >&2
-          exit 1
+      - name: Deploy staging
+        run: npm run deployment:deploy -- --env staging
 
   production:
     needs: validate
@@ -198,67 +137,5 @@ jobs:
           : "${TURNSTILE_SITE_KEY:?Configure the production Turnstile site key}"
           test "$(node -p "require('./node_modules/wrangler/package.json').version")" = "$WRANGLER_VERSION"
 
-      - name: Initialize production resources
-        run: npm run deployment:init -- --env production
-
-      - run: npm run build:web
-
-      - name: Upload production Worker version
-        id: upload
-        shell: bash
-        run: |
-          set -euo pipefail
-          output="$RUNNER_TEMP/wrangler-production-upload.jsonl"
-          secrets_file="$RUNNER_TEMP/wrangler-production-secrets.json"
-          # Every runtime secret comes from the GitHub environment and is uploaded with each
-          # version, so the Worker never depends on secrets set by hand. Blank optional ones
-          # are left out rather than uploaded empty.
-          jq -n \
-            --arg registry "$ORGANISATION_SIGNING_KEYS" \
-            --arg session "$SESSION_SIGNING_KEY_CURRENT" \
-            --arg previous "$SESSION_SIGNING_KEY_PREVIOUS" \
-            --arg turnstile "$TURNSTILE_SECRET_KEY" \
-            '{ORGANISATION_SIGNING_KEYS: $registry, SESSION_SIGNING_KEY_CURRENT: $session}
-              + (if $previous == "" then {} else {SESSION_SIGNING_KEY_PREVIOUS: $previous} end)
-              + (if $turnstile == "" then {} else {TURNSTILE_SECRET_KEY: $turnstile} end)' \
-            > "$secrets_file"
-          chmod 600 "$secrets_file"
-          WRANGLER_OUTPUT_FILE_PATH="$output" npx --no-install wrangler versions upload \
-            --config .generated/wrangler.production.jsonc \
-            --secrets-file "$secrets_file" \
-            --tag "main-${GITHUB_SHA:0:12}" \
-            --message "production ${GITHUB_SHA}"
-          version="$(jq -r 'select(.type == "version-upload") | .version_id' "$output" | tail -n 1)"
-          test -n "$version"
-          test "$version" != "null"
-          echo "version_id=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy production version at 100%
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx --no-install wrangler versions deploy \
-            "${{ steps.upload.outputs.version_id }}@100" \
-            --config .generated/wrangler.production.jsonc \
-            --yes \
-            --message "production ${GITHUB_SHA}"
-
-      - name: Finalize production Custom Domain
-        run: npm run deployment:init -- --env production --finalize
-
-      - name: Probe production health
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            if curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
-              --connect-timeout 5 --max-time 15 \
-              "https://${APP_HOSTNAME}/healthz?deploy=${GITHUB_RUN_ID}-${attempt}" |
-              jq -e '.ok == true and .service == "cloudflare-collab-canvas-edge"' >/dev/null
-            then
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "Production health probe failed" >&2
-          exit 1
+      - name: Deploy production
+        run: npm run deployment:deploy -- --env production

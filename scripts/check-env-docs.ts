@@ -5,6 +5,7 @@ const readme = readFileSync("README.md", "utf8");
 const operations = readFileSync("docs/operations.md", "utf8");
 const packageManifest = readFileSync("package.json", "utf8");
 const deployWorkflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+const deploymentSource = readFileSync("scripts/deploy.ts", "utf8");
 const setupSource = readFileSync("scripts/deployment-config.ts", "utf8");
 const gitignoreLines = readFileSync(".gitignore", "utf8").split(/\r?\n/u);
 const sampleEntries = [...sample.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/gmu)].flatMap((match) =>
@@ -54,10 +55,13 @@ if (!packageManifest.includes('"deployment:init"')) {
 if (!packageManifest.includes(".generated/wrangler.")) {
   errors.push("package scripts do not consume generated Wrangler configuration");
 }
-if (!deployWorkflow.includes("npm run deployment:init")) {
+if (
+  !deployWorkflow.includes("npm run deployment:deploy") ||
+  !deploymentSource.includes('"deployment:init"')
+) {
   errors.push("deployment workflow does not initialize configuration and resources");
 }
-if (!deployWorkflow.includes(".generated/wrangler.")) {
+if (!deploymentSource.includes("generatedWranglerConfigPath(environment)")) {
   errors.push("deployment workflow does not consume generated Wrangler configuration");
 }
 if (!setupSource.includes("Deployment initialization is incomplete")) {
