@@ -4,6 +4,7 @@ import {
   createBoard,
   createInvite,
   drag,
+  expandToolPermissions,
   isolatedContextOptions,
   openInvite,
   waitForBoard,
@@ -11,7 +12,7 @@ import {
 
 type Area = { x: number; y: number; width: number; height: number };
 async function enableSmartNote(page: Page) {
-  await page.getByTestId("settings-button").click();
+  await expandToolPermissions(page);
   await page.getByRole("checkbox", { name: "Enable Smart Note", exact: true }).check();
   await expect(page.locator(".smart-note-dialog")).toHaveAttribute("data-state", "calibrating");
 }
