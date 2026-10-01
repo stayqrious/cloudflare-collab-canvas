@@ -4921,6 +4921,7 @@ export class BoardRoom extends DurableObject<Env> {
       {
         v: 1,
         t: "server.presence",
+        role: attachment.role,
         cursor: { x: cursor.x, y: cursor.y },
         activeTool,
         color: this.socketParticipantColor(socket, attachment),
@@ -5341,6 +5342,8 @@ export class BoardRoom extends DurableObject<Env> {
     for (const actorId of cancelledActors) {
       this.broadcastFrame({ v: 1, t: "server.previews_cleared", actorId }, undefined, false);
     }
+    // Publish authoritative roles even when a participant's cursor is stationary.
+    this.broadcastPresenceState();
   }
 
   private broadcastResyncRequired(message: string): void {
