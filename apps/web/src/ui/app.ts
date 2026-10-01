@@ -1174,7 +1174,7 @@ export class BoardApp {
     shapeVariant: "rectangle",
     fontSize: 20,
     fontFamily: "sans",
-    stickyFill: STICKY_COLORS[0].value,
+    stickyFill: STICKY_COLORS[0]?.value ?? "#dce8f7",
     stickyTextColor: UI_COLORS.ink,
     stickyFontSize: 20,
     stickyOpacity: 1,
@@ -1348,6 +1348,13 @@ export class BoardApp {
     bootstrap: Bootstrap,
   ) {
     this.bootstrap = bootstrap;
+    if (bootstrap.actor.color && /^#[0-9a-f]{6}$/iu.test(bootstrap.actor.color)) {
+      this.style.color = bootstrap.actor.color;
+      this.style.stampColor = bootstrap.actor.color;
+    }
+    if (bootstrap.actor.stickyColor && /^#[0-9a-f]{6}$/iu.test(bootstrap.actor.stickyColor)) {
+      this.style.stickyFill = bootstrap.actor.stickyColor;
+    }
     for (const [actorId, displayName] of buildCreatorNameMap(bootstrap.creators, bootstrap.actor)) {
       this.creatorNames.set(actorId, displayName);
     }
@@ -1519,6 +1526,7 @@ export class BoardApp {
       (itemId, expectedVersion) =>
         this.reconcileRenderedTextSectionMembership(itemId, expectedVersion),
     );
+    this.renderer.setParticipantColors(bootstrap.participantColors ?? {});
     this.renderer.setVotingEnabled(this.bootstrap.board.features.voting);
     this.renderer.setObjectTransformsEnabled(this.bootstrap.board.features.objectTransforms);
     this.renderer.viewport.subscribe((zoom) => {
@@ -4610,6 +4618,13 @@ export class BoardApp {
     const previous = new Map(this.presences);
     const knownActorIds = new Set([...this.presences.values()].map((presence) => presence.id));
     const hasNewParticipant = values.some((presence) => !knownActorIds.has(presence.id));
+    this.renderer.setParticipantColors(
+      Object.fromEntries(
+        values
+          .filter((presence) => presence.color)
+          .map((presence) => [presence.id, presence.color as string]),
+      ),
+    );
     this.rememberCreators(values);
     if (replace) {
       this.presences.clear();
@@ -4804,6 +4819,7 @@ export class BoardApp {
       }
     }
     this.bootstrap = next;
+    this.renderer.setParticipantColors(next.participantColors ?? {});
     this.creatorNames.clear();
     for (const [actorId, displayName] of buildCreatorNameMap(next.creators, next.actor)) {
       this.creatorNames.set(actorId, displayName);

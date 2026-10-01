@@ -85,6 +85,7 @@ import {
   type OrganisationRoom,
   type OrganisationWebhookSettings,
 } from "./organisation-room";
+import { assignedParticipantColor, assignedParticipantColors } from "./participant-colors";
 import { TokenBucket } from "./rate-limit";
 import {
   backfillSnapshotAccounting,
@@ -1623,6 +1624,12 @@ export class BoardRoom extends DurableObject<Env> {
     const history = this.historyState(actor.actorId);
     const creatorIds = new Set(snapshot.items.map((item) => item.createdBy));
     const creators = this.actorDirectory(creatorIds);
+    const colors = assignedParticipantColors(this.ctx.storage, [actor.actorId, ...creatorIds]);
+    const assigned = colors.get(actor.actorId);
+    if (!assigned) throw new Error("Participant colour allocation failed.");
+    const participantColors = Object.fromEntries(
+      [...colors].map(([id, assigned]) => [id, assigned.color]),
+    );
     return Response.json(
       {
         protocolVersion: 1,
@@ -1641,12 +1648,15 @@ export class BoardRoom extends DurableObject<Env> {
           id: actor.actorId,
           displayName: access.displayName,
           role: access.role,
+          color: assigned.color,
+          stickyColor: assigned.stickyColor,
           historyVersion: history.historyVersion,
           canUndo: history.canUndo,
           canRedo: history.canRedo,
           sessionExpiresAt: actor.sessionExpiresAt,
         },
         creators,
+        participantColors,
         limits: LIMITS,
         snapshot,
       },
@@ -3647,6 +3657,7 @@ export class BoardRoom extends DurableObject<Env> {
       sessionExpiresAt: actor.sessionExpiresAt,
       clientInstanceId,
       connectedAt: Date.now(),
+      color: assignedParticipantColor(this.ctx.storage, actor.actorId).color,
       state: "syncing",
     };
     server.serializeAttachment(attachment);
@@ -4913,6 +4924,7 @@ export class BoardRoom extends DurableObject<Env> {
         role: attachment.role,
         cursor: { x: cursor.x, y: cursor.y },
         activeTool,
+        color: this.socketParticipantColor(socket, attachment),
         actor: { id: attachment.actorId, displayName: attachment.displayName },
         connectionId: attachment.connectionId,
       },
@@ -5057,12 +5069,22 @@ export class BoardRoom extends DurableObject<Env> {
     });
   }
 
+  private socketParticipantColor(socket: WebSocket, attachment: SocketAttachment): string {
+    if (attachment.color) return attachment.color;
+    // Old hibernated sockets may predate colour attachments. Upgrade once,
+    // then subsequent presence frames require no colour-table reads.
+    const color = assignedParticipantColor(this.ctx.storage, attachment.actorId).color;
+    socket.serializeAttachment({ ...attachment, color });
+    return color;
+  }
+
   private broadcastPresenceState(omit?: WebSocket): void {
     const board = this.requireBoard();
     const participants: Array<{
       id: string;
       displayName: string;
       role: BoardRole;
+      color: string;
       connectionId: string;
     }> = [];
     for (const socket of this.ctx.getWebSockets()) {
@@ -5077,6 +5099,7 @@ export class BoardRoom extends DurableObject<Env> {
           id: attachment.actorId,
           displayName: access.displayName,
           role: access.role,
+          color: this.socketParticipantColor(socket, attachment),
           connectionId: attachment.connectionId,
         });
       } catch {
@@ -7784,7 +7807,12 @@ function parseAttachment(value: unknown): SocketAttachment {
     "connectedAt",
     "state",
   ];
-  if (Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) {
+  if (
+    Object.keys(value).some((key) => key !== "color" && !keys.includes(key)) ||
+    keys.some((key) => !Object.hasOwn(value, key)) ||
+    (Object.hasOwn(value, "color") &&
+      (typeof value.color !== "string" || !/^#[0-9a-f]{6}$/u.test(value.color)))
+  ) {
     throw new Error("Attachment fields are invalid.");
   }
   if (

@@ -119,11 +119,14 @@ test("named Sections, grouped movement, typography, links, and export relationsh
 
   const firstGroupTransform = await stickies.nth(0).getAttribute("transform");
   const secondGroupTransform = await stickies.nth(1).getAttribute("transform");
-  await drag(
-    page,
-    { x: firstBounds.x + 12, y: firstBounds.y + 12 },
-    { x: firstBounds.x + 48, y: firstBounds.y + 36 },
-  );
+  // Grab clear padding on the topmost sticky, away from text and resize handles.
+  const groupBounds = await stickies.nth(1).boundingBox();
+  if (!groupBounds) throw new Error("The grouped sticky is not rendered.");
+  const groupGrab = {
+    x: groupBounds.x + groupBounds.width / 2,
+    y: groupBounds.y + groupBounds.height - 20,
+  };
+  await drag(page, groupGrab, { x: groupGrab.x + 36, y: groupGrab.y + 24 });
   await expect.poll(() => stickies.nth(0).getAttribute("transform")).not.toBe(firstGroupTransform);
   await expect.poll(() => stickies.nth(1).getAttribute("transform")).not.toBe(secondGroupTransform);
   // Copying waits for the group's move to save, so let it land before pressing Ctrl+D.

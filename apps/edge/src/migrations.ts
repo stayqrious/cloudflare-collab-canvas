@@ -435,6 +435,18 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
         );
     `,
   },
+  {
+    version: 16,
+    name: "participant_colours",
+    sql: `
+      CREATE TABLE participant_colors (
+        ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_id TEXT NOT NULL UNIQUE
+      );
+      INSERT INTO participant_colors(actor_id)
+        SELECT actor_id FROM members ORDER BY created_at_ms, actor_id;
+    `,
+  },
 ] as const;
 
 export const ORGANISATION_SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [

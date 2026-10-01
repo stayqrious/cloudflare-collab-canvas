@@ -8,7 +8,7 @@ import {
   ZONE_TITLE_PADDING,
   zoneTitleBandHeight,
 } from "@collab/geometry";
-import { resolveTextFontWeight, textFontStack } from "@collab/protocol";
+import { fallbackParticipantColor, resolveTextFontWeight, textFontStack } from "@collab/protocol";
 import { STAMP_SVG_PATHS } from "@collab/svg-export";
 import { summarizeBoardVotes, type VoteSummary } from "../activities/voting";
 import { clearTypesetMath, containsMathMarkup, splitMathMarkup, typesetMath } from "../mathjax";
@@ -334,6 +334,7 @@ export class BoardRenderer {
   private readonly localLayer: SVGGElement;
   private readonly selectionLayer: SVGGElement;
   private readonly cursorLayer: SVGGElement;
+  private readonly participantColors = new Map<string, string>();
   private readonly itemNodes = new Map<string, SVGGraphicsElement>();
   private readonly imageAssets: ImageAssetCache;
   private selectedIds = new Set<string>();
@@ -769,7 +770,7 @@ export class BoardRenderer {
       const group = svgElement("g");
       group.dataset.previewKey = preview.key;
       group.classList.add("remote-preview");
-      const color = actorColor(preview.actorId);
+      const color = this.participantColors.get(preview.actorId) ?? actorColor(preview.actorId);
       const payload = preview.payload;
 
       if (preview.kind === "pencil.start" || preview.kind === "pencil.segment") {
@@ -830,6 +831,17 @@ export class BoardRenderer {
     }
   }
 
+  setParticipantColors(colors: Record<string, string>): void {
+    const changed: string[] = [];
+    for (const [id, color] of Object.entries(colors)) {
+      if (/^#[0-9a-f]{6}$/iu.test(color) && this.participantColors.get(id) !== color) {
+        this.participantColors.set(id, color);
+        changed.push(id);
+      }
+    }
+    if (changed.length) this.refreshCreatorAttribution(changed);
+  }
+
   renderPresence(presences: Iterable<Presence>, ownActorId: string): void {
     this.cursorLayer.replaceChildren();
     for (const presence of presences) {
@@ -841,7 +853,10 @@ export class BoardRenderer {
       const isPen = !isViewer && presence.activeTool === "pencil";
       group.dataset.cursor = isViewer ? "viewer" : isPen ? "pen" : "pointer";
       group.setAttribute("transform", `translate(${presence.cursor.x} ${presence.cursor.y})`);
-      group.style.setProperty("--cursor-color", presence.color ?? actorColor(presence.id));
+      group.style.setProperty(
+        "--cursor-color",
+        presence.color ?? this.participantColors.get(presence.id) ?? actorColor(presence.id),
+      );
 
       const pointer = svgElement("path");
       pointer.setAttribute("d", isPen ? PEN_CURSOR_PATH : POINTER_CURSOR_PATH);
@@ -922,6 +937,7 @@ export class BoardRenderer {
       if (current) clearTypesetMath(current);
       const replacement = itemNode(item, (assetId) => this.imageAssets.load(assetId), {
         creatorName: this.resolveCreatorName(item.createdBy),
+        creatorColor: this.participantColors.get(item.createdBy),
         onTextSize: (width, height) => {
           if (this.model.setRenderedTextSize(id, item.version, width, height)) {
             this.refreshSelection();
@@ -1355,6 +1371,7 @@ export class CanvasViewport {
 
 type ItemNodeOptions = {
   creatorName?: string;
+  creatorColor?: string;
   onTextSize?: (width: number, height: number) => void;
   preview?: boolean;
 };
@@ -1456,7 +1473,7 @@ function itemNode(
   node.classList.add("board-item", `board-item-${item.kind}`);
   node.setAttribute("transform", matrixAttribute(item.transform));
   if (badged) {
-    appendCreatorAttribution(node, item, creatorName);
+    appendCreatorAttribution(node, item, creatorName, options.creatorColor);
   } else if (marked) {
     mark = assistanceMark(item);
     node.append(mark);
@@ -1878,6 +1895,7 @@ function appendCreatorAttribution(
   node: SVGGraphicsElement,
   item: AttributedItem,
   displayName: string,
+  color?: string,
 ): void {
   const assisted = item.assistedBy === "ai";
   const label = assisted ? assistanceLabel(displayName) : `Created by ${displayName}`;
@@ -1888,10 +1906,14 @@ function appendCreatorAttribution(
   node.dataset.creatorInitials = creatorInitials(displayName);
   if (assisted) node.dataset.assistedBy = "ai";
   node.classList.add("has-creator-badge");
-  node.append(creatorBadge(item, displayName));
+  node.append(creatorBadge(item, displayName, color));
 }
 
-export function creatorBadge(item: AttributedItem, displayName: string): SVGGElement {
+export function creatorBadge(
+  item: AttributedItem,
+  displayName: string,
+  color = actorColor(item.createdBy),
+): SVGGElement {
   let x: number;
   let y: number;
   let radius: number;
@@ -1918,7 +1940,7 @@ export function creatorBadge(item: AttributedItem, displayName: string): SVGGEle
   background.setAttribute("cx", String(x));
   background.setAttribute("cy", String(y));
   background.setAttribute("r", String(radius));
-  background.setAttribute("fill", actorColor(item.createdBy));
+  background.setAttribute("fill", color);
   background.setAttribute("stroke", "#ffffff");
   background.setAttribute("stroke-width", "1.5");
   background.setAttribute("vector-effect", "non-scaling-stroke");
@@ -2903,10 +2925,7 @@ function svgElement<K extends keyof SVGElementTagNameMap>(name: K): SVGElementTa
 }
 
 function actorColor(actorId: string): string {
-  const palette = ["#e5484d", "#8e4ec6", "#3e63dd", "#0d9488", "#ca8a04", "#d946ef", "#ea580c"];
-  let hash = 0;
-  for (const char of actorId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return palette[hash % palette.length] ?? (palette[0] as string);
+  return fallbackParticipantColor(actorId).color;
 }
 
 function previewStyle(value: unknown, fallback: string): StrokeStyle {

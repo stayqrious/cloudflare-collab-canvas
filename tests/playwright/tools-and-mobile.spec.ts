@@ -32,7 +32,7 @@ test("line, text, styles, constrained shapes, eraser, and pen input commit canon
   await page.getByTestId("style-button").click();
   const style = page.getByTestId("style-popover");
   await expect(style).toBeVisible();
-  await style.getByRole("button", { name: "Use #f24822" }).click();
+  await style.getByRole("button", { name: "Use #7861a6" }).click();
   await setRange(page, "[data-style-stroke]", 7);
   await setRange(page, "[data-style-opacity]", 55);
   await setRange(page, "[data-style-font]", 40);
@@ -48,7 +48,7 @@ test("line, text, styles, constrained shapes, eraser, and pen input commit canon
     y: lineStart.y + 35,
   });
   await expect(line).toHaveClass(/board-item-line/u);
-  await expect(line).toHaveAttribute("stroke", "#f24822");
+  await expect(line).toHaveAttribute("stroke", "#7861a6");
   await expect(line).toHaveAttribute("stroke-width", "7");
   await expect(line).toHaveAttribute("stroke-opacity", "0.55");
 
@@ -73,7 +73,7 @@ test("line, text, styles, constrained shapes, eraser, and pen input commit canon
   await expect(editor).toHaveCount(0);
   await expect(text).toHaveCount(1);
   await expect(text).toContainText("Shared words");
-  await expect(text).toHaveAttribute("fill", "#f24822");
+  await expect(text).toHaveAttribute("fill", "#7861a6");
   await expect(text).toHaveAttribute("font-size", "40");
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 

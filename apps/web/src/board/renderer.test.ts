@@ -1,8 +1,8 @@
-import { textFontStack } from "@collab/protocol";
+import { fallbackParticipantColor, textFontStack } from "@collab/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_RENDERED_VOTE_TABLES, VOTE_TABLE_STYLE } from "../activities/voting";
-import type { BoardItem, TableItem } from "../types";
+import type { BoardItem, RemotePreview, TableItem } from "../types";
 import { VIDEO_EMBED_WIDTH } from "./links";
 import {
   BoardRenderer,
@@ -93,6 +93,41 @@ describe("lightweight movement previews", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["pencil.start", { points: [[1, 2]] }],
+    ["shape.geometry", { itemKind: "rectangle", geometry: { x: 1, y: 2, width: 3, height: 4 } }],
+  ] as const)(
+    "uses assigned colours for %s previews while preserving custom ink",
+    (kind, payload) => {
+      const remoteLayer = fakeSvgNode("g");
+      const renderer = {
+        remoteLayer,
+        participantColors: new Map([["student", "#416aa6"]]),
+      } as unknown as BoardRenderer;
+      const preview: RemotePreview = {
+        key: "preview",
+        actorId: "student",
+        actorName: "Student",
+        gestureId: "gesture",
+        kind,
+        payload,
+        updatedAt: 0,
+      };
+      BoardRenderer.prototype.renderRemotePreviews.call(renderer, [preview]);
+      expect(remoteLayer.children[0]?.children[0]?.attributes.get("stroke")).toBe("#416aa6");
+      BoardRenderer.prototype.renderRemotePreviews.call(renderer, [
+        { ...preview, payload: { ...payload, style: { color: "#123456" } } },
+      ]);
+      expect(remoteLayer.children[0]?.children[0]?.attributes.get("stroke")).toBe("#123456");
+      BoardRenderer.prototype.renderRemotePreviews.call(renderer, [
+        { ...preview, actorId: "unknown" },
+      ]);
+      expect(remoteLayer.children[0]?.children[0]?.attributes.get("stroke")).toBe(
+        fallbackParticipantColor("unknown").color,
+      );
+    },
+  );
 
   it("renders a lightweight card without creating another video iframe", () => {
     const item: Extract<BoardItem, { kind: "text" }> = {
@@ -186,6 +221,7 @@ describe("lightweight movement previews", () => {
       },
       renderCommentMarkers: vi.fn(),
       renderVoteCounts: vi.fn(),
+      participantColors: new Map<string, string>(),
       resolveCreatorName: () => "",
       selectedIds: new Set<string>(),
       setSelection: vi.fn(),
@@ -266,6 +302,7 @@ describe("lightweight movement previews", () => {
       },
       renderCommentMarkers: vi.fn(),
       renderVoteCounts: vi.fn(),
+      participantColors: new Map<string, string>(),
       resolveCreatorName: () => "",
       selectedIds: new Set<string>(),
       setSelection: vi.fn(),
@@ -539,6 +576,7 @@ describe("assistance marks", () => {
       },
       renderCommentMarkers: vi.fn(),
       renderVoteCounts: vi.fn(),
+      participantColors: new Map<string, string>(),
       resolveCreatorName: () => creatorName,
       selectedIds: new Set<string>(),
       setSelection: vi.fn(),
