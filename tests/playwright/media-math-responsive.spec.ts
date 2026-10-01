@@ -202,9 +202,11 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
     sectionBounds.x + sectionBounds.width - 80,
     sectionBounds.y + sectionBounds.height / 2,
   );
+  const mathCountBefore = await page.locator(".board-math-content").count();
   const compactSectionEditor = page.getByTestId("canvas-text-editor");
   await compactSectionEditor.fill("$$\\displaystyle x$$");
   await compactSectionEditor.press("Control+Enter");
+  await expect(page.locator(".board-math-content")).toHaveCount(mathCountBefore + 1);
   const compactSectionMath = page.locator(".board-math-content").last();
   await expect(compactSectionMath).toHaveAttribute("data-math-state", "ready");
   const compactSectionItem = compactSectionMath.locator("xpath=ancestor::*[@data-item-id][1]");
@@ -281,6 +283,18 @@ test("videos, MathJax text surfaces, and compact canvas controls work together",
   await page.mouse.click(tablePoint.x, tablePoint.y);
   const table = page.locator("#drawing-area .board-item-table");
   await expect(table).toHaveCount(1);
+  // Placement renders optimistically; wait for its acknowledgement before editing.
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        const boardId = location.pathname.split("/").at(-1);
+        const response = await fetch(`/api/v1/boards/${boardId}/export.json`);
+        const body = (await response.json()) as { items: Array<{ kind: string }> };
+        return body.items.filter((item) => item.kind === "table").length;
+      }),
+    )
+    .toBe(1);
+  await page.getByTestId("tool-select").click();
   const firstCell = table.locator('[data-table-cell][data-table-row="0"][data-table-column="0"]');
   await firstCell.dblclick();
   const cellEditor = page.getByTestId("table-cell-editor");

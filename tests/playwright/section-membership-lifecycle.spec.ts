@@ -67,9 +67,17 @@ test("translated copies and Section deletion keep exported membership current", 
   await expect(section).toHaveCount(1);
   await expect(section).toHaveAttribute("data-item-id", /.+/u);
   await expect(section.locator(".zone-fill")).toBeVisible();
-  const sectionId = await section.getAttribute("data-item-id");
-  const sectionBounds = await section.locator(".zone-fill").boundingBox();
-  if (!sectionId || !sectionBounds) throw new Error("The Section was not rendered completely.");
+  // Read both values in one browser task so an ACK redraw cannot detach the node between reads.
+  const { sectionId, sectionBounds } = await section.evaluate((node) => {
+    const fill = node.querySelector(".zone-fill");
+    if (!fill) throw new Error("The Section fill is missing.");
+    const bounds = fill.getBoundingClientRect();
+    return {
+      sectionId: node.getAttribute("data-item-id"),
+      sectionBounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+    };
+  });
+  if (!sectionId) throw new Error("The Section has no item ID.");
 
   const original = await drawShape(
     page,
