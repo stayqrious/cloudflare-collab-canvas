@@ -325,8 +325,8 @@ Run the focused checks relevant to a change during normal development. The full
 requests into `main`; running it locally before opening one avoids a failed
 check. CI also runs the Playwright suite in Chromium and mobile Chromium on every
 pull request, and every browser project on a manual dispatch. Independent browser
-tests run across four workers in CI,
-with separate local test IPs to avoid sharing board-creation rate limits. CI installs
+tests run across three workers in CI,
+with separate local test IPs to avoid sharing board-creation and invite-claim rate limits. CI installs
 only Chromium’s headless shell for pull requests. No test cases are omitted to
 achieve the speedup.
 
