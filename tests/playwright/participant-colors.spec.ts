@@ -53,6 +53,14 @@ test("join colours apply to drawing, text, notes and cursors and survive reload"
       await expect(note).toBeVisible();
       await note.fill(`Note ${index + 1}`);
       await target.keyboard.press("Escape");
+      await expect(note).toHaveCount(0);
+      // Wait for the committed note and both clients to converge before the
+      // next participant draws; the save chip may still show the previous ACK.
+      for (const participant of [page, student]) {
+        await expect(participant.locator("#drawing-area [data-item-id]")).toHaveCount(
+          (index + 1) * 3,
+        );
+      }
       await expect(target.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
     }
     const saved = await bootstrap(page);
