@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createBoard, createInvite, isolatedContextOptions } from "./helpers";
 
-test("viewer eye badges and pen cursors follow live role and tool changes", async ({
+test("viewer lock badges and pen cursors follow live role and tool changes", async ({
   browser,
   page,
 }, testInfo) => {
@@ -47,11 +47,18 @@ test("viewer eye badges and pen cursors follow live role and tool changes", asyn
     await expect(page.locator("#drawing-area [data-item-id]")).toHaveCount(1);
     await expect(student.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 
-    // A demoted student must show the eye, even if their last presence tool was Pencil.
+    // A demoted student must show the lock, even if their last presence tool was Pencil.
     await drawer.getByRole("combobox").selectOption("viewer");
     await expect(remote).toHaveAttribute("data-cursor", "viewer");
     await expect(remote.locator(".participant-cursor-viewer-badge")).toBeVisible();
     await expect(student.getByTestId("tool-pencil")).toBeDisabled();
+    const item = student.locator("#drawing-area [data-item-id]");
+    const before = await item.getAttribute("transform");
+    await item.click();
+    await expect(student.locator(".selection-outline")).toBeVisible();
+    await student.keyboard.press("Delete");
+    await expect(item).toHaveCount(1);
+    expect(await item.getAttribute("transform")).toBe(before);
     await student.getByTestId("tool-pan").click();
     await expect(canvas).toHaveCSS("cursor", "grab");
     await student.getByTestId("tool-select").click();

@@ -58,7 +58,7 @@ import {
   PEN_CURSOR_PATH,
   POINTER_CURSOR_PATH,
   VIEWER_CURSOR,
-  VIEWER_EYE_PATH,
+  VIEWER_LOCK_PATH,
 } from "./cursor-icons";
 import {
   configureVideoFrame,
@@ -873,17 +873,12 @@ export class BoardRenderer {
         background.setAttribute("rx", "8");
         background.setAttribute("fill", "#fff");
         background.setAttribute("stroke", "var(--cursor-color)");
-        const eye = svgElement("path");
-        eye.setAttribute("d", VIEWER_EYE_PATH);
-        eye.setAttribute("fill", "none");
-        eye.setAttribute("stroke", "var(--cursor-color)");
-        eye.setAttribute("stroke-width", "1.4");
-        const pupil = svgElement("circle");
-        pupil.setAttribute("cx", "23");
-        pupil.setAttribute("cy", "5");
-        pupil.setAttribute("r", "2");
-        pupil.setAttribute("fill", "var(--cursor-color)");
-        badge.append(title, background, eye, pupil);
+        const lock = svgElement("path");
+        lock.setAttribute("d", VIEWER_LOCK_PATH);
+        lock.setAttribute("fill", "none");
+        lock.setAttribute("stroke", "var(--cursor-color)");
+        lock.setAttribute("stroke-width", "1.4");
+        badge.append(title, background, lock);
         group.append(badge);
       }
 
