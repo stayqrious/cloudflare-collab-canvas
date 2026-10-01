@@ -812,7 +812,7 @@ button:disabled {
 }
 
 .board-canvas[data-tool="pencil"] {
-  cursor: crosshair;
+  cursor: var(--pen-cursor), default;
 }
 .board-canvas[data-tool="line"],
 .board-canvas[data-tool="rectangle"],
@@ -840,6 +840,9 @@ button:disabled {
 }
 .board-canvas[data-tool="pan"]:active {
   cursor: grabbing;
+}
+.board-canvas[data-role="viewer"]:not([data-tool="pan"]) {
+  cursor: var(--viewer-cursor), default;
 }
 
 .canvas-background {

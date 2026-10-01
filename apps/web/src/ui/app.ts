@@ -4607,6 +4607,7 @@ export class BoardApp {
   }
 
   private handlePresence(values: Presence[], replace: boolean): void {
+    const previous = new Map(this.presences);
     const knownActorIds = new Set([...this.presences.values()].map((presence) => presence.id));
     const hasNewParticipant = values.some((presence) => !knownActorIds.has(presence.id));
     this.rememberCreators(values);
@@ -4616,7 +4617,17 @@ export class BoardApp {
     for (const presence of values) {
       const key = presence.connectionId ?? presence.id;
       if (presence.cursor === null && values.length === 1 && !replace) this.presences.delete(key);
-      else this.presences.set(key, presence);
+      else {
+        const existing = previous.get(key);
+        this.presences.set(key, {
+          ...presence,
+          role: presence.role ?? existing?.role,
+          activeTool: presence.activeTool ?? existing?.activeTool,
+          // Membership snapshots carry roles but no cursor position. Keep the last
+          // position only for connections still present in the authoritative snapshot.
+          cursor: replace ? (presence.cursor ?? existing?.cursor) : presence.cursor,
+        });
+      }
     }
     if (![...this.presences.values()].some((presence) => presence.id === this.bootstrap.actor.id)) {
       this.presences.set(this.bootstrap.actor.id, {
@@ -7425,6 +7436,7 @@ export class BoardApp {
       this.settingsBody.querySelector<HTMLButtonElement>("[data-archive-board]");
     if (archiveButton) archiveButton.disabled = !this.canArchiveBoard();
     this.renderer.svg.setAttribute("aria-readonly", String(!canEdit));
+    this.renderer.svg.dataset.role = this.bootstrap.actor.role;
     this.tools.reconcileSelection();
     this.updateHistoryControls();
     this.updateStatus();
