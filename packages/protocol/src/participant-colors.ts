@@ -15,3 +15,10 @@ export const PARTICIPANT_COLORS = [
 export function participantColor(index: number): (typeof PARTICIPANT_COLORS)[number] {
   return PARTICIPANT_COLORS[index % PARTICIPANT_COLORS.length] ?? PARTICIPANT_COLORS[0];
 }
+
+/** Stable compatibility/overflow colour when no durable assignment is available. */
+export function fallbackParticipantColor(actorId: string): (typeof PARTICIPANT_COLORS)[number] {
+  let hash = 0;
+  for (const character of actorId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return participantColor(hash);
+}

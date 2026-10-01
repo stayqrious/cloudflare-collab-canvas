@@ -3,10 +3,15 @@
 import { evictDurableObject, reset, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { canonicalSnapshotByteLengthFromParts } from "@collab/board-core";
-import { DEFAULT_BOARD_FEATURES, PARTICIPANT_COLORS } from "@collab/protocol";
+import {
+  DEFAULT_BOARD_FEATURES,
+  fallbackParticipantColor,
+  PARTICIPANT_COLORS,
+} from "@collab/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_CLASSROOM_IMPORT_ENCODED_CHARS, MAX_CLASSROOM_IMPORT_ITEMS } from "./classroom-import";
 import { bytesToBase64Url, hmacSha256, sha256, sha256Base64Url, utf8 } from "./crypto";
+import { assignedParticipantColors, MAX_PARTICIPANT_COLORS } from "./participant-colors";
 import {
   backfillSnapshotAccounting,
   captureSnapshot,
@@ -599,6 +604,125 @@ describe("BoardRoom initialization", () => {
           .one().count,
     );
     expect(count).toBe(ids.length);
+  });
+
+  it("batches ten thousand colour lookups and caps public-viewer colour history", async () => {
+    const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    const ids = Array.from(
+      { length: MAX_PARTICIPANT_COLORS },
+      (_, index) => `a_${String(index).padStart(22, "0")}`,
+    );
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      const queries: string[] = [];
+      const sql = new Proxy(state.storage.sql, {
+        get(target, key) {
+          if (key === "exec")
+            return (query: string, ...bindings: SqlStorageValue[]) => {
+              queries.push(query);
+              return target.exec(query, ...bindings);
+            };
+          return Reflect.get(target, key, target);
+        },
+      });
+      const storage = {
+        sql,
+        transactionSync: <T>(callback: () => T) => state.storage.transactionSync(callback),
+      };
+      const first = assignedParticipantColors(storage, [...ids, ids[0] ?? ""]);
+      const allocationQueries = queries.length;
+      queries.length = 0;
+      const repeated = assignedParticipantColors(storage, ids);
+      return {
+        size: first.size,
+        allocationQueries,
+        repeatQueries: queries.length,
+        first: first.get(ids[0] ?? ""),
+        last: first.get(ids.at(-1) ?? ""),
+        stable: [...first].every(([id, color]) => repeated.get(id)?.color === color.color),
+      };
+    });
+    expect(result).toMatchObject({
+      size: MAX_PARTICIPANT_COLORS,
+      allocationQueries: 3,
+      repeatQueries: 1,
+      stable: true,
+      first: PARTICIPANT_COLORS[0],
+      last: PARTICIPANT_COLORS[9],
+    });
+    for (const id of [actorId, editorId]) {
+      const response = await stub.fetch(
+        internalActorRequest(id, `/api/v1/boards/${boardId}/bootstrap`),
+      );
+      expect(response.status).toBe(200);
+      const fallback = fallbackParticipantColor(id);
+      expect(await response.json()).toMatchObject({
+        actor: { color: fallback.color, stickyColor: fallback.stickyColor },
+      });
+    }
+    await evictDurableObject(stub);
+    const response = await stub.fetch(internalRequest(`/api/v1/boards/${boardId}/bootstrap`));
+    expect(await response.json()).toMatchObject({
+      actor: { color: fallbackParticipantColor(actorId).color },
+    });
+    const count = await runInDurableObject(
+      stub,
+      (_instance, state) =>
+        state.storage.sql
+          .exec<{ count: number }>("SELECT COUNT(*) AS count FROM participant_colors")
+          .one().count,
+    );
+    expect(count).toBe(MAX_PARTICIPANT_COLORS);
+  });
+
+  it("upgrades old socket colours once and retains the cache through hibernation", async () => {
+    const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    const owner = await connect(stub, actorId);
+    const viewer = await connect(stub, editorId);
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const socket of state.getWebSockets()) {
+        const attachment = socket.deserializeAttachment();
+        expect(attachment.color).toMatch(/^#[0-9a-f]{6}$/u);
+        if (attachment.actorId === actorId) {
+          delete attachment.color;
+          socket.serializeAttachment(attachment);
+        }
+      }
+    });
+    await evictDurableObject(stub, { webSockets: "hibernate" });
+    owner.socket.send(
+      JSON.stringify({
+        v: 1,
+        t: "client.presence",
+        cursor: { x: 10, y: 20 },
+        activeTool: "pencil",
+      }),
+    );
+    expect(await viewer.next((frame) => frame.t === "server.presence")).toMatchObject({
+      color: PARTICIPANT_COLORS[0]?.color,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const socket of state.getWebSockets())
+        expect(socket.deserializeAttachment().color).toBeTruthy();
+      // Any colour lookup now fails, proving subsequent presence uses the attachment.
+      state.storage.sql.exec("ALTER TABLE participant_colors RENAME TO unavailable_colours");
+    });
+    await evictDurableObject(stub, { webSockets: "hibernate" });
+    owner.socket.send(
+      JSON.stringify({
+        v: 1,
+        t: "client.presence",
+        cursor: { x: 30, y: 40 },
+        activeTool: "pencil",
+      }),
+    );
+    expect(await viewer.next((frame) => frame.t === "server.presence")).toMatchObject({
+      color: PARTICIPANT_COLORS[0]?.color,
+      cursor: { x: 30, y: 40 },
+    });
+    owner.socket.close();
+    viewer.socket.close();
   });
 
   it("fills additive feature defaults for boards written by older workers", async () => {

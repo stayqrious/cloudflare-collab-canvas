@@ -8,7 +8,7 @@ import {
   ZONE_TITLE_PADDING,
   zoneTitleBandHeight,
 } from "@collab/geometry";
-import { PARTICIPANT_COLORS, resolveTextFontWeight, textFontStack } from "@collab/protocol";
+import { fallbackParticipantColor, resolveTextFontWeight, textFontStack } from "@collab/protocol";
 import { STAMP_SVG_PATHS } from "@collab/svg-export";
 import { summarizeBoardVotes, type VoteSummary } from "../activities/voting";
 import { clearTypesetMath, containsMathMarkup, splitMathMarkup, typesetMath } from "../mathjax";
@@ -760,7 +760,7 @@ export class BoardRenderer {
       const group = svgElement("g");
       group.dataset.previewKey = preview.key;
       group.classList.add("remote-preview");
-      const color = actorColor(preview.actorId);
+      const color = this.participantColors.get(preview.actorId) ?? actorColor(preview.actorId);
       const payload = preview.payload;
 
       if (preview.kind === "pencil.start" || preview.kind === "pencil.segment") {
@@ -2879,10 +2879,7 @@ function svgElement<K extends keyof SVGElementTagNameMap>(name: K): SVGElementTa
 }
 
 function actorColor(actorId: string): string {
-  const palette = PARTICIPANT_COLORS.map(({ color }) => color);
-  let hash = 0;
-  for (const char of actorId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return palette[hash % palette.length] ?? (palette[0] as string);
+  return fallbackParticipantColor(actorId).color;
 }
 
 function previewStyle(value: unknown, fallback: string): StrokeStyle {

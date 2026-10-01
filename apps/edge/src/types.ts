@@ -48,6 +48,8 @@ export interface SocketAttachment {
   sessionExpiresAt: number;
   clientInstanceId: string;
   connectedAt: number;
+  /** Missing only on sockets established before participant colours were introduced. */
+  color?: string;
   state: "syncing" | "live";
 }
 
