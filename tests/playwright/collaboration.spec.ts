@@ -1,37 +1,5 @@
-import {
-  type BrowserContextOptions,
-  expect,
-  type Page,
-  type TestInfo,
-  test,
-} from "@playwright/test";
-
-function isolatedContextOptions(testInfo: TestInfo): BrowserContextOptions {
-  return {
-    ignoreHTTPSErrors: true,
-    ...(testInfo.project.use.extraHTTPHeaders === undefined
-      ? {}
-      : { extraHTTPHeaders: testInfo.project.use.extraHTTPHeaders }),
-  };
-}
-
-async function createBoard(page: Page, title: string): Promise<string> {
-  await page.goto("/");
-  await expect(page.getByTestId("landing-page")).toBeVisible();
-  await page.getByRole("textbox", { name: "Board title" }).fill(title);
-  await page.getByRole("button", { name: /Open a fresh canvas/u }).click();
-
-  const ready = page.getByRole("dialog");
-  await expect(ready.getByRole("heading", { name: "Your canvas is ready" })).toBeVisible();
-  const link = ready.getByRole("link", { name: "Continue to board" });
-  const boardUrl = await link.getAttribute("href");
-  expect(boardUrl).toMatch(/\/b\/b_[A-Za-z\d_-]{22}$/u);
-  await link.click();
-  await expect(page).toHaveURL(/\/b\/b_[A-Za-z\d_-]{22}$/u);
-  await expect(page.getByTestId("board-shell")).toBeVisible();
-  await expect(page.locator("#board-canvas")).toHaveAttribute("data-ready", "true");
-  return boardUrl as string;
-}
+import { expect, type Page, test } from "@playwright/test";
+import { createBoard, isolatedContextOptions } from "./helpers";
 
 async function drawGesture(page: Page, toolName: string, offset = 0): Promise<number> {
   const canvas = page.locator("#board-canvas");
@@ -86,11 +54,14 @@ test("creates, saves, undoes, redoes, and exports authoritative content", async 
   });
   const boardUrl = await createBoard(page, "Geometry studio");
   const itemCount = await drawGesture(page, "Rectangle");
+  await expect(page.getByTestId("undo-button")).toBeEnabled();
+  await page.locator("#board-canvas").focus();
 
   await page.keyboard.press("Control+z");
   await expect.poll(() => page.locator("#drawing-area [data-item-id]").count()).toBe(itemCount - 1);
   await expect(page.getByTestId("save-status")).toContainText("Saved");
 
+  await expect(page.getByTestId("redo-button")).toBeEnabled();
   await page.keyboard.press("Control+Shift+z");
   await expect.poll(() => page.locator("#drawing-area [data-item-id]").count()).toBe(itemCount);
 

@@ -8,34 +8,36 @@ import {
   test,
 } from "@playwright/test";
 
+function localTestHeaders(
+  testInfo: TestInfo,
+  claimAddressLastOctet?: number,
+): Record<string, string> | undefined {
+  const headers = testInfo.project.use.extraHTTPHeaders;
+  if (!headers?.["CF-Connecting-IP"]) return headers;
+  // Each local test (including repeats/retries) is an independent classroom.
+  // Sharing five-claim buckets across tests creates false failures under load.
+  const key = `${testInfo.project.name}:${testInfo.testId}:${testInfo.repeatEachIndex}:${testInfo.retry}:${claimAddressLastOctet ?? "default"}`;
+  let hash = 2166136261;
+  for (const character of key) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return {
+    ...headers,
+    "CF-Connecting-IP": `10.${(hash >>> 16) & 255}.${(hash >>> 8) & 255}.${hash & 255}`,
+  };
+}
+
 export function isolatedContextOptions(
   testInfo: TestInfo,
   claimAddressLastOctet?: number,
 ): BrowserContextOptions {
-  const configuredHeaders = testInfo.project.use.extraHTTPHeaders;
-  if (configuredHeaders === undefined) return { ignoreHTTPSErrors: true };
   return {
     ignoreHTTPSErrors: true,
-    extraHTTPHeaders: {
-      ...configuredHeaders,
-      ...(claimAddressLastOctet === undefined
-        ? {}
-        : { "CF-Connecting-IP": `198.18.10.${claimAddressLastOctet}` }),
-    },
+    extraHTTPHeaders: localTestHeaders(testInfo, claimAddressLastOctet),
   };
 }
 
 export async function createBoard(page: Page, title: string): Promise<string> {
-  const info = test.info();
-  const headers = info.project.use.extraHTTPHeaders;
-  const address = headers?.["CF-Connecting-IP"];
-  if (address) {
-    // Local workers represent independent users. Keep their board-creation buckets
-    // separate when tests run concurrently, without changing production limits.
-    const octets = address.split(".");
-    octets[2] = String(info.parallelIndex + 1);
-    await page.setExtraHTTPHeaders({ ...headers, "CF-Connecting-IP": octets.join(".") });
-  }
+  const headers = localTestHeaders(test.info());
+  if (headers) await page.setExtraHTTPHeaders(headers);
   await page.goto("/");
   await expect(page.getByTestId("landing-page")).toBeVisible();
   await page.getByRole("textbox", { name: "Board title" }).fill(title);
