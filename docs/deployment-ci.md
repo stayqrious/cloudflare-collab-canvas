@@ -131,11 +131,12 @@ This avoids independent builds racing to deploy different commits.
 Create GitHub environments `staging` and `production`, with the variables and
 secrets in [launch.md](launch.md). Restrict production deployment to `main`.
 `.github/workflows/deploy.yml` validates every `staging`/`main` push with
-`npm run check`, then deploys that exact SHA through the shared command. Staging
+`npm run check` and generated binding-type verification, then deploys that exact SHA through the shared command. Staging
 has Turnstile disabled; production requires a real widget's site and secret keys.
 
-`.github/workflows/ci.yml` validates pull requests into `main` and pushes to
-`main`, including binding-type verification. Pull requests run Chromium and
+`.github/workflows/ci.yml` validates pull requests into `main`, including binding-type
+verification. Pushes use the Deploy workflow’s validation job, avoiding a duplicate
+full check on every merge. Pull requests run Chromium and
 mobile Chromium E2E; manual dispatch runs all browser projects. Require the
 `validate` and `browser` pull-request checks when using this provider. Newer
 runs supersede older automatic runs for the same event/ref.

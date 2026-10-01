@@ -3,8 +3,6 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -33,7 +31,7 @@ jobs:
   # Pull requests run the browser suite in Chromium and mobile Chromium, which covers the new
   # surface area on every change; a manual dispatch runs every browser project.
   browser:
-    if: github.event_name == 'workflow_dispatch' || (vars.AUTOMATION_PROVIDER != 'cloudflare' && github.event_name != 'push')
+    if: vars.AUTOMATION_PROVIDER != 'cloudflare' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -46,7 +44,7 @@ jobs:
       - name: Configure Wrangler diagnostic log
         run: echo "WRANGLER_LOG_PATH=$RUNNER_TEMP/spacescale-wrangler.log" >> "$GITHUB_ENV"
       - if: github.event_name == 'pull_request'
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium --only-shell
       - if: github.event_name == 'pull_request'
         run: npm run test:e2e -- --project=chromium --project=mobile-chromium --max-failures=5
       - if: github.event_name == 'workflow_dispatch'

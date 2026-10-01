@@ -27,6 +27,8 @@ describe("local development configuration", () => {
     expect(playwright).toContain("cwd: repositoryRoot");
     expect(manifest.scripts?.["test:e2e"]).toContain("npm run build:web");
     expect(manifest.scripts?.["test:edge"]).toContain("npm run build:web");
+    expect(manifest.scripts?.check).toContain("npm run build && npm run test:edge:run");
+    expect(manifest.scripts?.["test:edge:run"]).not.toContain("build:web");
     expect(classroomTest).toContain('".generated/.dev.vars"');
     expect(edgeTestConfig).toContain("miniflare: { bindings: localBindings }");
     expect(edgeTestConfig).toContain('"./.generated/.dev.vars"');

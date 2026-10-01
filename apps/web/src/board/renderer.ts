@@ -53,6 +53,14 @@ import type {
   ZoneStyle,
 } from "../types";
 import {
+  PEN_CURSOR,
+  PEN_CURSOR_DETAIL,
+  PEN_CURSOR_PATH,
+  POINTER_CURSOR_PATH,
+  VIEWER_CURSOR,
+  VIEWER_LOCK_PATH,
+} from "./cursor-icons";
+import {
   configureVideoFrame,
   tokenizeSafeLinks,
   VIDEO_EMBED_HEIGHT,
@@ -395,6 +403,8 @@ export class BoardRenderer {
     );
     container.append(this.svg);
 
+    this.svg.style.setProperty("--pen-cursor", PEN_CURSOR);
+    this.svg.style.setProperty("--viewer-cursor", VIEWER_CURSOR);
     this.viewport = new CanvasViewport(this.svg);
     this.model.subscribe((ids) => this.render(ids));
     this.render(null);
@@ -826,15 +836,51 @@ export class BoardRenderer {
       if (presence.id === ownActorId || !presence.cursor) continue;
       const group = svgElement("g");
       group.classList.add("participant-cursor");
+      group.dataset.role = presence.role ?? "";
+      const isViewer = presence.role === "viewer";
+      const isPen = !isViewer && presence.activeTool === "pencil";
+      group.dataset.cursor = isViewer ? "viewer" : isPen ? "pen" : "pointer";
       group.setAttribute("transform", `translate(${presence.cursor.x} ${presence.cursor.y})`);
       group.style.setProperty("--cursor-color", presence.color ?? actorColor(presence.id));
 
       const pointer = svgElement("path");
-      pointer.setAttribute("d", "M 0 0 L 4.5 13 L 7.5 7.5 L 13 5 Z");
+      pointer.setAttribute("d", isPen ? PEN_CURSOR_PATH : POINTER_CURSOR_PATH);
       pointer.setAttribute("fill", "var(--cursor-color)");
       pointer.setAttribute("stroke", "#fff");
       pointer.setAttribute("stroke-width", "1.5");
       pointer.setAttribute("vector-effect", "non-scaling-stroke");
+      pointer.setAttribute("stroke-linejoin", "round");
+      group.append(pointer);
+
+      if (isPen) {
+        const detail = svgElement("path");
+        detail.setAttribute("d", PEN_CURSOR_DETAIL);
+        detail.setAttribute("fill", "none");
+        detail.setAttribute("stroke", "#fff");
+        detail.setAttribute("stroke-width", "1.5");
+        group.append(detail);
+      }
+      if (isViewer) {
+        const badge = svgElement("g");
+        badge.classList.add("participant-cursor-viewer-badge");
+        const title = svgElement("title");
+        title.textContent = "Viewer · view only";
+        const background = svgElement("rect");
+        background.setAttribute("x", "15");
+        background.setAttribute("y", "-3");
+        background.setAttribute("width", "16");
+        background.setAttribute("height", "16");
+        background.setAttribute("rx", "8");
+        background.setAttribute("fill", "#fff");
+        background.setAttribute("stroke", "var(--cursor-color)");
+        const lock = svgElement("path");
+        lock.setAttribute("d", VIEWER_LOCK_PATH);
+        lock.setAttribute("fill", "none");
+        lock.setAttribute("stroke", "var(--cursor-color)");
+        lock.setAttribute("stroke-width", "1.4");
+        badge.append(title, background, lock);
+        group.append(badge);
+      }
 
       const label = svgElement("text");
       label.setAttribute("x", "11");
@@ -845,7 +891,7 @@ export class BoardRenderer {
       label.setAttribute("stroke-width", "4");
       label.setAttribute("vector-effect", "non-scaling-stroke");
       label.textContent = presence.displayName;
-      group.append(pointer, label);
+      group.append(label);
       this.cursorLayer.append(group);
     }
   }

@@ -65,6 +65,8 @@ test("translated copies and Section deletion keep exported membership current", 
 
   const section = page.locator("#drawing-area .board-item-zone");
   await expect(section).toHaveCount(1);
+  await expect(section).toHaveAttribute("data-item-id", /.+/u);
+  await expect(section.locator(".zone-fill")).toBeVisible();
   const sectionId = await section.getAttribute("data-item-id");
   const sectionBounds = await section.locator(".zone-fill").boundingBox();
   if (!sectionId || !sectionBounds) throw new Error("The Section was not rendered completely.");
@@ -249,15 +251,23 @@ test("a dragged Section covers the swept area and binds the items inside it", as
 
   const section = page.locator("#drawing-area .board-item-zone");
   await expect(section).toHaveCount(1);
+  await expect(section).toHaveAttribute("data-item-id", /.+/u);
   const sectionId = await section.getAttribute("data-item-id");
-  const rendered = await section.locator(".zone-fill").boundingBox();
-  if (!sectionId || !rendered) throw new Error("The dragged Section was not rendered completely.");
-
-  // The Section covers what the pointer swept out, not the default-size drop.
-  expect(Math.abs(rendered.x - sweep.x)).toBeLessThanOrEqual(4);
-  expect(Math.abs(rendered.y - sweep.y)).toBeLessThanOrEqual(4);
-  expect(Math.abs(rendered.width - sweep.width)).toBeLessThanOrEqual(4);
-  expect(Math.abs(rendered.height - sweep.height)).toBeLessThanOrEqual(4);
+  // A pending title can still render a preview. Wait for a durable ID and the
+  // next layout before comparing the swept area, without weakening its bounds.
+  await expect
+    .poll(() =>
+      section.locator(".zone-fill").evaluate((fill, expected) => {
+        const bounds = fill.getBoundingClientRect();
+        return Math.max(
+          Math.abs(bounds.x - expected.x),
+          Math.abs(bounds.y - expected.y),
+          Math.abs(bounds.width - expected.width),
+          Math.abs(bounds.height - expected.height),
+        );
+      }, sweep),
+    )
+    .toBeLessThanOrEqual(4);
 
   const exported = await exportRelationships(page, boardUrl);
   expect(exported.status).toBe(200);

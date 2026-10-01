@@ -301,11 +301,10 @@ npx playwright install
 npm run test:e2e
 ```
 
-The E2E suite depends on a locally started HTTPS Cloudflare Worker. On flaky or
-resource-constrained infrastructure, a Worker startup or connection failure can
-cascade into many connection-refused or TLS errors and skipped tests. If that
-happens, rerun the affected spec or the full suite on stable infrastructure;
-repeatable assertion failures should still be treated as product regressions.
+The E2E suite starts a local HTTPS Cloudflare Worker. Keep the lockfile’s Wrangler
+version: older dev proxies can exit after a dropped connection and cause cascading
+connection-refused failures. CI retains Wrangler logs and failure screenshots;
+failed tests retry once with a full trace and video for diagnosis.
 
 Useful checks:
 
@@ -325,8 +324,18 @@ Run the focused checks relevant to a change during normal development. The full
 `npm run check` runs automatically in CI and is the required gate for pull
 requests into `main`; running it locally before opening one avoids a failed
 check. CI also runs the Playwright suite in Chromium and mobile Chromium on every
-pull request, and every browser project on a manual dispatch. `npm run build` verifies the production
-bundle with `wrangler deploy --dry-run`; on a checkout without deployment details
+pull request, and every browser project on a manual dispatch. Independent browser
+tests run across three workers in CI,
+with separate local test IPs to avoid sharing board-creation and invite-claim rate limits. CI installs
+only Chromium’s headless shell for pull requests. No test cases are omitted to
+achieve the speedup.
+
+`npm run check` builds the frontend once, then `test:edge:run` reuses that build.
+Use `npm run test:edge` when running Worker tests on their own; it builds first.
+Main/staging pushes run validation in the Deploy workflow, without a second CI
+validation job. Generated binding checks still gate deployment.
+
+`npm run build` verifies the production bundle with `wrangler deploy --dry-run`; on a checkout without deployment details
 it substitutes non-deployable `dry-run` placeholders for `DEPLOYMENT_NAME`,
 `APP_HOSTNAME`, and `TURNSTILE_SITE_KEY`, while `deployment:init` keeps strict
 validation.
