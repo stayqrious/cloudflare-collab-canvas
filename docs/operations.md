@@ -106,9 +106,9 @@ Pushes to `staging` and `main` deploy the pushed SHA directly at 100% after
 idempotent bucket provisioning and a web build. The only automatic post-deploy
 check is a small five-attempt health probe. Staging still accepts direct pushes;
 `main` is reached through a pull request that requires an approval and the
-`validate` job, so the full repository check and approval gate the merge rather
-than the deployment. The deployment does not wait for the repeated CI run on the
-resulting `main` push. Playwright, load testing, attestations, candidate
+`validate` job. The Deploy workflow also runs the full repository check and
+binding-type verification for the exact pushed SHA before deployment, covering
+direct pushes too. The CI workflow does not repeat that validation on pushes. Playwright, load testing, attestations, candidate
 traffic, convergence, and automated rollback remain intentionally outside the
 path.
 

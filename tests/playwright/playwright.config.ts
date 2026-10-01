@@ -13,16 +13,17 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   timeout: 30_000,
   expect: { timeout: 8_000 },
-  fullyParallel: false,
+  fullyParallel: true,
+  workers: process.env.CI ? 4 : undefined,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: baseUrl,
     ignoreHTTPSErrors: true,
-    trace: "retain-on-failure",
+    trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    video: process.env.CI ? "on-first-retry" : "off",
   },
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
@@ -33,7 +34,8 @@ export default defineConfig({
           cwd: repositoryRoot,
           url: `${localBaseUrl}/healthz`,
           ignoreHTTPSErrors: true,
-          stdout: "pipe",
+          // Keep detailed server output in WRANGLER_LOG_PATH, not the Actions console.
+          stdout: "ignore",
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
         },

@@ -12,7 +12,7 @@ describe("deployment and CI workflows", () => {
   it("runs validation automatically and browser E2E on pull requests and dispatch", () => {
     expect(ci).toContain("workflow_dispatch:");
     expect(ci).toContain("pull_request:\n    branches: [main]");
-    expect(ci).toContain("push:\n    branches: [main]");
+    expect(ci).not.toContain("  push:");
     expect(ci).toContain(
       "group: ci-$" + "{{ github.workflow }}-$" + "{{ github.event_name }}-$" + "{{ github.ref }}",
     );
@@ -34,6 +34,7 @@ describe("deployment and CI workflows", () => {
     expect(deploy).toContain("  validate:\n");
     expect(occurrences(deploy, "needs: validate")).toBe(2);
     expect(occurrences(deploy, "npm run check")).toBe(1);
+    expect(deploy).toContain("npm run cf:types -- --check");
     expect(deploy).toContain("if: github.ref == 'refs/heads/staging'");
     expect(deploy).toContain("if: github.ref == 'refs/heads/main'");
   });
