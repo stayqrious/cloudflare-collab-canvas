@@ -413,12 +413,15 @@ export type Bootstrap = {
   };
   actor: Actor & {
     role: Role;
+    color?: string;
+    stickyColor?: string;
     historyVersion: number;
     sessionExpiresAt: number;
     canUndo?: boolean;
     canRedo?: boolean;
   };
   creators: Actor[];
+  participantColors?: Record<string, string>;
   limits: {
     maxConnections: number;
     maxItems: number;

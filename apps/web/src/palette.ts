@@ -1,3 +1,5 @@
+import { PARTICIPANT_COLORS } from "@collab/protocol";
+
 export const DRAWING_COLOR_VALUES = {
   ink: "#1e1e1e",
   red: "#f24822",
@@ -9,16 +11,7 @@ export const DRAWING_COLOR_VALUES = {
   white: "#ffffff",
 } as const;
 
-export const DRAWING_COLORS = [
-  { name: "Ink", value: DRAWING_COLOR_VALUES.ink },
-  { name: "Red", value: DRAWING_COLOR_VALUES.red },
-  { name: "Orange", value: DRAWING_COLOR_VALUES.orange },
-  { name: "Yellow", value: DRAWING_COLOR_VALUES.yellow },
-  { name: "Green", value: DRAWING_COLOR_VALUES.green },
-  { name: "Blue", value: DRAWING_COLOR_VALUES.blue },
-  { name: "Purple", value: DRAWING_COLOR_VALUES.purple },
-  { name: "White", value: DRAWING_COLOR_VALUES.white },
-] as const;
+export const DRAWING_COLORS = PARTICIPANT_COLORS.map(({ name, color }) => ({ name, value: color }));
 
 export const STICKY_COLOR_VALUES = {
   yellow: "#ffe299",
@@ -29,14 +22,10 @@ export const STICKY_COLOR_VALUES = {
   slate: "#afbccf",
 } as const;
 
-export const STICKY_COLORS = [
-  { name: "Yellow", value: STICKY_COLOR_VALUES.yellow },
-  { name: "Coral", value: STICKY_COLOR_VALUES.coral },
-  { name: "Lavender", value: STICKY_COLOR_VALUES.lavender },
-  { name: "Mint", value: STICKY_COLOR_VALUES.mint },
-  { name: "Sky", value: STICKY_COLOR_VALUES.sky },
-  { name: "Slate", value: STICKY_COLOR_VALUES.slate },
-] as const;
+export const STICKY_COLORS = PARTICIPANT_COLORS.map(({ name, stickyColor }) => ({
+  name,
+  value: stickyColor,
+}));
 
 export const UI_COLORS = {
   canvas: "#f5f5f5",

@@ -102,7 +102,7 @@ test("stamps converge, move, copy, delete, persist, and export", async ({
     await expect(heartChoice).toHaveAttribute("aria-label", "Use heart stamp");
     await heartChoice.click();
     await expect(heartChoice).toHaveAttribute("aria-pressed", "true");
-    await page.locator('[data-color="#874fff"]').click();
+    await page.locator('[data-color="#7861a6"]').click();
 
     const heartPoint = await canvasPoint(page, 0.72, 0.36);
     const dismissal = page.evaluate(
@@ -157,7 +157,7 @@ test("stamps converge, move, copy, delete, persist, and export", async ({
     await expect(viewerStamps).toHaveCount(1);
     const ownerHeart = ownerStamps.first();
     await expect(ownerHeart).toHaveAttribute("aria-label", "Heart stamp");
-    await expect(ownerHeart.locator("path")).toHaveAttribute("fill", "#874fff");
+    await expect(ownerHeart.locator("path")).toHaveAttribute("fill", "#7861a6");
     const heartId = await ownerHeart.getAttribute("data-item-id");
     expect(heartId).toBeTruthy();
 

@@ -3,7 +3,7 @@
 import { evictDurableObject, reset, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { canonicalSnapshotByteLengthFromParts } from "@collab/board-core";
-import { DEFAULT_BOARD_FEATURES } from "@collab/protocol";
+import { DEFAULT_BOARD_FEATURES, PARTICIPANT_COLORS } from "@collab/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_CLASSROOM_IMPORT_ENCODED_CHARS, MAX_CLASSROOM_IMPORT_ITEMS } from "./classroom-import";
 import { bytesToBase64Url, hmacSha256, sha256, sha256Base64Url, utf8 } from "./crypto";
@@ -537,7 +537,7 @@ describe("BoardRoom initialization", () => {
         .one(),
     }));
     expect(state).toEqual({
-      migrations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      migrations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
       boards: 1,
       owners: 1,
       classroomMode: 0,
@@ -555,6 +555,50 @@ describe("BoardRoom initialization", () => {
       board: { features: { images: true, rectangle: true, protractor: true } },
       creators: [],
     });
+  });
+
+  it("assigns ten distinct join colours, cycles, and retains them after hibernation", async () => {
+    const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    const ids = [
+      actorId,
+      ...Array.from({ length: 11 }, (_, index) => `a_${String(index + 1).padStart(22, "0")}`),
+    ];
+    const assigned: Array<{ color: string; stickyColor: string }> = [];
+    for (const id of ids) {
+      const response = await stub.fetch(
+        internalActorRequest(id, `/api/v1/boards/${boardId}/bootstrap`),
+      );
+      expect(response.status).toBe(200);
+      const value = (await response.json()) as { actor: { color: string; stickyColor: string } };
+      assigned.push(value.actor);
+    }
+    expect(new Set(assigned.slice(0, 10).map(({ color }) => color)).size).toBe(10);
+    for (const [index, value] of assigned.entries()) {
+      expect(value).toMatchObject({
+        color: PARTICIPANT_COLORS[index % 10]?.color,
+        stickyColor: PARTICIPANT_COLORS[index % 10]?.stickyColor,
+      });
+    }
+    await evictDurableObject(stub);
+    for (const [index, id] of ids.entries()) {
+      const response = await stub.fetch(
+        internalActorRequest(id, `/api/v1/boards/${boardId}/bootstrap`),
+      );
+      const value = (await response.json()) as { actor: { color: string; stickyColor: string } };
+      expect(value.actor).toMatchObject({
+        color: assigned[index]?.color,
+        stickyColor: assigned[index]?.stickyColor,
+      });
+    }
+    const count = await runInDurableObject(
+      stub,
+      (_instance, state) =>
+        state.storage.sql
+          .exec<{ count: number }>("SELECT COUNT(*) AS count FROM participant_colors")
+          .one().count,
+    );
+    expect(count).toBe(ids.length);
   });
 
   it("fills additive feature defaults for boards written by older workers", async () => {

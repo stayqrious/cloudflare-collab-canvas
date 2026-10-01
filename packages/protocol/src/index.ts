@@ -78,6 +78,8 @@ export {
   zoneTitleBandHeight,
 } from "@collab/geometry";
 
+export { PARTICIPANT_COLORS, participantColor } from "./participant-colors";
+
 export const PROTOCOL_VERSION = 1 as const;
 export const MAX_ORDINARY_FRAME_BYTES = 64 * 1024;
 export const MAX_PENCIL_FRAME_BYTES = 256 * 1024;

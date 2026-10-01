@@ -1,4 +1,4 @@
-import { DEFAULT_BOARD_FEATURES } from "@collab/protocol";
+import { DEFAULT_BOARD_FEATURES, PARTICIPANT_COLORS } from "@collab/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { ACTIVITY_TEMPLATES } from "../activities/templates";
 import { ApiError } from "../transport/api";
@@ -656,15 +656,10 @@ describe("attributed data download", () => {
 });
 
 describe("sticky note UI configuration", () => {
-  it("offers the six classroom palette colours", () => {
-    expect(STICKY_COLORS.map(({ name }) => name)).toEqual([
-      "Yellow",
-      "Coral",
-      "Lavender",
-      "Mint",
-      "Sky",
-      "Slate",
-    ]);
+  it("offers the ten participant note colours in the classroom picker", () => {
+    expect(STICKY_COLORS.map(({ value }) => value)).toEqual(
+      PARTICIPANT_COLORS.map(({ stickyColor }) => stickyColor),
+    );
     expect(STICKY_COLORS.every(({ value }) => /^#[0-9a-f]{6}$/.test(value))).toBe(true);
   });
 

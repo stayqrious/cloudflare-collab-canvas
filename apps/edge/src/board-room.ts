@@ -85,6 +85,7 @@ import {
   type OrganisationRoom,
   type OrganisationWebhookSettings,
 } from "./organisation-room";
+import { assignedParticipantColor } from "./participant-colors";
 import { TokenBucket } from "./rate-limit";
 import {
   backfillSnapshotAccounting,
@@ -1623,6 +1624,13 @@ export class BoardRoom extends DurableObject<Env> {
     const history = this.historyState(actor.actorId);
     const creatorIds = new Set(snapshot.items.map((item) => item.createdBy));
     const creators = this.actorDirectory(creatorIds);
+    const assigned = assignedParticipantColor(this.#sql, actor.actorId);
+    const participantColors = Object.fromEntries(
+      [...new Set([actor.actorId, ...creatorIds])].map((id) => [
+        id,
+        assignedParticipantColor(this.#sql, id).color,
+      ]),
+    );
     return Response.json(
       {
         protocolVersion: 1,
@@ -1641,12 +1649,15 @@ export class BoardRoom extends DurableObject<Env> {
           id: actor.actorId,
           displayName: access.displayName,
           role: access.role,
+          color: assigned.color,
+          stickyColor: assigned.stickyColor,
           historyVersion: history.historyVersion,
           canUndo: history.canUndo,
           canRedo: history.canRedo,
           sessionExpiresAt: actor.sessionExpiresAt,
         },
         creators,
+        participantColors,
         limits: LIMITS,
         snapshot,
       },
@@ -4912,6 +4923,7 @@ export class BoardRoom extends DurableObject<Env> {
         t: "server.presence",
         cursor: { x: cursor.x, y: cursor.y },
         activeTool,
+        color: assignedParticipantColor(this.#sql, attachment.actorId).color,
         actor: { id: attachment.actorId, displayName: attachment.displayName },
         connectionId: attachment.connectionId,
       },
@@ -5062,6 +5074,7 @@ export class BoardRoom extends DurableObject<Env> {
       id: string;
       displayName: string;
       role: BoardRole;
+      color: string;
       connectionId: string;
     }> = [];
     for (const socket of this.ctx.getWebSockets()) {
@@ -5076,6 +5089,7 @@ export class BoardRoom extends DurableObject<Env> {
           id: attachment.actorId,
           displayName: access.displayName,
           role: access.role,
+          color: assignedParticipantColor(this.#sql, attachment.actorId).color,
           connectionId: attachment.connectionId,
         });
       } catch {

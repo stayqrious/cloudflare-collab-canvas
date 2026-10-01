@@ -83,9 +83,9 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
     await expect(stickyStyle).toBeVisible();
     await expect(stickyStyle.locator("[data-style-opacity-row]")).toBeHidden();
     await expect(stickyStyle.locator("[data-style-font-row]")).toBeHidden();
-    await collaborator.getByRole("button", { name: "Use coral sticky notes" }).click();
+    await collaborator.getByRole("button", { name: "Use mauve sticky notes" }).click();
     await expect(
-      collaborator.getByRole("button", { name: "Use coral sticky notes" }),
+      collaborator.getByRole("button", { name: "Use mauve sticky notes" }),
     ).toHaveAttribute("aria-pressed", "true");
 
     const point = await canvasPoint(collaborator, 0.34, 0.38);
@@ -119,9 +119,9 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
     await expect(collaboratorSticky).toHaveCount(1);
     await expect(collaboratorSticky.locator(".sticky-background")).toHaveAttribute(
       "fill",
-      "#ffafa3",
+      "#f0dfed",
     );
-    await expect(ownerSticky.locator(".sticky-background")).toHaveAttribute("fill", "#ffafa3");
+    await expect(ownerSticky.locator(".sticky-background")).toHaveAttribute("fill", "#f0dfed");
     await expect(collaborator.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
     const stickyId = await collaboratorSticky.getAttribute("data-item-id");
     expect(stickyId).toBeTruthy();
@@ -195,7 +195,7 @@ test("sticky notes focus, converge, persist, export safely, and remain editable"
     await expect(selectionActions.locator("[data-selection-font-controls]")).toBeHidden();
     await expect(selectionActions.locator("[data-selection-current-colour]")).toHaveCSS(
       "background-color",
-      "rgb(255, 175, 163)",
+      "rgb(240, 223, 237)",
     );
     await expect(selectionActions.getByRole("button", { name: "Copy selected items" })).toHaveCount(
       0,
