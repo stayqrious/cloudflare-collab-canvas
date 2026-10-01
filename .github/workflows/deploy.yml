@@ -37,6 +37,9 @@ jobs:
 
       - run: npm run check
 
+      - name: Verify generated Worker binding types
+        run: npm run cf:types -- --check
+
   staging:
     needs: validate
     if: github.ref == 'refs/heads/staging'

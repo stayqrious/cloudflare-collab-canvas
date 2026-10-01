@@ -27,11 +27,11 @@
     "format": "biome format --write .",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:edge": "npm run build:web && npm run config:setup -- --env development && vitest run --config vitest.cloudflare.config.ts",
+    "test:edge": "npm run build:web && npm run test:edge:run",
     "test:e2e": "npm run build:web && playwright test --config tests/playwright/playwright.config.ts",
     "load:smoke": "tsx tests/load/run.ts --smoke",
     "load": "tsx tests/load/run.ts",
-    "check": "npm run docs:env-check && npm run observability:check && npm run lint && npm run typecheck && npm run protocol:compat && npm run test && npm run build && npm run test:edge && npm run security:scan",
+    "check": "npm run docs:env-check && npm run observability:check && npm run lint && npm run typecheck && npm run protocol:compat && npm run test && npm run build && npm run test:edge:run && npm run security:scan",
     "observability:check": "tsx scripts/check-observability.ts",
     "observability:plan": "tsx scripts/check-observability.ts --plan",
     "protocol:compat": "tsx scripts/check-protocol-compatibility.ts",
@@ -40,7 +40,8 @@
     "cf:types": "npm run config:setup -- --env development && wrangler types apps/edge/worker-configuration.d.ts --config .generated/wrangler.development.jsonc --env-file .dev.vars.example --include-runtime false --env-interface CloudflareBindings",
     "docs:env-check": "tsx scripts/check-env-docs.ts",
     "deployment:deploy": "tsx scripts/deploy.ts",
-    "deployment:check": "npm run check && npm run cf:types -- --check"
+    "deployment:check": "npm run check && npm run cf:types -- --check",
+    "test:edge:run": "npm run config:setup -- --env development && vitest run --config vitest.cloudflare.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

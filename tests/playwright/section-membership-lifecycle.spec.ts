@@ -249,9 +249,16 @@ test("a dragged Section covers the swept area and binds the items inside it", as
 
   const section = page.locator("#drawing-area .board-item-zone");
   await expect(section).toHaveCount(1);
-  const sectionId = await section.getAttribute("data-item-id");
-  const rendered = await section.locator(".zone-fill").boundingBox();
-  if (!sectionId || !rendered) throw new Error("The dragged Section was not rendered completely.");
+  await expect(section.locator(".zone-fill")).toBeVisible();
+  // Read the ID and geometry in one browser task: the ACK can replace the SVG
+  // node between separate getAttribute/boundingBox calls.
+  const { sectionId, rendered } = await section.evaluate((node) => {
+    const sectionId = node.getAttribute("data-item-id");
+    const fill = node.querySelector(".zone-fill");
+    if (!sectionId || !fill) throw new Error("The dragged Section was not rendered completely.");
+    const { x, y, width, height } = fill.getBoundingClientRect();
+    return { sectionId, rendered: { x, y, width, height } };
+  });
 
   // The Section covers what the pointer swept out, not the default-size drop.
   expect(Math.abs(rendered.x - sweep.x)).toBeLessThanOrEqual(4);

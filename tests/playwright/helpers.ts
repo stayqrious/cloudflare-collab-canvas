@@ -5,6 +5,7 @@ import {
   type Locator,
   type Page,
   type TestInfo,
+  test,
 } from "@playwright/test";
 
 export function isolatedContextOptions(
@@ -25,6 +26,16 @@ export function isolatedContextOptions(
 }
 
 export async function createBoard(page: Page, title: string): Promise<string> {
+  const info = test.info();
+  const headers = info.project.use.extraHTTPHeaders;
+  const address = headers?.["CF-Connecting-IP"];
+  if (address) {
+    // Local workers represent independent users. Keep their board-creation buckets
+    // separate when tests run concurrently, without changing production limits.
+    const octets = address.split(".");
+    octets[2] = String(info.parallelIndex + 1);
+    await page.setExtraHTTPHeaders({ ...headers, "CF-Connecting-IP": octets.join(".") });
+  }
   await page.goto("/");
   await expect(page.getByTestId("landing-page")).toBeVisible();
   await page.getByRole("textbox", { name: "Board title" }).fill(title);
