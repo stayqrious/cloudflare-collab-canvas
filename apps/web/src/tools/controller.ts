@@ -2044,7 +2044,8 @@ export class ToolController {
     if (!gesture || gesture.pointerId !== pointerId) return;
     this.gesture = null;
     this.pointers.delete(pointerId);
-    safeReleaseCapture(this.captureTarget, pointerId);
+    this.syncPointerActive();
+    this.releasePointerCapture(pointerId);
     void this.finishGesture(gesture);
   }
 
@@ -2076,7 +2077,7 @@ export class ToolController {
   }
 
   private releasePointerCapture(pointerId: number): void {
-    const { svg } = this.options.renderer;
+    const svg = this.captureTarget;
     if (!svg.hasPointerCapture(pointerId)) return;
 
     const token = {};

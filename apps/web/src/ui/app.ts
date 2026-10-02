@@ -7459,6 +7459,7 @@ export class BoardApp {
     this.setToolsMenuOpen(!this.toolsMenu.hidden && !smartNoteEnabled);
     const moreToolsAvailable =
       roleCanBroadcast &&
+      !smartNoteEnabled &&
       !archived &&
       [...this.toolsMenu.querySelectorAll<HTMLButtonElement>("button")].some(
         (button) => !button.hidden,
