@@ -466,6 +466,25 @@ describe("lightweight movement previews", () => {
   });
 });
 
+describe("grid background", () => {
+  it("swaps the dot grid for squares and back", () => {
+    const renderer = {
+      gridEnabled: false,
+      background: fakeSvgNode("rect"),
+      svg: fakeSvgNode("svg"),
+    } as unknown as BoardRenderer;
+    const fake = renderer as unknown as { background: FakeSvgNode; svg: FakeSvgNode };
+
+    BoardRenderer.prototype.setGridEnabled.call(renderer, true);
+    expect(fake.background.attributes.get("fill")).toBe("url(#square-grid)");
+    expect(fake.svg.dataset.grid).toBe("squares");
+
+    BoardRenderer.prototype.setGridEnabled.call(renderer, false);
+    expect(fake.background.attributes.get("fill")).toBe("url(#dot-grid)");
+    expect(fake.svg.dataset.grid).toBe("dots");
+  });
+});
+
 describe("creator attribution", () => {
   beforeEach(() => {
     vi.stubGlobal("document", {
@@ -1153,6 +1172,36 @@ describe("section rendering", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it("repeats the board grid above a section's fill, on the board's lines once moved", () => {
+    const geometry = { x: 40, y: 40, width: 440, height: 320, title: "Area 12" };
+    const style = {
+      kind: "zone" as const,
+      borderColor: "#60a5fa",
+      fill: "#dbeafe",
+      textColor: "#1e3a8a",
+      fontSize: 20,
+      opacity: 0.8,
+    };
+    const gridOf = (node: FakeSvgNode) => {
+      const index = node.children.findIndex((child) => child.classList.values.has("zone-grid"));
+      const fillIndex = node.children.findIndex((child) => child.classList.values.has("zone-fill"));
+      expect(index).toBe(fillIndex + 1);
+      return node.children[index];
+    };
+
+    const placed = gridOf(zoneNode("placed", geometry, style) as unknown as FakeSvgNode);
+    expect(placed?.attributes.get("fill")).toBe("url(#square-grid)");
+    expect(placed?.attributes.get("x")).toBe("40");
+    expect(placed?.attributes.has("transform")).toBe(false);
+
+    const moved = gridOf(
+      zoneNode("moved", geometry, style, false, [1, 0, 0, 1, 15, 25]) as unknown as FakeSvgNode,
+    );
+    expect(moved?.attributes.get("x")).toBe("55");
+    expect(moved?.attributes.get("y")).toBe("65");
+    expect(moved?.attributes.get("transform")).toBe("translate(-15 -25)");
+  });
 
   it("renders a named, accessible section with fill-only opacity", () => {
     const node = zoneNode(

@@ -134,6 +134,11 @@ A comment's author or the Space owner can delete it for everyone, and posting is
 rate-limited per participant. YouTube and Vimeo embeds have their own **Videos**
 switch in Settings and play in a sandboxed frame.
 
+The board background is a faint dot grid. For counting and measuring, an owner can
+switch on **Square grid** under **Settings → Tool permissions** (or a launch can
+set the `grid` feature), which draws 40-unit squares instead. It is off by default
+and purely visual; see [Grid background](how_to_embed_me.md#grid-background).
+
 Alongside freehand drawing, shapes, and plain text, the board supports durable
 sticky notes for brainstorming, exit tickets, sorting, and feedback. Choose
 **Sticky note** or press `N`, click the board, and type immediately. A note may
