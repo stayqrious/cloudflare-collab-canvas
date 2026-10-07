@@ -426,6 +426,7 @@ are broadcast to participants in real time.
 | `spotlight` | `true` | Coach-led **Follow me** viewport spotlight. |
 | `videos` | `true` | Embedded YouTube and Vimeo players on the canvas and in comments. Also needs `text`, because a video is a text object carrying its link. |
 | `aiTools` | `false` | Browser AI tools (WebMCP): the tools an AI assistant in a participant's browser can call, and the MCP status and AI controls. While `false` the page registers no tools and the Worker rejects AI-assisted objects and comments. Turn it on only for Spaces whose school has approved AI use; see [classroom AI safety](docs/classroom-ai-safety.md). |
+| `grid` | `false` | Square grid background in place of the default dot grid. Purely visual: see [Grid background](#grid-background). |
 
 Example restricted activity:
 
@@ -457,6 +458,24 @@ creation, shape subtype changes, partial-erased geometry, protractors,
 Organisation template endpoints, and spotlight. Some interaction semantics,
 such as whether an ordinary valid line coordinate came from snapping, are
 necessarily client behavior rather than a distinct stored operation.
+
+### Grid background
+
+`grid` is off by default, so a new Space shows the usual faint dot grid. Turn it
+on in a launch (`"features": {"grid": true}`) or later from **Settings → Tool
+permissions → Square grid**; the change reaches every participant at once.
+
+- Each square is **40 × 40 board units** (`BOARD_GRID_CELL_SIZE` in
+  `@collab/protocol`), with lines on every multiple of 40. Draw a starting
+  layout to it when the squares should mean something: a rectangle at
+  `x: 80, y: 120` that is `160` wide and `120` tall covers exactly 4 × 3 squares.
+- It scales and pans with the board, like the dots it replaces, and it carries on
+  inside Sections, drawn above their fill so the squares stay countable there. A
+  moved Section keeps its squares on the board's lines.
+- It is purely visual. Nothing snaps to it, it is not a board item, and it is not
+  part of JSON or SVG exports or the read-only viewer.
+- Like every flag, a launch only sets it when it creates the Space; an owner
+  changes it afterwards in Settings.
 
 ## 6. Roles, ownership, locking, and persistence
 

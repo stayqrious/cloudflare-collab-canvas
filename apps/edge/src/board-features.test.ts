@@ -33,6 +33,16 @@ describe("normalizePersistedBoardFeatures", () => {
     ).toMatchObject({ objectTransforms: false, grouping: false });
   });
 
+  it("gives a board stored before the grid existed the dot background", () => {
+    expect(normalizePersistedBoardFeatures(withoutFeatures("grid"))).toEqual({
+      ...DEFAULT_BOARD_FEATURES,
+      grid: false,
+    });
+    expect(
+      normalizePersistedBoardFeatures({ ...DEFAULT_BOARD_FEATURES, grid: true }),
+    ).toMatchObject({ grid: true });
+  });
+
   it("rejects a missing legacy feature", () => {
     expect(() => normalizePersistedBoardFeatures(withoutFeatures("images"))).toThrow();
   });

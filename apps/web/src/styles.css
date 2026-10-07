@@ -959,6 +959,14 @@ button:disabled {
   filter: drop-shadow(0 2px 3px rgb(62 72 106 / 7%));
 }
 
+.board-item-zone .zone-grid {
+  display: none;
+}
+
+.board-canvas[data-grid="squares"] .board-item-zone .zone-grid {
+  display: inline;
+}
+
 .board-item-zone[data-section-locked="true"] .zone-border {
   stroke-width: 2.25;
   stroke-dasharray: 6 4;

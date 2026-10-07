@@ -168,6 +168,7 @@ export const BOARD_FEATURE_KEYS = [
   "spotlight",
   "videos",
   "aiTools",
+  "grid",
 ] as const;
 
 export type BoardFeatureKey = (typeof BOARD_FEATURE_KEYS)[number];
@@ -202,7 +203,16 @@ export const DEFAULT_BOARD_FEATURES: BoardFeatures = {
   videos: true,
   // Browser AI tools (WebMCP) stay off until an owner or partner launch turns them on.
   aiTools: false,
+  // The square grid background is opt-in; a board shows the dot grid until it is turned on.
+  grid: false,
 };
+
+/**
+ * Side of one square of the `grid` background, in board units. Fixed rather than configurable
+ * so a starting layout can be drawn to it: a 160 × 120 rectangle at a multiple of this size
+ * covers exactly 4 × 3 squares.
+ */
+export const BOARD_GRID_CELL_SIZE = 40;
 
 export const ITEM_KINDS = [
   "pencil",

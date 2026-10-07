@@ -275,6 +275,7 @@ const FEATURE_LABELS: Readonly<Record<BoardFeatureKey, { label: string; detail: 
     label: "AI tools",
     detail: "Let browser AI assistants (WebMCP) read and add to this Space",
   },
+  grid: { label: "Square grid", detail: "Squared background for counting and measuring" },
 };
 
 /**
@@ -1528,6 +1529,7 @@ export class BoardApp {
     );
     this.renderer.setParticipantColors(bootstrap.participantColors ?? {});
     this.renderer.setVotingEnabled(this.bootstrap.board.features.voting);
+    this.renderer.setGridEnabled(this.bootstrap.board.features.grid);
     this.renderer.setObjectTransformsEnabled(this.bootstrap.board.features.objectTransforms);
     this.renderer.viewport.subscribe((zoom) => {
       this.zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
@@ -7369,6 +7371,7 @@ export class BoardApp {
       this.organisationTemplateDialog.close();
     }
     this.renderer.setVotingEnabled(this.bootstrap.board.features.voting);
+    this.renderer.setGridEnabled(this.bootstrap.board.features.grid);
     this.renderer.setObjectTransformsEnabled(this.bootstrap.board.features.objectTransforms);
     if (this.activitiesButton.disabled || this.activitiesButton.hidden) {
       this.closeActivitiesMenu();

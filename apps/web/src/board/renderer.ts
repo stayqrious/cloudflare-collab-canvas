@@ -8,7 +8,12 @@ import {
   ZONE_TITLE_PADDING,
   zoneTitleBandHeight,
 } from "@collab/geometry";
-import { fallbackParticipantColor, resolveTextFontWeight, textFontStack } from "@collab/protocol";
+import {
+  BOARD_GRID_CELL_SIZE,
+  fallbackParticipantColor,
+  resolveTextFontWeight,
+  textFontStack,
+} from "@collab/protocol";
 import { STAMP_SVG_PATHS } from "@collab/svg-export";
 import { summarizeBoardVotes, type VoteSummary } from "../activities/voting";
 import { clearTypesetMath, containsMathMarkup, splitMathMarkup, typesetMath } from "../mathjax";
@@ -327,6 +332,7 @@ export class BoardRenderer {
   readonly svg: SVGSVGElement;
   readonly viewport: CanvasViewport;
 
+  private readonly background: SVGRectElement;
   private readonly drawingArea: SVGGElement;
   private readonly commentLayer: SVGGElement;
   private readonly voteCountLayer: SVGGElement;
@@ -341,6 +347,7 @@ export class BoardRenderer {
   private resizeHandlesEnabled = true;
   private objectTransformsEnabled = true;
   private votingEnabled = true;
+  private gridEnabled = false;
   private comments: readonly BoardComment[] = [];
   private commentRefreshFrame: number | null = null;
 
@@ -359,6 +366,7 @@ export class BoardRenderer {
     this.svg.setAttribute("role", "application");
     this.svg.setAttribute("aria-label", "Collaborative drawing canvas");
     this.svg.setAttribute("aria-describedby", "canvas-help");
+    this.svg.dataset.grid = "dots";
 
     const defs = svgElement("defs");
     const pattern = svgElement("pattern");
@@ -372,7 +380,21 @@ export class BoardRenderer {
     dot.setAttribute("r", "0.85");
     dot.setAttribute("fill", "#c7c7c7");
     pattern.append(dot);
-    defs.append(pattern);
+
+    // The `grid` feature swaps the dots for squares a class can count. In board units, like the
+    // dots, so a square stays BOARD_GRID_CELL_SIZE wide at any zoom and pans with the content.
+    const squares = svgElement("pattern");
+    squares.id = "square-grid";
+    squares.setAttribute("width", String(BOARD_GRID_CELL_SIZE));
+    squares.setAttribute("height", String(BOARD_GRID_CELL_SIZE));
+    squares.setAttribute("patternUnits", "userSpaceOnUse");
+    const cell = svgElement("path");
+    cell.setAttribute("d", `M ${BOARD_GRID_CELL_SIZE} 0 H 0 V ${BOARD_GRID_CELL_SIZE}`);
+    cell.setAttribute("fill", "none");
+    cell.setAttribute("stroke", "#aeb9c8");
+    cell.setAttribute("stroke-width", "1");
+    squares.append(cell);
+    defs.append(pattern, squares);
 
     const background = svgElement("rect");
     background.classList.add("canvas-background");
@@ -382,6 +404,7 @@ export class BoardRenderer {
     background.setAttribute("height", "2000000");
     background.setAttribute("fill", "url(#dot-grid)");
     background.setAttribute("pointer-events", "none");
+    this.background = background;
 
     this.drawingArea = layer("drawing-area", "Authoritative board content");
     this.voteCountLayer = layer("vote-count-layer", "Live voting counts");
@@ -431,6 +454,13 @@ export class BoardRenderer {
     if (this.objectTransformsEnabled === enabled) return;
     this.objectTransformsEnabled = enabled;
     this.refreshSelection();
+  }
+
+  setGridEnabled(enabled: boolean): void {
+    if (this.gridEnabled === enabled) return;
+    this.gridEnabled = enabled;
+    this.background.setAttribute("fill", enabled ? "url(#square-grid)" : "url(#dot-grid)");
+    this.svg.dataset.grid = enabled ? "squares" : "dots";
   }
 
   setVotingEnabled(enabled: boolean): void {
@@ -647,7 +677,7 @@ export class BoardRenderer {
     transform: Matrix = [1, 0, 0, 1, 0, 0],
   ): void {
     this.clearLocalLayer();
-    const zone = zoneNode("local-zone-preview", geometry, style, true);
+    const zone = zoneNode("local-zone-preview", geometry, style, true, transform);
     zone.classList.add("local-preview", "zone-preview");
     zone.setAttribute("aria-hidden", "true");
     zone.setAttribute("transform", matrixAttribute(transform));
@@ -1460,7 +1490,7 @@ function itemNode(
       node = tableNode(item.id, item.geometry, item.style, preview);
       break;
     case "zone":
-      node = zoneNode(item.id, item.geometry, item.style, preview);
+      node = zoneNode(item.id, item.geometry, item.style, preview, item.transform);
       break;
   }
   if (marked && leaf) {
@@ -2126,6 +2156,7 @@ export function zoneNode(
   geometry: ZoneGeometry,
   style: ZoneStyle,
   preview = false,
+  transform: Matrix = [1, 0, 0, 1, 0, 0],
 ): SVGGElement {
   const node = svgElement("g");
   node.classList.add("zone-item");
@@ -2163,6 +2194,26 @@ export function zoneNode(
   fill.setAttribute("rx", "12");
   fill.setAttribute("fill", style.fill);
   fill.setAttribute("fill-opacity", String(style.opacity));
+
+  // The board's grid stops at a Section's fill, which is where a class does its counting, so the
+  // Section repeats it above the fill. Shown only while the board's `grid` feature is on (CSS keys
+  // off the canvas's data-grid). Pattern tiles start at the user-space origin, so a moved Section
+  // undoes its own translation to keep its squares on the board's lines.
+  const translateOnly =
+    transform[0] === 1 && transform[1] === 0 && transform[2] === 0 && transform[3] === 1;
+  const dx = translateOnly ? transform[4] : 0;
+  const dy = translateOnly ? transform[5] : 0;
+  const grid = svgElement("rect");
+  grid.classList.add("zone-grid");
+  grid.setAttribute("x", String(geometry.x + dx));
+  grid.setAttribute("y", String(geometry.y + dy));
+  grid.setAttribute("width", String(geometry.width));
+  grid.setAttribute("height", String(geometry.height));
+  grid.setAttribute("rx", "12");
+  grid.setAttribute("fill", "url(#square-grid)");
+  grid.setAttribute("pointer-events", "none");
+  grid.setAttribute("aria-hidden", "true");
+  if (dx !== 0 || dy !== 0) grid.setAttribute("transform", `translate(${-dx} ${-dy})`);
 
   const border = svgElement("rect");
   border.classList.add("zone-border");
@@ -2253,7 +2304,7 @@ export function zoneNode(
     lockBadge.append(background, shackle, body);
   }
 
-  node.append(accessibleTitle, definitions, fill, border, title, lockBadge);
+  node.append(accessibleTitle, definitions, fill, grid, border, title, lockBadge);
   return node;
 }
 

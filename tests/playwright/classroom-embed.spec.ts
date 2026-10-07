@@ -653,6 +653,120 @@ function readDevVar(name: string): string {
   return value;
 }
 
+test("A launch can start a Space on the square grid with its own starting layout", async ({
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "The grid launch flow runs once.");
+  test.skip(
+    Boolean(process.env.PLAYWRIGHT_BASE_URL),
+    "Remote Organisation testing requires a configured parent origin and signing registry.",
+  );
+
+  const demo = readOrganisationSigningEntry("demo");
+  const spaceId = `playwright-grid-${randomUUID()}`;
+  const now = Math.floor(Date.now() / 1_000);
+  const coach: Participant = {
+    name: "coach",
+    role: "owner",
+    displayName: "Coach Mira",
+    participantId: `coach-${randomUUID()}`,
+  };
+  const student: Participant = {
+    name: "student",
+    role: "editor",
+    displayName: "Student Asha",
+    participantId: `student-${randomUUID()}`,
+  };
+  // A poster-wall Section drawn to the 40-unit grid: the rectangle covers 4 × 3 squares.
+  const sectionId = "018f0000-0000-7000-8000-000000000101";
+  const posterWall = {
+    format: "cf-whiteboard-json",
+    version: 1,
+    boardId: "b_AAAAAAAAAAAAAAAAAAAAAA",
+    seq: 0,
+    createdAt: now * 1_000,
+    settings: { title: "Poster wall" },
+    items: [
+      {
+        id: sectionId,
+        kind: "zone",
+        z: 1,
+        version: 1,
+        createdBy: "a_AAAAAAAAAAAAAAAAAAAAAA",
+        style: {
+          kind: "zone",
+          borderColor: "#60a5fa",
+          fill: "#dbeafe",
+          textColor: "#1e3a8a",
+          fontSize: 20,
+          opacity: 0.8,
+        },
+        transform: [1, 0, 0, 1, 0, 0],
+        geometry: { x: 40, y: 40, width: 440, height: 320, title: "Area 12" },
+      },
+      {
+        id: "018f0000-0000-7000-8000-000000000102",
+        kind: "rectangle",
+        z: 2,
+        version: 1,
+        createdBy: "a_AAAAAAAAAAAAAAAAAAAAAA",
+        sectionId,
+        style: { kind: "stroke", color: "#0a3f6e", width: 3, opacity: 1 },
+        transform: [1, 0, 0, 1, 0, 0],
+        geometry: { x: 80, y: 120, width: 160, height: 120, shape: "rectangle" },
+      },
+      {
+        id: "018f0000-0000-7000-8000-000000000103",
+        kind: "text",
+        z: 3,
+        version: 1,
+        createdBy: "a_AAAAAAAAAAAAAAAAAAAAAA",
+        sectionId,
+        style: { kind: "text", color: "#1f2937", fontSize: 22, fontFamily: "sans", opacity: 1 },
+        transform: [1, 0, 0, 1, 0, 0],
+        geometry: { x: 80, y: 280, text: "4 by 3, area 12" },
+      },
+    ],
+  };
+
+  const studentContext = await browser.newContext(isolatedContextOptions(testInfo, 41));
+  const studentPage = await studentContext.newPage();
+  try {
+    // Only the launch that creates the Space carries the grid and the layout.
+    const coachFrame = await mountParticipant(
+      page,
+      LOCAL_PARENT_URL,
+      coach,
+      launchUrl(LOCAL_WORKER_ORIGIN, "demo", spaceId, demo, coach, now, {
+        features: { grid: true },
+        importSnapshot: posterWall,
+      }),
+    );
+    const studentFrame = await mountParticipant(
+      studentPage,
+      LOCAL_PARENT_URL,
+      student,
+      launchUrl(LOCAL_WORKER_ORIGIN, "demo", spaceId, demo, student, now),
+    );
+
+    for (const frame of [coachFrame, studentFrame]) {
+      await expect(frame.locator("#board-canvas")).toHaveAttribute("data-grid", "squares");
+      await expect(frame.locator(".canvas-background")).toHaveAttribute(
+        "fill",
+        "url(#square-grid)",
+      );
+      await expect(frame.locator("#drawing-area [data-item-id]")).toHaveCount(3);
+      // The Section's fill would hide the board grid; its own copy keeps the squares countable.
+      await expect(frame.locator(".board-item-zone .zone-grid")).toBeVisible();
+    }
+    await expect(coachFrame.locator("#square-grid path")).toHaveAttribute("d", "M 40 0 H 0 V 40");
+    await studentPage.screenshot({ path: testInfo.outputPath("grid-student.png") });
+  } finally {
+    await studentContext.close();
+  }
+});
+
 function readOrganisationSigningEntry(organisationId: string): {
   current: { key_id: string; key: string };
 } {
@@ -677,7 +791,11 @@ function launchUrl(
   signing: { current: { key_id: string; key: string } },
   participant: Participant,
   issuedAt: number,
-  options: { organisationAdmin?: boolean } = {},
+  options: {
+    organisationAdmin?: boolean;
+    features?: Record<string, boolean>;
+    importSnapshot?: unknown;
+  } = {},
 ): string {
   const payload = {
     v: 1,
@@ -691,13 +809,21 @@ function launchUrl(
     iat: issuedAt,
     exp: issuedAt + 60 * 60,
     ...(options.organisationAdmin ? { organisation_admin: true } : {}),
+    ...(options.features ? { features: options.features } : {}),
   };
   const payloadPart = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const signed = `el1.${payloadPart}`;
   const signature = createHmac("sha256", signing.current.key)
     .update(signed, "utf8")
     .digest("base64url");
-  return `${workerOrigin}/embed#launch=${encodeURIComponent(`${signed}.${signature}`)}`;
+  const fragment = new URLSearchParams({ launch: `${signed}.${signature}` });
+  if (options.importSnapshot !== undefined) {
+    fragment.set(
+      "import",
+      Buffer.from(JSON.stringify(options.importSnapshot), "utf8").toString("base64url"),
+    );
+  }
+  return `${workerOrigin}/embed#${fragment.toString()}`;
 }
 
 async function mountParticipant(
