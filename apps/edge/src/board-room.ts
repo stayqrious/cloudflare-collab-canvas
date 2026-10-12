@@ -5025,11 +5025,16 @@ export class BoardRoom extends DurableObject<Env> {
       sendJson(socket, { v: 1, t: "server.in_sync", latestSeq });
       return;
     }
-    // A live action may already be queued on this ordered socket after the
-    // client emitted its check but before this event ran. Replaying from the
-    // client-declared sequence would duplicate that action. Startup replay has
-    // an explicit syncing barrier, so make every live mismatch reconnect
-    // through that authoritative path.
+    // On a busy board a client is routinely a few actions behind: the actions
+    // it has not applied yet are already queued on this ordered socket. Forcing
+    // a reconnect for that cancelled whatever the participant was drawing, so
+    // answer with the room's sequence instead. The reply travels behind every
+    // earlier broadcast, and the client resynchronizes only if it still differs
+    // once the reply arrives.
+    if (attachment.state === "live" && latestSeq < board.latest_seq) {
+      sendJson(socket, { v: 1, t: "server.in_sync", latestSeq: board.latest_seq });
+      return;
+    }
     this.resyncSocket(socket, board.latest_seq, "The client sequence differs from the room.");
   }
 

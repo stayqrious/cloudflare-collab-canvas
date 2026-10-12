@@ -380,8 +380,15 @@ export class BoardSocket {
           typeof frame.message === "string" ? frame.message : "The board needs to reload.",
         );
         break;
-      case "server.in_sync":
+      case "server.in_sync": {
+        // The room answers a behind check with its own sequence, sent after every earlier
+        // action on this socket, so any difference left now is a real gap.
+        const latestSeq = number(frame.latestSeq);
+        if (latestSeq !== null && latestSeq !== this.hooks.getSequence()) {
+          void this.resync("The client sequence differs from the room.");
+        }
         break;
+      }
       default:
         // Unknown server frames are ignored for forward compatibility. Client
         // frame types remain strict at the authoritative boundary.

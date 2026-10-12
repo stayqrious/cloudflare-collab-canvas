@@ -4693,7 +4693,7 @@ describe("BoardRoom initialization", () => {
     for (const connection of connections) connection.socket.close(1000, "done");
   }, 15_000);
 
-  it("closes with resync_required instead of rejecting when a sync replay has a gap", async () => {
+  it("closes with resync_required instead of rejecting when a client is ahead of the room", async () => {
     const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
     await initializeBoard(stub);
     const connected = await connect(stub, actorId);
@@ -4707,20 +4707,17 @@ describe("BoardRoom initialization", () => {
       ),
     );
     await connected.next((frame) => frame.t === "server.action");
-    await runInDurableObject(stub, (_instance, durableState) => {
-      durableState.storage.sql.exec("DELETE FROM actions WHERE seq = 1");
-    });
     const closed = new Promise<CloseEvent>((resolve) => {
       connected.socket.addEventListener("close", resolve, { once: true });
     });
-    connected.socket.send(JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: 0 }));
+    connected.socket.send(JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: 5 }));
     const resync = await connected.next((frame) => frame.t === "server.resync_required");
     expect(resync).toMatchObject({ code: "REPLAY_UNAVAILABLE", latestSeq: 1 });
     expect((await closed).code).toBe(4009);
     expect(connected.received.some((frame) => frame.t === "server.rejected")).toBe(false);
   });
 
-  it("resynchronizes a stale live sync check without replaying an already delivered action", async () => {
+  it("answers a behind live sync check with the room sequence instead of forcing a reconnect", async () => {
     const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
     await initializeBoard(stub);
     const connected = await connect(stub, actorId);
@@ -4734,15 +4731,29 @@ describe("BoardRoom initialization", () => {
       ),
     );
     await connected.next((frame) => frame.t === "server.action" && frame.seq === 1);
-    const closed = new Promise<CloseEvent>((resolve) => {
-      connected.socket.addEventListener("close", resolve, { once: true });
+
+    // A check sent before the client applied seq 1 must not interrupt a gesture in progress.
+    connected.socket.send(JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: 0 }));
+    expect(await connected.next((frame) => frame.t === "server.in_sync")).toMatchObject({
+      latestSeq: 1,
     });
 
-    connected.socket.send(JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: 0 }));
-    await connected.next((frame) => frame.t === "server.resync_required");
-
-    expect((await closed).code).toBe(4009);
-    expect(connected.received.some((frame) => frame.t === "server.replay")).toBe(false);
+    const follow = createCommit(
+      "018f0000-0000-7000-8000-000000000323",
+      "018f0000-0000-7000-8000-000000000324",
+      "018f0000-0000-7000-8000-000000000325",
+    );
+    connected.socket.send(JSON.stringify({ ...follow, baseSeq: 1 }));
+    expect(
+      await connected.next(
+        (frame) => frame.t === "server.action" && frame.commandId === follow.commandId,
+      ),
+    ).toMatchObject({ seq: 2 });
+    expect(
+      connected.received.some(
+        (frame) => frame.t === "server.resync_required" || frame.t === "server.replay",
+      ),
+    ).toBe(false);
   });
 
   it("returns an accepted startup socket and closes 4009 when initial replay has a gap", async () => {
