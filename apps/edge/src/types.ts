@@ -3,6 +3,8 @@ import type { TextFontFamily } from "@collab/protocol";
 export type BoardRole = "viewer" | "editor" | "owner";
 export type AccessMode = "private" | "link_view";
 export type DrawingPolicy = "editors_enabled" | "owner_only" | "locked";
+/** The role a non-owner participant gets by default, including link visitors who are not members. */
+export type ParticipantRole = "viewer" | "editor";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -59,6 +61,7 @@ export interface BoardRow {
   title: string;
   access_mode: AccessMode;
   drawing_policy: DrawingPolicy;
+  participant_role: ParticipantRole;
   images_enabled: number;
   organisation_space_id: string | null;
   features_json: string;

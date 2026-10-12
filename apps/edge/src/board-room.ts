@@ -1638,6 +1638,7 @@ export class BoardRoom extends DurableObject<Env> {
           title: board.title,
           accessMode: board.access_mode,
           drawingPolicy: board.drawing_policy,
+          participantRole: board.participant_role,
           imagesEnabled: features.images,
           features,
           aclVersion: board.acl_version,
@@ -2104,7 +2105,15 @@ export class BoardRoom extends DurableObject<Env> {
     const body = await readJsonBody(request, 8 * 1_024);
     assertExactKeys(
       body,
-      ["title", "accessMode", "drawingPolicy", "imagesEnabled", "features", "expectedAclVersion"],
+      [
+        "title",
+        "accessMode",
+        "drawingPolicy",
+        "participantRole",
+        "imagesEnabled",
+        "features",
+        "expectedAclVersion",
+      ],
       ["expectedAclVersion"],
     );
     const expected = requireSafeInteger(
@@ -2127,6 +2136,14 @@ export class BoardRoom extends DurableObject<Env> {
     ) {
       throw new HttpError(400, "BAD_REQUEST", "The drawing policy is invalid.");
     }
+    const participantRole = body.participantRole;
+    if (
+      participantRole !== undefined &&
+      participantRole !== "viewer" &&
+      participantRole !== "editor"
+    ) {
+      throw new HttpError(400, "BAD_REQUEST", "The participant role is invalid.");
+    }
     const imagesEnabled = body.imagesEnabled;
     if (imagesEnabled !== undefined && typeof imagesEnabled !== "boolean") {
       throw new HttpError(400, "BAD_REQUEST", "The image upload setting is invalid.");
@@ -2146,6 +2163,7 @@ export class BoardRoom extends DurableObject<Env> {
       title === undefined &&
       accessMode === undefined &&
       drawingPolicy === undefined &&
+      participantRole === undefined &&
       featurePatch === undefined
     ) {
       throw new HttpError(400, "BAD_REQUEST", "No setting change was supplied.");
@@ -2173,13 +2191,25 @@ export class BoardRoom extends DurableObject<Env> {
         );
       }
       const now = Date.now();
+      if (participantRole !== undefined) {
+        // Choosing a participant role applies it to every current non-owner member too, so
+        // "Allow editing" and "View only" mean the same thing for invited and link participants.
+        this.#sql.exec(
+          `UPDATE members SET role = ?, updated_at_ms = MAX(?, updated_at_ms + 1)
+           WHERE role != 'owner' AND role != ? AND revoked_at_ms IS NULL`,
+          participantRole,
+          now,
+          participantRole,
+        );
+      }
       this.#sql.exec(
-        `UPDATE board SET title = ?, access_mode = ?, drawing_policy = ?, images_enabled = ?,
-          features_json = ?,
+        `UPDATE board SET title = ?, access_mode = ?, drawing_policy = ?, participant_role = ?,
+          images_enabled = ?, features_json = ?,
           acl_version = acl_version + 1, updated_at_ms = ? WHERE singleton = 1`,
         title ?? board.title,
         accessMode ?? board.access_mode,
         drawingPolicy ?? board.drawing_policy,
+        participantRole ?? board.participant_role,
         updatedFeatures.images ? 1 : 0,
         JSON.stringify(updatedFeatures),
         now,
@@ -2192,6 +2222,7 @@ export class BoardRoom extends DurableObject<Env> {
         title: updated.title,
         accessMode: updated.access_mode,
         drawingPolicy: updated.drawing_policy,
+        participantRole: updated.participant_role,
         imagesEnabled: updatedFeatures.images,
         features: updatedFeatures,
         aclVersion: updated.acl_version,
@@ -5327,6 +5358,7 @@ export class BoardRoom extends DurableObject<Env> {
           title: board.title,
           accessMode: board.access_mode,
           drawingPolicy: board.drawing_policy,
+          participantRole: board.participant_role,
           imagesEnabled: features.images,
           features,
           aclVersion: board.acl_version,
@@ -5419,6 +5451,7 @@ export class BoardRoom extends DurableObject<Env> {
       title: board.title,
       accessMode: board.access_mode,
       drawingPolicy: board.drawing_policy,
+      participantRole: board.participant_role,
       imagesEnabled: features.images,
       features,
       aclVersion: board.acl_version,

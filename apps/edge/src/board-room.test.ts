@@ -542,7 +542,7 @@ describe("BoardRoom initialization", () => {
         .one(),
     }));
     expect(state).toEqual({
-      migrations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+      migrations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
       boards: 1,
       owners: 1,
       classroomMode: 0,
@@ -7906,6 +7906,103 @@ describe("BoardRoom Section membership history", () => {
 
 describe("BoardRoom facilitation spotlight", () => {
   afterEach(async () => reset());
+
+  it("lets owners make every participant an editor or a viewer, including link visitors", async () => {
+    const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);
+    await initializeBoard(stub);
+    await addEditor(stub);
+    await runInDurableObject(stub, (_instance, durableState) => {
+      const now = Date.now();
+      durableState.storage.sql.exec(
+        `INSERT INTO members(actor_id, role, display_name, created_at_ms, updated_at_ms)
+         VALUES (?, 'viewer', 'Viewer', ?, ?)`,
+        studentId,
+        now,
+        now,
+      );
+    });
+    const linkVisitorId = `a_${"L".repeat(21)}A`;
+    const visitorSocket = await openSocket(stub, linkVisitorId);
+    const welcome = await visitorSocket.next((frame) => frame.t === "server.welcome");
+    expect(welcome).toMatchObject({ actor: { role: "viewer" } });
+    await visitorSocket.next((frame) => frame.t === "server.ready");
+
+    const roles = () =>
+      runInDurableObject(stub, (_instance, durableState) =>
+        Object.fromEntries(
+          durableState.storage.sql
+            .exec<{ actor_id: string; role: string }>("SELECT actor_id, role FROM members")
+            .toArray()
+            .map((row) => [row.actor_id, row.role]),
+        ),
+      );
+    const setParticipantRole = async (participantRole: string, expectedAclVersion: number) => {
+      const response = await stub.fetch(
+        internalRequest(`/api/v1/boards/${boardId}/settings`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ participantRole, expectedAclVersion }),
+        }),
+      );
+      return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+    };
+
+    expect((await setParticipantRole("owner", 2)).status).toBe(400);
+    const allowEditing = await setParticipantRole("editor", 2);
+    expect(allowEditing).toMatchObject({
+      status: 200,
+      body: { board: { participantRole: "editor", aclVersion: 3 } },
+    });
+    expect(
+      await visitorSocket.next(
+        (frame) => frame.t === "access.changed" && frame.participantRole === "editor",
+      ),
+    ).toMatchObject({ role: "editor" });
+    expect(await roles()).toEqual({
+      [actorId]: "owner",
+      [editorId]: "editor",
+      [studentId]: "editor",
+    });
+
+    const create = createCommit(
+      "018f0000-0000-7000-8000-0000000009a1",
+      "018f0000-0000-7000-8000-0000000009af",
+      "018f0000-0000-7000-8000-0000000009a2",
+    );
+    visitorSocket.socket.send(JSON.stringify(create));
+    expect(
+      await visitorSocket.next(
+        (frame) =>
+          (frame.t === "server.action" || frame.t === "server.rejected") &&
+          frame.commandId === create.commandId,
+      ),
+    ).toMatchObject({ t: "server.action", seq: 1 });
+
+    const viewOnly = await setParticipantRole("viewer", 3);
+    expect(viewOnly).toMatchObject({ status: 200, body: { board: { participantRole: "viewer" } } });
+    expect(
+      await visitorSocket.next(
+        (frame) => frame.t === "access.changed" && frame.participantRole === "viewer",
+      ),
+    ).toMatchObject({ role: "viewer" });
+    expect(await roles()).toEqual({
+      [actorId]: "owner",
+      [editorId]: "viewer",
+      [studentId]: "viewer",
+    });
+
+    const blocked = createCommit(
+      "018f0000-0000-7000-8000-0000000009b1",
+      "018f0000-0000-7000-8000-0000000009bf",
+      "018f0000-0000-7000-8000-0000000009b2",
+    );
+    visitorSocket.socket.send(JSON.stringify({ ...blocked, baseSeq: 1 }));
+    expect(
+      await visitorSocket.next(
+        (frame) => frame.t === "server.rejected" && frame.commandId === blocked.commandId,
+      ),
+    ).toMatchObject({ code: "FORBIDDEN" });
+  });
 
   it("relays owner and editor viewports without durable writes while viewers remain receive-only", async () => {
     const stub = (env as unknown as Env).BOARD_ROOMS.getByName(boardId);

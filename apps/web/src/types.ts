@@ -14,6 +14,10 @@ export const PROTOCOL_VERSION = SHARED_PROTOCOL_VERSION;
 export type Role = "viewer" | "editor" | "owner";
 export type DrawingPolicy = "editors_enabled" | "owner_only" | "locked";
 export type AccessMode = "private" | "link_view";
+/** The role non-owner participants get by default, including link visitors who are not members. */
+export type ParticipantRole = "viewer" | "editor";
+/** What the Participants drawer offers: everyone views, everyone edits, or editing paused for all. */
+export type ParticipantMode = "view" | "edit" | "locked";
 export type BoardFeatures = SharedBoardFeatures;
 /** The one picture or video a comment can carry beside its text. */
 export type CommentMedia = SharedCommentMedia;
@@ -405,6 +409,8 @@ export type Bootstrap = {
     title: string;
     accessMode: AccessMode;
     drawingPolicy: DrawingPolicy;
+    /** Missing from servers that predate participant roles, which treated everyone as a viewer. */
+    participantRole?: ParticipantRole;
     imagesEnabled: boolean;
     features: BoardFeatures;
     aclVersion: number;
@@ -505,6 +511,15 @@ export type ConnectionPhase =
   | "reload_required";
 
 export type ServerFrame = { v: number; t: string; [key: string]: unknown };
+
+/** The Participants drawer choice that matches the board's current access settings. */
+export function participantModeFor(
+  policy: DrawingPolicy,
+  participantRole: ParticipantRole | undefined,
+): ParticipantMode {
+  if (policy === "locked") return "locked";
+  return policy === "editors_enabled" && participantRole === "editor" ? "edit" : "view";
+}
 
 export function canRoleDraw(role: Role, policy: DrawingPolicy): boolean {
   if (policy === "locked" || role === "viewer") return false;
