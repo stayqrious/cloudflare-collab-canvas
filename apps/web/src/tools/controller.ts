@@ -1971,17 +1971,7 @@ export class ToolController {
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
     this.syncPointerActive();
-    const gesture = this.gesture;
-    if (gesture?.pointerId !== event.pointerId) return;
-    // In an embedding iframe, a release outside the frame never reaches the board: capture is
-    // only reported lost, with no button held, once the pointer comes back. That release ends
-    // the gesture, so keep what was drawn up to the frame edge instead of discarding it.
-    if (event.pointerType !== "touch" && event.buttons === 0) {
-      this.gesture = null;
-      void this.finishGesture(gesture);
-      return;
-    }
-    this.cancelGesture();
+    if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
   };
 
   /**

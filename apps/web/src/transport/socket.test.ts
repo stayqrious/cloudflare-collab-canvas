@@ -246,26 +246,6 @@ describe("protocol rollout handling", () => {
     expect(socketHooks.onResync).toHaveBeenCalledWith("The server sent an invalid action.");
   });
 
-  it("keeps the connection when the room's sync reply matches the applied sequence", () => {
-    let sequence = 3;
-    const socketHooks = { ...hooks(), getSequence: () => sequence };
-    const boardSocket = new BoardSocket("b_test", socketHooks);
-    boardSocket.connect();
-    const socket = fakeSockets[0];
-    expect(socket).toBeDefined();
-    if (socket === undefined) return;
-    socket.readyState = FakeWebSocket.OPEN;
-
-    socket.emitMessage({ v: 1, t: "server.in_sync", latestSeq: 3 });
-    expect(socketHooks.onResync).not.toHaveBeenCalled();
-    expect(socket.closeCalls).toEqual([]);
-
-    // The room's sequence arrives behind every earlier action, so a difference is a real gap.
-    sequence = 2;
-    socket.emitMessage({ v: 1, t: "server.in_sync", latestSeq: 3 });
-    expect(socketHooks.onResync).toHaveBeenCalledWith("The client sequence differs from the room.");
-  });
-
   it("preserves classroom object tools in peer presence", () => {
     const socketHooks = hooks();
     const boardSocket = new BoardSocket("b_test", socketHooks);

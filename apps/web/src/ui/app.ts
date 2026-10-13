@@ -100,7 +100,6 @@ import type {
   ImageGeometry,
   Matrix,
   Member,
-  ParticipantMode,
   Point,
   Presence,
   RemotePreview,
@@ -117,13 +116,7 @@ import type {
   TextStyle,
   ToolName,
 } from "../types";
-import {
-  canRoleComment,
-  canRoleDraw,
-  createId,
-  PROTOCOL_VERSION,
-  participantModeFor,
-} from "../types";
+import { canRoleComment, canRoleDraw, createId, PROTOCOL_VERSION } from "../types";
 import { ActivityTemplateWebMcp } from "../webmcp/activity-templates";
 import { BoardWriteWebMcp, type StickyMove } from "../webmcp/board-writes";
 import { ClassDecisionWebMcp } from "../webmcp/class-decision";
@@ -2008,9 +2001,9 @@ export class BoardApp {
           <section class="access-section" data-participant-permissions hidden>
             <h3>Board permissions</h3>
             <div class="segmented-control" role="group" aria-label="Board permissions">
-              <button type="button" data-participant-mode="view">View only</button>
-              <button type="button" data-participant-mode="edit">Allow editing</button>
-              <button type="button" data-participant-mode="locked">Lock everyone</button>
+              <button type="button" data-policy="locked">View only</button>
+              <button type="button" data-policy="owner_only">Owners only</button>
+              <button type="button" data-policy="editors_enabled">Allow editing</button>
             </div>
             <p class="section-note" data-participant-policy-note></p>
           </section>
@@ -3392,11 +3385,11 @@ export class BoardApp {
       },
     );
     for (const button of this.participantDrawer.querySelectorAll<HTMLButtonElement>(
-      "[data-participant-mode]",
+      "[data-policy]",
     )) {
       button.addEventListener(
         "click",
-        () => void this.setParticipantMode(button.dataset.participantMode as ParticipantMode),
+        () => void this.setPolicy(button.dataset.policy as DrawingPolicy),
       );
     }
     this.accessButton.addEventListener("click", () => {
@@ -4559,8 +4552,6 @@ export class BoardApp {
     ) {
       this.bootstrap.board.drawingPolicy = access.drawingPolicy;
     }
-    if (access.participantRole === "viewer" || access.participantRole === "editor")
-      this.bootstrap.board.participantRole = access.participantRole;
     this.bootstrap.board.imagesEnabled = access.imagesEnabled;
     this.bootstrap.board.features = features;
     if (access.accessMode === "private" || access.accessMode === "link_view")
@@ -5878,28 +5869,6 @@ export class BoardApp {
   }
 
   private async setPolicy(policy: DrawingPolicy): Promise<void> {
-    await this.updateParticipantAccess({ drawingPolicy: policy });
-  }
-
-  /**
-   * "View only" and "Allow editing" set the role of every non-owner participant at once,
-   * including people who joined from the Space link; "Lock everyone" pauses editing for all.
-   */
-  private async setParticipantMode(mode: ParticipantMode): Promise<void> {
-    await this.updateParticipantAccess(
-      mode === "locked"
-        ? { drawingPolicy: "locked" }
-        : {
-            drawingPolicy: "editors_enabled",
-            participantRole: mode === "edit" ? "editor" : "viewer",
-          },
-    );
-  }
-
-  private async updateParticipantAccess(values: {
-    drawingPolicy: DrawingPolicy;
-    participantRole?: "viewer" | "editor";
-  }): Promise<void> {
     if (this.bootstrap.actor.role !== "owner" || this.permissionChangePending) return;
     this.permissionChangePending = true;
     this.renderParticipantPermissions();
@@ -5907,26 +5876,18 @@ export class BoardApp {
     try {
       const result = await this.api.updateSettings(
         this.bootstrap.board.id,
-        values,
+        { drawingPolicy: policy },
         this.bootstrap.board.aclVersion,
       );
-      this.bootstrap.board.drawingPolicy = values.drawingPolicy;
-      if (values.participantRole) {
-        this.bootstrap.board.participantRole = values.participantRole;
-        for (const member of this.accessMembers) {
-          if (member.role !== "owner") member.role = values.participantRole;
-        }
-      }
+      this.bootstrap.board.drawingPolicy = policy;
       this.adoptAclVersion(result);
       this.updatePermissions();
     } catch (error) {
       this.apiError(error);
     } finally {
       this.permissionChangePending = false;
-      this.renderParticipants();
+      this.renderParticipantPermissions();
       if (!this.settingsDrawer.hidden) this.renderSettingsPanel();
-      if (values.participantRole && !this.participantDrawer.hidden)
-        void this.loadParticipantMembers();
     }
   }
 
@@ -6998,27 +6959,19 @@ export class BoardApp {
     const controls = query(this.participantDrawer, "[data-participant-permissions]", HTMLElement);
     const canManage = this.bootstrap.actor.role === "owner" && this.phase !== "archived";
     controls.hidden = !canManage;
-    const mode = participantModeFor(
-      this.bootstrap.board.drawingPolicy,
-      this.bootstrap.board.participantRole,
-      this.accessMembers.map((member) => member.role),
-    );
-    for (const button of controls.querySelectorAll<HTMLButtonElement>("[data-participant-mode]")) {
-      const selected = button.dataset.participantMode === mode;
+    const policy = this.bootstrap.board.drawingPolicy;
+    for (const button of controls.querySelectorAll<HTMLButtonElement>("[data-policy]")) {
+      const selected = button.dataset.policy === policy;
       button.classList.toggle("active", selected);
       button.setAttribute("aria-pressed", String(selected));
       button.disabled = this.permissionChangePending || this.archivePending;
     }
     query(controls, "[data-participant-policy-note]", HTMLElement).textContent =
-      mode === "locked"
+      policy === "locked"
         ? "Everyone can view. Editing is paused for everyone, including owners."
-        : mode === "edit"
-          ? this.bootstrap.board.participantRole === "editor"
-            ? "Everyone can edit, including people who join from the link. Set someone to Viewer below to make them read only."
-            : "Editors can edit. Choose Allow editing to let everyone contribute, or View only to make everyone a viewer."
-          : this.bootstrap.board.drawingPolicy === "owner_only"
-            ? "Only owners can edit. Choose Allow editing to let everyone contribute."
-            : "Participants can view; owners can edit. Choose Allow editing to let everyone contribute.";
+        : policy === "owner_only"
+          ? "Only owners can edit. Participant roles are kept for when editing resumes."
+          : "Owners and editors can edit. Set a participant to Editor below to let them edit.";
     for (const select of this.participantList.querySelectorAll("select")) {
       select.disabled = !canManage || this.permissionChangePending || this.archivePending;
       select.hidden = !canManage;

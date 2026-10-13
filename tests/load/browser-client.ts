@@ -398,10 +398,11 @@ export async function installBrowserClient(
           counters.syncResponses += 1;
           return;
         case "server.resync_required":
-          // The server closes 4009 instead of replaying older actions onto this
-          // socket. Count the response as a completed check, mark this
-          // generation unready immediately, and let the close handler
-          // reconnect from our authoritative cursor.
+          // A sync check can become stale while its request is queued behind a
+          // live broadcast. The server deliberately closes 4009 instead of
+          // replaying older actions onto that socket. Count the response as a
+          // completed check, mark this generation unready immediately, and
+          // let the close handler reconnect from our authoritative cursor.
           counters.resyncRecoveries += 1;
           if (syncCompleted < syncIssued) {
             syncCompleted += 1;
@@ -636,11 +637,7 @@ export async function installBrowserClient(
         const readyTarget = counters.connectionsReady + 1;
         syncIssued += 1;
         counters.syncChecksSent += 1;
-        // A check that is behind is answered with the room's sequence; only a client that
-        // claims to be ahead of the room is sent through the 4009 recovery path.
-        socket.send(
-          JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: lastSeq + 1_000_000 }),
-        );
+        socket.send(JSON.stringify({ v: 1, t: "client.sync_check", latestSeq: lastSeq - 1 }));
         await waitFor(
           () =>
             counters.resyncRecoveries >= recoveryTarget &&

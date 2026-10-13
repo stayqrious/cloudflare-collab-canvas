@@ -52,8 +52,7 @@ export function resolveAccess(sql: SqlStorage, board: BoardRow, actorId: string)
     return { role: member.role, displayName: member.display_name, canView: true };
   }
   if (board.access_mode === "link_view") {
-    const role = board.participant_role === "editor" ? "editor" : "viewer";
-    return { role, displayName: fallbackDisplayName(actorId), canView: true };
+    return { role: "viewer", displayName: fallbackDisplayName(actorId), canView: true };
   }
   return { role: "viewer", displayName: fallbackDisplayName(actorId), canView: false };
 }

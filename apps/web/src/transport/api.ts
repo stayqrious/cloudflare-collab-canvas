@@ -18,7 +18,6 @@ import type {
   Bootstrap,
   DrawingPolicy,
   Member,
-  ParticipantRole,
   Role,
 } from "../types";
 
@@ -434,7 +433,6 @@ export class ApiClient {
       title?: string;
       accessMode?: AccessMode;
       drawingPolicy?: DrawingPolicy;
-      participantRole?: ParticipantRole;
       imagesEnabled?: boolean;
       features?: Partial<BoardFeatures>;
     },

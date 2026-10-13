@@ -447,14 +447,6 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
         SELECT actor_id FROM members ORDER BY created_at_ms, actor_id;
     `,
   },
-  {
-    version: 17,
-    name: "participant_role",
-    sql: `
-      ALTER TABLE board ADD COLUMN participant_role TEXT NOT NULL DEFAULT 'viewer'
-        CHECK (participant_role IN ('viewer', 'editor'));
-    `,
-  },
 ] as const;
 
 export const ORGANISATION_SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [

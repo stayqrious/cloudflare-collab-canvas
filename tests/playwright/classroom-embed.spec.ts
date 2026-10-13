@@ -153,13 +153,13 @@ test("Organisation participants join one Space with live owner controls and attr
       "true",
     );
     await coach.getByTestId("participants-button").click();
-    await expect(coachAccess.locator("button[data-participant-mode='view']")).toHaveAttribute(
+    await expect(coachAccess.locator("button[data-policy='owner_only']")).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     await coOwnerSettings.locator("button[data-policy='editors_enabled']").click();
     await expect(student.getByRole("button", { name: /^Shapes/u })).toBeEnabled();
-    await expect(coachAccess.locator("button[data-participant-mode='edit']")).toHaveAttribute(
+    await expect(coachAccess.locator("button[data-policy='editors_enabled']")).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -636,66 +636,6 @@ test("Organisation owner configures and sends the Space webhook from Settings", 
     fullPage: false,
   });
   expect(consoleErrors).toEqual([]);
-});
-
-test("an embedded editor keeps a shape released outside the Space frame", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "The Organisation Space flow runs once.");
-  test.skip(
-    Boolean(process.env.PLAYWRIGHT_BASE_URL),
-    "Remote Organisation testing requires a configured parent origin and signing registry.",
-  );
-
-  const demo = readOrganisationSigningEntry("demo");
-  const participant = {
-    name: "edge-release-student",
-    role: "editor",
-    displayName: "Student Edge",
-    participantId: `student-${randomUUID()}`,
-  } satisfies Participant;
-  const frame = await mountParticipant(
-    page,
-    LOCAL_PARENT_URL,
-    participant,
-    launchUrl(
-      LOCAL_WORKER_ORIGIN,
-      "demo",
-      `playwright-edge-release-${randomUUID()}`,
-      demo,
-      participant,
-      Math.floor(Date.now() / 1_000),
-    ),
-  );
-  // Leave host page around the Space, as a learning platform does.
-  await page.locator("iframe").evaluate((node) => {
-    const iframe = node as HTMLIFrameElement;
-    iframe.style.width = "70%";
-    iframe.style.height = "75%";
-    iframe.style.margin = "60px 0 0 120px";
-  });
-  const iframeBox = await page.locator("iframe").boundingBox();
-  const canvasBox = await frame.locator("#board-canvas").boundingBox();
-  if (!iframeBox || !canvasBox) throw new Error("The Space frame has no layout bounds.");
-
-  const items = frame.locator("#drawing-area [data-item-id]");
-  await frame.getByTestId("tool-rectangle").click();
-  await frame.getByTestId("shape-rectangle").click();
-  const start = { x: iframeBox.x + iframeBox.width - 150, y: canvasBox.y + canvasBox.height / 2 };
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(iframeBox.x + iframeBox.width + 60, start.y + 70, { steps: 12 });
-  // The release lands on the host page, so the Space never sees it.
-  await page.mouse.up();
-  await expect(items).toHaveCount(0);
-
-  // Coming back over the Space reports the lost capture; the shape is saved, not discarded.
-  await page.mouse.move(canvasBox.x + canvasBox.width / 3, canvasBox.y + canvasBox.height / 3, {
-    steps: 4,
-  });
-  await expect(items).toHaveCount(1);
-  await expect(frame.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
-  await expect(frame.getByTestId("toast-region")).toHaveText("");
 });
 
 function readDevVar(name: string): string {

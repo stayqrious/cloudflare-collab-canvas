@@ -15,20 +15,13 @@ test("owners manage live participant roles and board permissions from Participan
     });
   };
   captureErrors(page);
-  const boardUrl = await createBoard(page, "Participant permissions");
+  await createBoard(page, "Participant permissions");
   await expect(page).toHaveTitle(/Participant permissions/u);
   const invite = await createInvite(page, "editor");
   await page.getByTestId("participants-button").click();
   const participants = page.getByTestId("participant-drawer");
   await expect(participants).toBeVisible();
   await expect(participants.getByRole("combobox")).toHaveCount(0);
-  // New Spaces start view only for participants, and the drawer says so.
-  await expect(
-    participants.getByRole("button", { name: "View only", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(
-    participants.getByRole("button", { name: "Allow editing", exact: true }),
-  ).toHaveAttribute("aria-pressed", "false");
 
   const context = await browser.newContext(isolatedContextOptions(testInfo, 81));
   const collaborator = await context.newPage();
@@ -55,43 +48,28 @@ test("owners manage live participant roles and board permissions from Participan
     await role.selectOption("editor");
     await expect(collaborator.getByTestId("tool-pencil")).toBeEnabled();
 
-    await participants.getByRole("button", { name: "Lock everyone", exact: true }).click();
+    await participants.getByRole("button", { name: "View only", exact: true }).click();
     await expect(
-      participants.getByRole("button", { name: "Lock everyone", exact: true }),
+      participants.getByRole("button", { name: "View only", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("tool-pencil")).toBeDisabled();
     await expect(collaborator.getByTestId("tool-pencil")).toBeDisabled();
     await expect(role).toHaveValue("editor");
 
-    // View only makes every participant a viewer while owners keep editing.
-    await participants.getByRole("button", { name: "View only", exact: true }).click();
-    await expect(
-      participants.getByRole("button", { name: "View only", exact: true }),
-    ).toHaveAttribute("aria-pressed", "true");
+    await participants.getByRole("button", { name: "Owners only", exact: true }).click();
     await expect(page.getByTestId("tool-pencil")).toBeEnabled();
     await expect(collaborator.getByTestId("tool-pencil")).toBeDisabled();
-    await expect(role).toHaveValue("viewer");
+    await participants.getByRole("button", { name: "Allow editing", exact: true }).click();
+    await expect(collaborator.getByTestId("tool-pencil")).toBeEnabled();
 
-    // Allow editing makes every participant an editor, including people who joined from the link.
-    const visitorContext = await browser.newContext(isolatedContextOptions(testInfo, 82));
-    const visitor = await visitorContext.newPage();
-    captureErrors(visitor);
-    try {
-      await visitor.goto(boardUrl);
-      await expect(visitor.locator("#board-canvas")).toHaveAttribute("data-ready", "true");
-      await expect(visitor.getByTestId("tool-pencil")).toBeDisabled();
-      await participants.getByRole("button", { name: "Allow editing", exact: true }).click();
-      await expect(
-        participants.getByRole("button", { name: "Allow editing", exact: true }),
-      ).toHaveAttribute("aria-pressed", "true");
-      await expect(collaborator.getByTestId("tool-pencil")).toBeEnabled();
-      await expect(visitor.getByTestId("tool-pencil")).toBeEnabled();
-      await expect(role).toHaveValue("editor");
-      await participants.getByRole("button", { name: "View only", exact: true }).click();
-      await expect(visitor.getByTestId("tool-pencil")).toBeDisabled();
-    } finally {
-      await visitorContext.close();
-    }
+    // An existing Viewer must stay read-only when the board allows editing again.
+    await role.selectOption("viewer");
+    await expect(collaborator.getByTestId("tool-pencil")).toBeDisabled();
+    await participants.getByRole("button", { name: "View only", exact: true }).click();
+    await expect(page.getByTestId("tool-pencil")).toBeDisabled();
+    await participants.getByRole("button", { name: "Allow editing", exact: true }).click();
+    await expect(page.getByTestId("tool-pencil")).toBeEnabled();
+    await expect(collaborator.getByTestId("tool-pencil")).toBeDisabled();
     await expect(role).toHaveValue("viewer");
 
     // Failed saves restore the authoritative role and leave controls usable.
@@ -129,7 +107,7 @@ test("owners manage live participant roles and board permissions from Participan
     await expect(collaborator.getByTestId("tool-pencil")).toBeDisabled();
     await page.getByTestId("participants-button").click();
     await expect(
-      participants.getByRole("button", { name: "View only", exact: true }),
+      participants.getByRole("button", { name: "Owners only", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await participants.getByRole("button", { name: "Allow editing", exact: true }).click();
     await expect(collaborator.getByTestId("tool-pencil")).toBeEnabled();
