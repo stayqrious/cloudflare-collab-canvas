@@ -7001,6 +7001,7 @@ export class BoardApp {
     const mode = participantModeFor(
       this.bootstrap.board.drawingPolicy,
       this.bootstrap.board.participantRole,
+      this.accessMembers.map((member) => member.role),
     );
     for (const button of controls.querySelectorAll<HTMLButtonElement>("[data-participant-mode]")) {
       const selected = button.dataset.participantMode === mode;
@@ -7012,7 +7013,9 @@ export class BoardApp {
       mode === "locked"
         ? "Everyone can view. Editing is paused for everyone, including owners."
         : mode === "edit"
-          ? "Everyone can edit, including people who join from the link. Set someone to Viewer below to make them read only."
+          ? this.bootstrap.board.participantRole === "editor"
+            ? "Everyone can edit, including people who join from the link. Set someone to Viewer below to make them read only."
+            : "Editors can edit. Choose Allow editing to let everyone contribute, or View only to make everyone a viewer."
           : this.bootstrap.board.drawingPolicy === "owner_only"
             ? "Only owners can edit. Choose Allow editing to let everyone contribute."
             : "Participants can view; owners can edit. Choose Allow editing to let everyone contribute.";

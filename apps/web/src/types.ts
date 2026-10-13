@@ -512,13 +512,20 @@ export type ConnectionPhase =
 
 export type ServerFrame = { v: number; t: string; [key: string]: unknown };
 
-/** The Participants drawer choice that matches the board's current access settings. */
+/**
+ * The Participants drawer choice that matches the board: "edit" while anyone besides owners can
+ * edit, whether through the board-wide participant role or a member's own Editor role.
+ */
 export function participantModeFor(
   policy: DrawingPolicy,
   participantRole: ParticipantRole | undefined,
+  memberRoles: Iterable<Role> = [],
 ): ParticipantMode {
   if (policy === "locked") return "locked";
-  return policy === "editors_enabled" && participantRole === "editor" ? "edit" : "view";
+  if (policy !== "editors_enabled") return "view";
+  if (participantRole === "editor") return "edit";
+  for (const role of memberRoles) if (role === "editor") return "edit";
+  return "view";
 }
 
 export function canRoleDraw(role: Role, policy: DrawingPolicy): boolean {
