@@ -1,7 +1,7 @@
 import { findMoveCopyClosureLimitViolation } from "@collab/board-core";
 import { boundsContain, transformPoint } from "@collab/geometry";
 import { MAX_BATCH_OPERATIONS } from "@collab/protocol";
-import { ERASER_RADIUS_CSS_PX } from "../board/cursor-icons";
+import { ERASER_RADIUS_CSS_PX, ERASER_SIZES } from "../board/cursor-icons";
 import { videoEmbedFromText } from "../board/links";
 import type { BoardModel, Bounds, ConnectorAnchor } from "../board/model";
 import { itemBounds, translateMatrix } from "../board/model";
@@ -1171,6 +1171,7 @@ export function buildUngroupedCopyOperation(
 
 export class ToolController {
   private toolValue: ToolName = "pencil";
+  private eraserRadiusValue = ERASER_RADIUS_CSS_PX;
   private gesture: Gesture | null = null;
   private pendingLine: Extract<Gesture, { kind: "shape" }> | null = null;
   private readonly selected = new Set<string>();
@@ -1206,6 +1207,17 @@ export class ToolController {
 
   get tool(): ToolName {
     return this.toolValue;
+  }
+
+  get eraserRadius(): number {
+    return this.eraserRadiusValue;
+  }
+
+  setEraserRadius(radius: number): void {
+    if (!ERASER_SIZES.some((size) => size.radius === radius)) return;
+    this.cancelGesture();
+    this.eraserRadiusValue = radius;
+    this.options.renderer.setEraserRadius(radius);
   }
 
   get selection(): ReadonlySet<string> {
@@ -1636,7 +1648,7 @@ export class ToolController {
         versions: new Map(),
         items: new Map(),
         points: [],
-        radius: ERASER_RADIUS_CSS_PX / this.options.renderer.viewport.zoom,
+        radius: this.eraserRadiusValue / this.options.renderer.viewport.zoom,
         partial: this.options.usePartialEraser(),
         previewItems: new Set(),
         animationFrame: null,

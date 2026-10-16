@@ -726,6 +726,12 @@ button:disabled {
   gap: 3px;
 }
 
+.eraser-sizes {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
 [data-quick-colours] {
   display: flex;
   align-items: center;
@@ -752,6 +758,11 @@ button:disabled {
 .brush-preset .tool-glyph svg {
   width: 19px;
   height: 19px;
+}
+
+.eraser-size > svg {
+  width: 28px;
+  height: 28px;
 }
 
 .brush-preset .tool-glyph {

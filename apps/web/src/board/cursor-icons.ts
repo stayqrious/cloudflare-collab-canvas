@@ -6,19 +6,28 @@ export const VIEWER_LOCK_PATH = "M20 4V1a3 3 0 0 1 6 0v3M19 4h8v7h-8ZM23 7v2";
 
 // Shared by the cursor outline and the controller's zoom-adjusted erase radius.
 export const ERASER_RADIUS_CSS_PX = 24;
-const ERASER_CURSOR_CENTER = ERASER_RADIUS_CSS_PX + 2;
+export const ERASER_SIZES = [
+  { label: "Small", radius: 12 },
+  { label: "Medium", radius: ERASER_RADIUS_CSS_PX },
+  { label: "Large", radius: 40 },
+] as const;
 
 function cursorUrl(content: string, x: number, y: number, size = 32): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${content}</svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${x} ${y}`;
 }
 
-export const ERASER_CURSOR = cursorUrl(
-  `<g fill="none"><circle cx="${ERASER_CURSOR_CENTER}" cy="${ERASER_CURSOR_CENTER}" r="${ERASER_RADIUS_CSS_PX}" stroke="white" stroke-width="3"/><circle cx="${ERASER_CURSOR_CENTER}" cy="${ERASER_CURSOR_CENTER}" r="${ERASER_RADIUS_CSS_PX}" stroke="#20242b" stroke-width="1.5"/></g>`,
-  ERASER_CURSOR_CENTER,
-  ERASER_CURSOR_CENTER,
-  ERASER_CURSOR_CENTER * 2,
-);
+export function eraserCursor(radius: number): string {
+  const center = radius + 2;
+  return cursorUrl(
+    `<g fill="none"><circle cx="${center}" cy="${center}" r="${radius}" stroke="white" stroke-width="3"/><circle cx="${center}" cy="${center}" r="${radius}" stroke="#20242b" stroke-width="1.5"/></g>`,
+    center,
+    center,
+    center * 2,
+  );
+}
+
+export const ERASER_CURSOR = eraserCursor(ERASER_RADIUS_CSS_PX);
 
 export const PEN_CURSOR = cursorUrl(
   `<g transform="translate(3 28)" stroke-linejoin="round"><path d="${PEN_CURSOR_PATH}" fill="#20242b" stroke="white" stroke-width="2.5"/><path d="${PEN_CURSOR_DETAIL}" fill="none" stroke="white" stroke-width="1.5"/></g>`,

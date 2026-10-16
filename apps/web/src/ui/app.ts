@@ -31,6 +31,7 @@ import {
   buildActivityBatch,
 } from "../activities/templates";
 import { buildClearVoteDeletes, isVoteTable, summarizeVotes } from "../activities/voting";
+import { ERASER_SIZES } from "../board/cursor-icons";
 import {
   configureVideoFrame,
   VIDEO_EMBED_HEIGHT,
@@ -1920,6 +1921,9 @@ export class BoardApp {
               </div>
               <span class="quick-style-divider" data-quick-style-divider aria-hidden="true"></span>
               <div data-quick-colours></div>
+              <div class="eraser-sizes" data-eraser-sizes role="group" aria-label="Eraser size" hidden>
+                ${ERASER_SIZES.map(({ label, radius }) => `<button class="brush-preset eraser-size" type="button" data-eraser-radius="${radius}" aria-label="${label} eraser" title="${label} eraser (${radius * 2} px)" aria-pressed="false"><svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="${radius / 4}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>`).join("")}
+              </div>
             </div>
             <div class="zoom-controls" aria-label="Canvas zoom">
               <button type="button" data-zoom-out aria-label="Zoom out">−</button>
@@ -2950,6 +2954,12 @@ export class BoardApp {
         this.style.opacity = BRUSH_PRESETS[preset].opacity;
         this.tools.setTool("pencil");
         this.setActiveToolButton("pencil");
+      });
+    }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-eraser-radius]")) {
+      button.addEventListener("click", () => {
+        this.tools.setEraserRadius(Number(button.dataset.eraserRadius));
+        this.updateStyleControls();
       });
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-sticky-color]")) {
@@ -7604,8 +7614,12 @@ export class BoardApp {
     query(this.root, "[data-style-font-row]", HTMLElement).hidden = !text;
     query(this.root, "[data-style-font-family-row]", HTMLElement).hidden = !text;
     query(this.root, "[data-testid='quick-style-bar']", HTMLElement).hidden = !(pencil || eraser);
-    query(this.root, "[data-quick-style-divider]", HTMLElement).hidden = eraser;
     query(this.root, "[data-quick-colours]", HTMLElement).hidden = eraser;
+    query(this.root, "[data-eraser-sizes]", HTMLElement).hidden = !eraser;
+    query(this.root, "[data-testid='quick-style-bar']", HTMLElement).setAttribute(
+      "aria-label",
+      eraser ? "Brush and eraser size" : "Brush and colour",
+    );
     query(this.root, "[data-style-color-label]", HTMLElement).textContent = sticky
       ? "Sticky colour"
       : stamp
@@ -7640,10 +7654,17 @@ export class BoardApp {
       button.setAttribute(
         "aria-pressed",
         String(
-          values !== undefined &&
+          pencil &&
+            values !== undefined &&
             this.style.width === values.width &&
             this.style.opacity === values.opacity,
         ),
+      );
+    }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-eraser-radius]")) {
+      button.setAttribute(
+        "aria-pressed",
+        String(Number(button.dataset.eraserRadius) === this.tools.eraserRadius),
       );
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-sticky-color]")) {

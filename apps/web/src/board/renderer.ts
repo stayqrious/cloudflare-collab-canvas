@@ -60,6 +60,7 @@ import type {
 } from "../types";
 import {
   ERASER_CURSOR,
+  eraserCursor,
   PEN_CURSOR,
   PEN_CURSOR_DETAIL,
   PEN_CURSOR_PATH,
@@ -451,6 +452,10 @@ export class BoardRenderer {
 
   setCursor(tool: ToolName, temporaryPan = false): void {
     this.svg.dataset.tool = temporaryPan ? "pan" : tool;
+  }
+
+  setEraserRadius(radius: number): void {
+    this.svg.style.setProperty("--eraser-cursor", eraserCursor(radius));
   }
 
   setResizeHandlesEnabled(enabled: boolean): void {
