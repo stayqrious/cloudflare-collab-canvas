@@ -169,6 +169,7 @@ export const BOARD_FEATURE_KEYS = [
   "videos",
   "aiTools",
   "grid",
+  "smartNote",
 ] as const;
 
 export type BoardFeatureKey = (typeof BOARD_FEATURE_KEYS)[number];
@@ -205,6 +206,7 @@ export const DEFAULT_BOARD_FEATURES: BoardFeatures = {
   aiTools: false,
   // The square grid background is opt-in; a board shows the dot grid until it is turned on.
   grid: false,
+  smartNote: false,
 };
 
 /**

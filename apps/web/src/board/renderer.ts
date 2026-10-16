@@ -17,6 +17,7 @@ import {
 import { STAMP_SVG_PATHS } from "@collab/svg-export";
 import { summarizeBoardVotes, type VoteSummary } from "../activities/voting";
 import { clearTypesetMath, containsMathMarkup, splitMathMarkup, typesetMath } from "../mathjax";
+import { eraseStrokeItem, isPartiallyErasableItem } from "../tools/stroke-erase";
 import {
   isRotatableObjectItem,
   isScalableObjectItem,
@@ -58,6 +59,8 @@ import type {
   ZoneStyle,
 } from "../types";
 import {
+  ERASER_CURSOR,
+  eraserCursor,
   PEN_CURSOR,
   PEN_CURSOR_DETAIL,
   PEN_CURSOR_PATH,
@@ -342,6 +345,10 @@ export class BoardRenderer {
   private readonly cursorLayer: SVGGElement;
   private readonly participantColors = new Map<string, string>();
   private readonly itemNodes = new Map<string, SVGGraphicsElement>();
+  private readonly erasePreviews = new Map<
+    string,
+    { gestureId: string; version: number; item: BoardItem | null }
+  >();
   private readonly imageAssets: ImageAssetCache;
   private selectedIds = new Set<string>();
   private resizeHandlesEnabled = true;
@@ -427,6 +434,7 @@ export class BoardRenderer {
     );
     container.append(this.svg);
 
+    this.svg.style.setProperty("--eraser-cursor", ERASER_CURSOR);
     this.svg.style.setProperty("--pen-cursor", PEN_CURSOR);
     this.svg.style.setProperty("--viewer-cursor", VIEWER_CURSOR);
     this.viewport = new CanvasViewport(this.svg);
@@ -444,6 +452,10 @@ export class BoardRenderer {
 
   setCursor(tool: ToolName, temporaryPan = false): void {
     this.svg.dataset.tool = temporaryPan ? "pan" : tool;
+  }
+
+  setEraserRadius(radius: number): void {
+    this.svg.style.setProperty("--eraser-cursor", eraserCursor(radius));
   }
 
   setResizeHandlesEnabled(enabled: boolean): void {
@@ -777,14 +789,46 @@ export class BoardRenderer {
     );
   }
 
-  highlightForErase(ids: Iterable<string>): void {
-    const erased = new Set(ids);
-    for (const [id, node] of this.itemNodes) node.classList.toggle("erase-target", erased.has(id));
+  showErasePreview(
+    gestureId: string,
+    items: Iterable<BoardItem>,
+    points: readonly Point[],
+    radius: number,
+    partial: boolean,
+  ): void {
+    const changed = new Set<string>();
+    for (const source of items) {
+      let item: BoardItem | null = null;
+      if (partial && isPartiallyErasableItem(source)) {
+        // Use the commit's clipping algorithm so the preview shows the exact surviving ink.
+        const result = eraseStrokeItem(source, points, radius);
+        if (!result) item = source;
+        else if (!result.erased) {
+          item = {
+            ...source,
+            geometry: { ...source.geometry, visiblePaths: result.visiblePaths },
+          } as BoardItem;
+        }
+      }
+      this.erasePreviews.set(source.id, { gestureId, version: source.version, item });
+      changed.add(source.id);
+    }
+    if (changed.size > 0) this.render(changed);
+  }
+
+  clearErasePreview(gestureId: string): void {
+    const changed = new Set<string>();
+    for (const [id, preview] of this.erasePreviews) {
+      // A previous commit finishing must not clear a newer drag's preview.
+      if (preview.gestureId !== gestureId) continue;
+      this.erasePreviews.delete(id);
+      changed.add(id);
+    }
+    if (changed.size > 0) this.render(changed);
   }
 
   clearLocalPreview(): void {
     this.clearLocalLayer();
-    this.highlightForErase([]);
     this.setSelection(this.selectedIds);
   }
 
@@ -945,7 +989,10 @@ export class BoardRenderer {
     const ids = changedIds ?? new Set([...this.itemNodes.keys(), ...this.model.items.keys()]);
     for (const id of ids) {
       const current = this.itemNodes.get(id);
-      const item = this.model.getItem(id);
+      let item = this.model.getItem(id);
+      const erasePreview = this.erasePreviews.get(id);
+      // Never mask a newer optimistic or remote edit with a captured older version.
+      if (item && erasePreview?.version === item.version) item = erasePreview.item ?? undefined;
       if (!item) {
         if (current) {
           clearTypesetMath(current);
@@ -1231,12 +1278,19 @@ async function staticDisplayBlob(blob: Blob): Promise<Blob> {
   }
 }
 
+export type FixedPageMapping = {
+  toBoard: (clientX: number, clientY: number) => Point;
+  toClient: (point: Point) => Point;
+};
+
 export class CanvasViewport {
   private x = 0;
   private y = 0;
   private width = 1;
   private height = 1;
   private zoomValue = 1;
+  private page: { width: number; height: number } | null = null;
+  private pageMapping: FixedPageMapping | null = null;
   private readonly resizeObserver: ResizeObserver;
   private readonly listeners = new Set<(zoom: number) => void>();
   private readonly viewListeners = new Set<(state: SpotlightViewState) => void>();
@@ -1247,11 +1301,24 @@ export class CanvasViewport {
     this.resize();
   }
 
+  get fixedPage(): { width: number; height: number } | null {
+    return this.page;
+  }
+
+  setFixedPage(page: { width: number; height: number } | null, mapping?: FixedPageMapping): void {
+    this.page = page;
+    this.pageMapping = page ? (mapping ?? null) : null;
+    this.svg.setAttribute("preserveAspectRatio", page ? "none" : "xMidYMid meet");
+    this.resize();
+  }
+
   get zoom(): number {
     return this.zoomValue;
   }
 
   get viewState(): SpotlightViewState {
+    if (this.page)
+      return { center: { x: this.page.width / 2, y: this.page.height / 2 }, zoom: this.zoomValue };
     return {
       center: {
         x: this.x + this.width / this.zoomValue / 2,
@@ -1262,6 +1329,7 @@ export class CanvasViewport {
   }
 
   get viewBounds(): Bounds {
+    if (this.page) return { minX: 0, minY: 0, maxX: this.page.width, maxY: this.page.height };
     return {
       minX: this.x,
       minY: this.y,
@@ -1281,6 +1349,7 @@ export class CanvasViewport {
   }
 
   setViewState(state: SpotlightViewState): void {
+    if (this.page) return;
     const { x, y } = state.center;
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(state.zoom)) {
       throw new RangeError("Viewport center and zoom must be finite.");
@@ -1294,7 +1363,13 @@ export class CanvasViewport {
   }
 
   clientToBoard(clientX: number, clientY: number): Point {
+    if (this.pageMapping) return this.pageMapping.toBoard(clientX, clientY);
     const rect = this.svg.getBoundingClientRect();
+    if (this.page)
+      return [
+        ((clientX - rect.left) / rect.width) * this.page.width,
+        ((clientY - rect.top) / rect.height) * this.page.height,
+      ];
     return [
       this.x + (clientX - rect.left) / this.zoomValue,
       this.y + (clientY - rect.top) / this.zoomValue,
@@ -1302,7 +1377,13 @@ export class CanvasViewport {
   }
 
   boardToClient(point: Point): Point {
+    if (this.pageMapping) return this.pageMapping.toClient(point);
     const rect = this.svg.getBoundingClientRect();
+    if (this.page)
+      return [
+        rect.left + (point[0] / this.page.width) * rect.width,
+        rect.top + (point[1] / this.page.height) * rect.height,
+      ];
     return [
       rect.left + (point[0] - this.x) * this.zoomValue,
       rect.top + (point[1] - this.y) * this.zoomValue,
@@ -1310,6 +1391,7 @@ export class CanvasViewport {
   }
 
   panByPixels(deltaX: number, deltaY: number): void {
+    if (this.page) return;
     this.x -= deltaX / this.zoomValue;
     this.y -= deltaY / this.zoomValue;
     this.update();
@@ -1317,6 +1399,7 @@ export class CanvasViewport {
   }
 
   zoomAt(clientX: number, clientY: number, zoom: number): void {
+    if (this.page) return;
     const anchorBefore = this.clientToBoard(clientX, clientY);
     this.zoomValue = Math.max(0.1, Math.min(8, zoom));
     const anchorAfter = this.clientToBoard(clientX, clientY);
@@ -1328,6 +1411,7 @@ export class CanvasViewport {
   }
 
   reset(): void {
+    if (this.page) return;
     this.x = 0;
     this.y = 0;
     this.zoomValue = 1;
@@ -1337,6 +1421,7 @@ export class CanvasViewport {
   }
 
   fit(bounds: Bounds | undefined, padding = 80): void {
+    if (this.page) return;
     if (!bounds) {
       this.reset();
       return;
@@ -1382,6 +1467,14 @@ export class CanvasViewport {
   }
 
   private update(): void {
+    if (this.page) {
+      this.x = 0;
+      this.y = 0;
+      this.zoomValue = Math.min(this.width / this.page.width, this.height / this.page.height);
+      this.svg.setAttribute("viewBox", `0 0 ${this.page.width} ${this.page.height}`);
+      this.svg.style.setProperty("--board-zoom", String(this.zoomValue));
+      return;
+    }
     this.svg.setAttribute(
       "viewBox",
       `${this.x} ${this.y} ${this.width / this.zoomValue} ${this.height / this.zoomValue}`,

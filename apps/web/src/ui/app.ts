@@ -31,6 +31,7 @@ import {
   buildActivityBatch,
 } from "../activities/templates";
 import { buildClearVoteDeletes, isVoteTable, summarizeVotes } from "../activities/voting";
+import { ERASER_SIZES } from "../board/cursor-icons";
 import {
   configureVideoFrame,
   VIDEO_EMBED_HEIGHT,
@@ -55,6 +56,7 @@ import {
   OutboxLimitError,
   type OutboxRecoveryMetadata,
 } from "../persistence/outbox";
+import { SmartNoteMode } from "../smart-note/mode";
 import { type ArrangeKind, buildArrangeUpdates } from "../tools/arrange";
 import {
   buildCapturedTextUpdate,
@@ -276,6 +278,7 @@ const FEATURE_LABELS: Readonly<Record<BoardFeatureKey, { label: string; detail: 
     detail: "Let browser AI assistants (WebMCP) read and add to this Space",
   },
   grid: { label: "Square grid", detail: "Squared background for counting and measuring" },
+  smartNote: { label: "Smart Note", detail: "Calibrate a tablet to a shared A5 page" },
 };
 
 /**
@@ -1191,6 +1194,7 @@ export class BoardApp {
   private readonly creatorNames = new Map<string, string>();
   private readonly ignoredSpotlightIds = new Set<string>();
   private readonly localSpotlightIds = new Set<string>();
+  private readonly smartNote: SmartNoteMode;
   private broadcastSpotlightId: string | null = null;
   private followedSpotlight: FollowedSpotlight | null = null;
   private spotlightHeartbeatTimer: number | null = null;
@@ -1634,6 +1638,24 @@ export class BoardApp {
       onFocusLeft: this.leaveMathField,
     });
 
+    this.smartNote = new SmartNoteMode(
+      this.renderer,
+      this.tools,
+      () => {
+        if (this.bootstrap.actor.role === "owner") void this.setFeature("smartNote", false);
+      },
+      () => {
+        this.closeDrawers();
+        this.updatePermissions();
+      },
+      (message) => this.notify(message, "warning"),
+    );
+    query(this.root, "[data-smart-note-open]", HTMLButtonElement).addEventListener("click", () => {
+      if (!this.bootstrap.board.features.smartNote || this.phase === "archived") return;
+      this.stopBroadcastingSpotlight();
+      this.stopFollowingSpotlight();
+      this.smartNote.open();
+    });
     this.bindShellEvents();
     this.model.subscribe(() => {
       this.updateStatus();
@@ -1695,6 +1717,7 @@ export class BoardApp {
     void this.closeTableCellEditor(false);
     void this.closeZoneTitleEditor(false);
     void this.closeTextEditor(false);
+    this.smartNote.destroy();
     this.socket.destroy();
     this.stopWebMcp();
     this.mathFieldPanel?.destroy();
@@ -1769,6 +1792,7 @@ export class BoardApp {
                 </section>
               </div>
             </div>
+            <button class="topbar-button" type="button" data-smart-note-open hidden>Smart Note</button>
             <button class="topbar-button people-button" type="button" data-testid="participants-button" aria-label="1 person here" aria-controls="participant-drawer" aria-expanded="false" title="1 person here">
               <span class="avatar-stack" aria-hidden="true"><i></i><i></i></span>
               <span data-participant-count>1</span>
@@ -1897,6 +1921,9 @@ export class BoardApp {
               </div>
               <span class="quick-style-divider" data-quick-style-divider aria-hidden="true"></span>
               <div data-quick-colours></div>
+              <div class="eraser-sizes" data-eraser-sizes role="group" aria-label="Eraser size" hidden>
+                ${ERASER_SIZES.map(({ label, radius }) => `<button class="brush-preset eraser-size" type="button" data-eraser-radius="${radius}" aria-label="${label} eraser" title="${label} eraser (${radius * 2} px)" aria-pressed="false"><svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="${radius / 4}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>`).join("")}
+              </div>
             </div>
             <div class="zoom-controls" aria-label="Canvas zoom">
               <button type="button" data-zoom-out aria-label="Zoom out">−</button>
@@ -2927,6 +2954,12 @@ export class BoardApp {
         this.style.opacity = BRUSH_PRESETS[preset].opacity;
         this.tools.setTool("pencil");
         this.setActiveToolButton("pencil");
+      });
+    }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-eraser-radius]")) {
+      button.addEventListener("click", () => {
+        this.tools.setEraserRadius(Number(button.dataset.eraserRadius));
+        this.updateStyleControls();
       });
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-sticky-color]")) {
@@ -4730,6 +4763,7 @@ export class BoardApp {
       }
       return;
     }
+    if (this.smartNote.isOpen) return;
     if (this.localSpotlightIds.has(frame.spotlightId)) return;
     if (this.broadcastSpotlightId) return;
     if (this.followedSpotlight) {
@@ -7314,7 +7348,8 @@ export class BoardApp {
       (this.bootstrap.board.features.templates ||
         this.bootstrap.board.features.organisationTemplates);
     this.activitiesButton.hidden = !roleCanAddActivities;
-    this.activitiesButton.disabled = !canEdit || this.activityInsertPending;
+    this.activitiesButton.disabled =
+      !canEdit || this.activityInsertPending || this.bootstrap.board.features.smartNote;
     for (const element of this.activitiesMenu.querySelectorAll<HTMLElement>(
       "[data-built-in-templates]",
     )) {
@@ -7385,9 +7420,16 @@ export class BoardApp {
     if (!this.bootstrap.board.features.spotlight && this.followedSpotlight) {
       this.clearFollowingSpotlight();
     }
+    const smartNoteEnabled = this.bootstrap.board.features.smartNote && !archived;
+    query(this.root, "[data-smart-note-open]", HTMLButtonElement).hidden = !smartNoteEnabled;
+    if (smartNoteEnabled && !this.smartNote.isOpen) {
+      this.stopBroadcastingSpotlight();
+      this.stopFollowingSpotlight();
+    }
+    this.smartNote.sync(smartNoteEnabled, this.bootstrap.actor.role === "owner");
     this.spotlightToggle.hidden =
       !roleCanBroadcast || archived || !this.bootstrap.board.features.spotlight;
-    this.spotlightToggle.disabled = this.phase !== "ready" || archived;
+    this.spotlightToggle.disabled = this.phase !== "ready" || archived || smartNoteEnabled;
     this.renderSpotlightState();
     if (!canEdit || !this.isToolEnabled(this.tools.tool)) {
       this.tools.setTool("select");
@@ -7408,19 +7450,26 @@ export class BoardApp {
           : this.isToolEnabled(name);
       button.hidden = !enabled;
       button.disabled =
-        DRAW_TOOLS.has(name) &&
-        (!canEdit || !enabled || (name === "image" && this.imageUploadInFlight));
+        (smartNoteEnabled && name !== "pencil") ||
+        (DRAW_TOOLS.has(name) &&
+          (!canEdit || !enabled || (name === "image" && this.imageUploadInFlight)));
     }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>(
+      "[data-zoom-out], [data-zoom-reset], [data-zoom-in], [data-zoom-fit]",
+    ))
+      button.disabled = smartNoteEnabled;
+    query(this.root, "[data-smart-note-open]", HTMLButtonElement).textContent = "Recalibrate";
     const videoButton = query(this.root, "[data-video-embed]", HTMLButtonElement);
     const videoEnabled = this.bootstrap.board.features.text && this.bootstrap.board.features.videos;
     videoButton.hidden = !videoEnabled;
-    videoButton.disabled = !canEdit || !videoEnabled;
+    videoButton.disabled = smartNoteEnabled || !canEdit || !videoEnabled;
     if (videoButton.disabled && this.videoEmbedDialog.open) this.videoEmbedDialog.close();
-    this.setShapeMenuOpen(!this.shapeMenu.hidden);
+    this.setShapeMenuOpen(!this.shapeMenu.hidden && !smartNoteEnabled);
     // Synchronize nested visibility before deciding whether the More trigger itself is useful.
-    this.setToolsMenuOpen(!this.toolsMenu.hidden);
+    this.setToolsMenuOpen(!this.toolsMenu.hidden && !smartNoteEnabled);
     const moreToolsAvailable =
       roleCanBroadcast &&
+      !smartNoteEnabled &&
       !archived &&
       [...this.toolsMenu.querySelectorAll<HTMLButtonElement>("button")].some(
         (button) => !button.hidden,
@@ -7565,8 +7614,12 @@ export class BoardApp {
     query(this.root, "[data-style-font-row]", HTMLElement).hidden = !text;
     query(this.root, "[data-style-font-family-row]", HTMLElement).hidden = !text;
     query(this.root, "[data-testid='quick-style-bar']", HTMLElement).hidden = !(pencil || eraser);
-    query(this.root, "[data-quick-style-divider]", HTMLElement).hidden = eraser;
     query(this.root, "[data-quick-colours]", HTMLElement).hidden = eraser;
+    query(this.root, "[data-eraser-sizes]", HTMLElement).hidden = !eraser;
+    query(this.root, "[data-testid='quick-style-bar']", HTMLElement).setAttribute(
+      "aria-label",
+      eraser ? "Brush and eraser size" : "Brush and colour",
+    );
     query(this.root, "[data-style-color-label]", HTMLElement).textContent = sticky
       ? "Sticky colour"
       : stamp
@@ -7601,10 +7654,17 @@ export class BoardApp {
       button.setAttribute(
         "aria-pressed",
         String(
-          values !== undefined &&
+          pencil &&
+            values !== undefined &&
             this.style.width === values.width &&
             this.style.opacity === values.opacity,
         ),
+      );
+    }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-eraser-radius]")) {
+      button.setAttribute(
+        "aria-pressed",
+        String(Number(button.dataset.eraserRadius) === this.tools.eraserRadius),
       );
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-sticky-color]")) {

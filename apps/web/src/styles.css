@@ -726,6 +726,12 @@ button:disabled {
   gap: 3px;
 }
 
+.eraser-sizes {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
 [data-quick-colours] {
   display: flex;
   align-items: center;
@@ -752,6 +758,11 @@ button:disabled {
 .brush-preset .tool-glyph svg {
   width: 19px;
   height: 19px;
+}
+
+.eraser-size > svg {
+  width: 28px;
+  height: 28px;
 }
 
 .brush-preset .tool-glyph {
@@ -830,7 +841,7 @@ button:disabled {
   cursor: crosshair;
 }
 .board-canvas[data-tool="eraser"] {
-  cursor: cell;
+  cursor: var(--eraser-cursor), default;
 }
 .board-canvas[data-tool="select"] {
   cursor: default;
@@ -974,11 +985,6 @@ button:disabled {
 
 .board-item-zone .zone-lock-badge {
   filter: drop-shadow(0 1px 1px rgb(31 41 55 / 18%));
-}
-
-.board-item.erase-target {
-  opacity: 0.26;
-  filter: drop-shadow(0 0 4px #e5484d);
 }
 
 .local-preview,
@@ -4924,4 +4930,165 @@ button:disabled {
   margin: 0;
   color: #6f6d66;
   font-size: 12px;
+}
+
+/* The calibration surface covers the whole client viewport, including its top edge. */
+.smart-note-dialog {
+  position: fixed;
+  z-index: 10001;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: #ffffff40;
+  touch-action: none;
+}
+.smart-note-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.smart-note-dialog[data-state="verifying"] {
+  background: transparent;
+  pointer-events: none;
+}
+.smart-note-guide {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 280px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 40px);
+  overflow: auto;
+  padding: 20px;
+  background: #fffffff2;
+  border: 1px solid #d5decd;
+  border-radius: 16px;
+  box-shadow: 0 8px 28px #26351b0d;
+  pointer-events: none;
+}
+.smart-note-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #637057;
+}
+.smart-note-guide h2 {
+  margin: 8px 0 12px;
+  font-size: 22px;
+}
+.smart-note-status {
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 64px;
+  margin: 0;
+}
+.smart-note-illustration {
+  display: block;
+  width: 130px;
+  max-height: 22vh;
+  margin: 12px auto;
+}
+.smart-note-illustration circle {
+  fill: #dfe7d8;
+  stroke: #879a78;
+  stroke-width: 2;
+}
+.smart-note-illustration text {
+  font-family: inherit;
+}
+.smart-note-illustration [data-done="true"] circle {
+  fill: #26351b;
+}
+.smart-note-illustration [data-current="true"] circle {
+  fill: #6fa53f;
+  stroke: #375822;
+  animation: smart-note-blink 1s ease-in-out infinite;
+}
+.smart-note-dialog[data-invalid="true"] .smart-note-status {
+  color: #b42318;
+}
+.smart-note-dialog[data-invalid="true"] [data-current="true"] circle {
+  fill: #e53935;
+  stroke: #a01b18;
+}
+@keyframes smart-note-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .smart-note-illustration [data-current="true"] circle {
+    animation: none;
+    stroke-width: 5;
+  }
+}
+.smart-note-help {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #58654e;
+  margin: 0;
+}
+.smart-note-calibration-actions {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.smart-note-calibration-actions button {
+  pointer-events: auto;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.smart-note-marker {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  background: #26351b;
+  border-radius: 50%;
+  pointer-events: none;
+}
+/* Keep the regular board UI. Paper is behind it; ink can reach the measured
+   top edge above the header, without making header space an input dead zone. */
+.smart-note-paper,
+.board-canvas[data-smart-note="true"] {
+  position: fixed;
+  inset: auto;
+  left: 0;
+  top: 0;
+  width: 740px;
+  height: 1050px;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.smart-note-paper {
+  background: white;
+  outline: 1px solid #81986b;
+  box-shadow: 0 8px 30px #26351b24;
+}
+.board-canvas[data-smart-note="true"] {
+  z-index: 41;
+  background: transparent;
+  overflow: hidden;
+}
+#board-canvas[data-smart-note="true"] * {
+  pointer-events: none;
+}
+.board-canvas[data-smart-note="true"] .canvas-background {
+  display: none;
+}
+.workspace[data-smart-note] .canvas-hint {
+  display: none;
 }

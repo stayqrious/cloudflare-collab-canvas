@@ -1,6 +1,7 @@
 import { findMoveCopyClosureLimitViolation } from "@collab/board-core";
 import { boundsContain, transformPoint } from "@collab/geometry";
 import { MAX_BATCH_OPERATIONS } from "@collab/protocol";
+import { ERASER_RADIUS_CSS_PX, ERASER_SIZES } from "../board/cursor-icons";
 import { videoEmbedFromText } from "../board/links";
 import type { BoardModel, Bounds, ConnectorAnchor } from "../board/model";
 import { itemBounds, translateMatrix } from "../board/model";
@@ -1070,6 +1071,8 @@ type Gesture =
       points: Point[];
       radius: number;
       partial: boolean;
+      previewItems: Set<string>;
+      animationFrame: number | null;
     }
   | {
       kind: "scale-object";
@@ -1168,6 +1171,7 @@ export function buildUngroupedCopyOperation(
 
 export class ToolController {
   private toolValue: ToolName = "pencil";
+  private eraserRadiusValue = ERASER_RADIUS_CSS_PX;
   private gesture: Gesture | null = null;
   private pendingLine: Extract<Gesture, { kind: "shape" }> | null = null;
   private readonly selected = new Set<string>();
@@ -1193,6 +1197,7 @@ export class ToolController {
     svg.addEventListener("pointerup", this.onPointerUp);
     svg.addEventListener("pointercancel", this.onPointerCancel);
     svg.addEventListener("lostpointercapture", this.onLostPointerCapture);
+    document.documentElement.addEventListener("lostpointercapture", this.onPageLostPointerCapture);
     svg.addEventListener("wheel", this.onWheel, { passive: false });
     svg.addEventListener("contextmenu", this.onContextMenu);
     window.addEventListener("keydown", this.onKeyDown);
@@ -1204,11 +1209,23 @@ export class ToolController {
     return this.toolValue;
   }
 
+  get eraserRadius(): number {
+    return this.eraserRadiusValue;
+  }
+
+  setEraserRadius(radius: number): void {
+    if (!ERASER_SIZES.some((size) => size.radius === radius)) return;
+    this.cancelGesture();
+    this.eraserRadiusValue = radius;
+    this.options.renderer.setEraserRadius(radius);
+  }
+
   get selection(): ReadonlySet<string> {
     return this.selected;
   }
 
   setTool(tool: ToolName): void {
+    if (this.options.renderer.viewport.fixedPage && tool !== "pencil") return;
     if (!this.options.canUseTool(tool)) {
       this.options.notify("That tool is disabled in Space settings.", "warning");
       return;
@@ -1248,6 +1265,9 @@ export class ToolController {
 
   cancelActiveGesture(): void {
     this.cancelGesture();
+    this.pointers.clear();
+    this.pinch = null;
+    this.spaceHeld = false;
   }
 
   async deleteSelection(): Promise<void> {
@@ -1387,22 +1407,69 @@ export class ToolController {
     svg.removeEventListener("pointerup", this.onPointerUp);
     svg.removeEventListener("pointercancel", this.onPointerCancel);
     svg.removeEventListener("lostpointercapture", this.onLostPointerCapture);
+    document.documentElement.removeEventListener(
+      "lostpointercapture",
+      this.onPageLostPointerCapture,
+    );
     svg.removeEventListener("wheel", this.onWheel);
     svg.removeEventListener("contextmenu", this.onContextMenu);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
   }
 
+  private get captureTarget(): Element {
+    // Calibration uses the same untransformed root. Never capture handwriting
+    // on the perspective-transformed SVG, whose bounds change with calibration.
+    return this.options.renderer.viewport.fixedPage
+      ? document.documentElement
+      : this.options.renderer.svg;
+  }
+
+  private readonly onPageLostPointerCapture = (event: PointerEvent): void => {
+    if (event.target === document.documentElement) this.onLostPointerCapture(event);
+  };
+
+  /** Smart Note owns input across the measured viewport, including the header. */
+  handleFixedPageInput(event: PointerEvent): void {
+    if (!this.options.renderer.viewport.fixedPage) return;
+    switch (event.type) {
+      case "pointerdown":
+        this.onPointerDown(event);
+        break;
+      case "pointermove":
+        this.onPointerMove(event);
+        break;
+      case "pointerup":
+        this.onPointerUp(event);
+        break;
+      case "pointercancel":
+        this.onPointerCancel(event);
+        break;
+    }
+  }
+
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (
+      this.options.renderer.viewport.fixedPage &&
+      (event.pointerType === "touch" ||
+        event.button !== 0 ||
+        !this.insideFixedPage(event) ||
+        this.toolValue !== "pencil")
+    )
+      return;
     if (event.button !== 0 && event.button !== 1) return;
-    if (event.target instanceof Element && event.target.closest("[data-board-link]")) {
+    if (
+      !this.options.renderer.viewport.fixedPage &&
+      event.target instanceof Element &&
+      event.target.closest("[data-board-link]")
+    ) {
       event.stopPropagation();
       return;
     }
     this.options.renderer.svg.focus({ preventScroll: true });
     this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
     this.syncPointerActive();
-    this.options.renderer.svg.setPointerCapture(event.pointerId);
+    this.captureTarget.setPointerCapture(event.pointerId);
 
     if (event.pointerType === "touch" && this.pointers.size === 2) {
       this.cancelGesture();
@@ -1423,7 +1490,10 @@ export class ToolController {
     if (this.pointers.size > 1) return;
 
     const point = boardPoint(event, this.options.renderer);
-    if (event.button === 1 || this.spaceHeld || this.toolValue === "pan") {
+    if (
+      !this.options.renderer.viewport.fixedPage &&
+      (event.button === 1 || this.spaceHeld || this.toolValue === "pan")
+    ) {
       this.gesture = {
         kind: "pan",
         pointerId: event.pointerId,
@@ -1578,8 +1648,10 @@ export class ToolController {
         versions: new Map(),
         items: new Map(),
         points: [],
-        radius: 8 / this.options.renderer.viewport.zoom,
+        radius: this.eraserRadiusValue / this.options.renderer.viewport.zoom,
         partial: this.options.usePartialEraser(),
+        previewItems: new Set(),
+        animationFrame: null,
       };
       this.gesture = gesture;
       this.collectEraser(point, gesture);
@@ -1673,6 +1745,11 @@ export class ToolController {
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
+    if (this.options.renderer.viewport.fixedPage && event.pointerType === "touch") return;
+    if (!this.insideFixedPage(event)) {
+      this.finishAtPageEdge(event.pointerId);
+      return;
+    }
     if (this.pointers.has(event.pointerId)) {
       this.pointers.set(event.pointerId, [event.clientX, event.clientY]);
     }
@@ -1728,8 +1805,13 @@ export class ToolController {
     } else if (gesture.kind === "pencil") {
       const events =
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
-      for (const sample of events)
+      for (const sample of [...events, event]) {
+        if (!this.insideFixedPage(sample)) {
+          this.finishAtPageEdge(event.pointerId);
+          return;
+        }
         appendUniquePoint(gesture.points, boardPoint(sample, this.options.renderer));
+      }
       if (gesture.points.length > 10_000) gesture.points.length = 10_000;
       if (gesture.animationFrame === null) {
         gesture.animationFrame = requestAnimationFrame(() => {
@@ -1830,8 +1912,13 @@ export class ToolController {
     } else if (gesture.kind === "eraser") {
       const events =
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
-      for (const sample of events)
+      for (const sample of [...events, event]) {
+        if (!this.insideFixedPage(sample)) {
+          this.finishAtPageEdge(event.pointerId);
+          return;
+        }
         this.collectEraser(boardPoint(sample, this.options.renderer), gesture);
+      }
     } else if (gesture.kind === "zone") {
       gesture.current = boardPoint(event, this.options.renderer);
       this.renderZoneGesture(gesture);
@@ -1842,6 +1929,7 @@ export class ToolController {
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
+    if (!this.insideFixedPage(event)) this.finishAtPageEdge(event.pointerId);
     // End the pinch while both finger positions are still known.
     if (this.pinch?.pointerIds.includes(event.pointerId)) {
       this.endPinch();
@@ -1864,6 +1952,9 @@ export class ToolController {
       return;
     }
     const tapPoint = boardPoint(event, this.options.renderer);
+    if (gesture.kind === "pencil" && this.options.renderer.viewport.fixedPage) {
+      appendUniquePoint(gesture.points, tapPoint);
+    }
     if (gesture.kind === "shape") {
       applyShapePointerState(
         gesture,
@@ -1958,6 +2049,23 @@ export class ToolController {
     event.preventDefault();
   };
 
+  private insideFixedPage(event: PointerEvent): boolean {
+    const page = this.options.renderer.viewport.fixedPage;
+    if (!page) return true;
+    const [x, y] = this.options.renderer.viewport.clientToBoard(event.clientX, event.clientY);
+    return x >= 0 && y >= 0 && x <= page.width && y <= page.height;
+  }
+
+  private finishAtPageEdge(pointerId: number): void {
+    const gesture = this.gesture;
+    if (!gesture || gesture.pointerId !== pointerId) return;
+    this.gesture = null;
+    this.pointers.delete(pointerId);
+    this.syncPointerActive();
+    this.releasePointerCapture(pointerId);
+    void this.finishGesture(gesture);
+  }
+
   private readonly onPointerCancel = (event: PointerEvent): void => {
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
@@ -1986,7 +2094,7 @@ export class ToolController {
   }
 
   private releasePointerCapture(pointerId: number): void {
-    const { svg } = this.options.renderer;
+    const svg = this.captureTarget;
     if (!svg.hasPointerCapture(pointerId)) return;
 
     const token = {};
@@ -2439,10 +2547,12 @@ export class ToolController {
         gesture.radius,
         (candidate) => this.options.canModifyItem(candidate),
       )) {
-        if (gesture.versions.size >= MAX_BATCH_OPERATIONS) break;
-        if (gesture.versions.has(item.id)) continue;
-        gesture.versions.set(item.id, item.version);
-        gesture.items.set(item.id, structuredClone(item));
+        if (!gesture.versions.has(item.id)) {
+          if (gesture.versions.size >= MAX_BATCH_OPERATIONS) continue;
+          gesture.versions.set(item.id, item.version);
+          gesture.items.set(item.id, structuredClone(item));
+        }
+        gesture.previewItems.add(item.id);
       }
     }
     const hit = this.options.model.hitTest(point, gesture.radius);
@@ -2455,8 +2565,28 @@ export class ToolController {
     ) {
       gesture.versions.set(hit.id, hit.version);
       gesture.items.set(hit.id, structuredClone(hit));
+      gesture.previewItems.add(hit.id);
     }
-    this.options.renderer.highlightForErase(gesture.versions.keys());
+    if (gesture.previewItems.size > 0 && gesture.animationFrame === null) {
+      gesture.animationFrame = requestAnimationFrame(() => {
+        gesture.animationFrame = null;
+        this.renderEraserGesture(gesture);
+      });
+    }
+  }
+
+  private renderEraserGesture(gesture: Extract<Gesture, { kind: "eraser" }>): void {
+    this.options.renderer.showErasePreview(
+      gesture.gestureId,
+      [...gesture.previewItems].flatMap((id) => {
+        const item = gesture.items.get(id);
+        return item ? [item] : [];
+      }),
+      gesture.points,
+      gesture.radius,
+      gesture.partial,
+    );
+    gesture.previewItems.clear();
   }
 
   private async finishGesture(gesture: Gesture): Promise<void> {
@@ -2502,7 +2632,13 @@ export class ToolController {
       const points = deduplicatePoints(gesture.points).map(
         (point) => [roundBoard(point[0]), roundBoard(point[1])] as Point,
       );
-      if (points.length === 1 && points[0]) points.push([points[0][0] + 0.01, points[0][1] + 0.01]);
+      if (points.length === 1 && points[0]) {
+        const page = this.options.renderer.viewport.fixedPage;
+        points.push([
+          points[0][0] + (page && points[0][0] >= page.width ? -0.01 : 0.01),
+          points[0][1] + (page && points[0][1] >= page.height ? -0.01 : 0.01),
+        ]);
+      }
       if (points.length < 2) {
         this.options.preview(gesture.gestureId, gesture.previewSeq + 1, "gesture.cancel");
         return;
@@ -2626,95 +2762,101 @@ export class ToolController {
       return;
     }
     if (gesture.kind === "eraser") {
-      this.options.renderer.clearLocalPreview();
-      if (!gesture.partial) {
-        const directOperations = buildCapturedDeleteOperations(gesture.versions);
-        const fittedOperations = fitEraserOperationsWithinBatchLimit(
-          directOperations,
-          gesture.items,
-          this.options.model.items.values(),
-        );
-        if (fittedOperations.length < directOperations.length) {
-          this.options.notify(
-            `Some items were left unerased to keep this erase within ${MAX_BATCH_OPERATIONS} item and Section relationship changes.`,
-            "warning",
-          );
-        }
-        const fittedIds = new Set(
-          fittedOperations.flatMap((operation) =>
-            operation.kind === "item.delete" ? [operation.itemId] : [],
-          ),
-        );
-        const erasedItems = [...gesture.items.values()].filter((item) => fittedIds.has(item.id));
-        if (erasedItems.length === 0) return;
-        try {
-          await this.commitOperation(
-            buildFullEraserOperation(
-              erasedItems,
-              this.options.model.items.values(),
-              this.options.canModifyItem,
-            ),
-            gesture.gestureId,
-          );
-        } catch (error) {
-          if (!(error instanceof GroupingError)) throw error;
-          this.options.notify(error.message, "warning");
-        }
-        return;
-      }
-      const operations: BatchItemOperation[] = [];
-      for (const [itemId, expectedVersion] of gesture.versions) {
-        const item = gesture.items.get(itemId);
-        if (!item) continue;
-        if (gesture.partial && isPartiallyErasableItem(item)) {
-          const result = eraseStrokeItem(item, gesture.points, gesture.radius);
-          if (!result) continue;
-          if (result.erased) {
-            operations.push({ kind: "item.delete", itemId, expectedVersion });
-          } else {
-            operations.push(
-              buildPartialEraserUpdateOperation(
-                item,
-                expectedVersion,
-                result.visiblePaths,
-                this.options.model.items.values(),
-                this.options.canGroup(),
-              ),
-            );
-          }
-        } else {
-          operations.push({ kind: "item.delete", itemId, expectedVersion });
-        }
-        if (operations.length >= 100) break;
-      }
-      if (operations.length > 0) {
-        try {
+      if (gesture.animationFrame !== null) cancelAnimationFrame(gesture.animationFrame);
+      this.renderEraserGesture(gesture);
+      try {
+        if (!gesture.partial) {
+          const directOperations = buildCapturedDeleteOperations(gesture.versions);
           const fittedOperations = fitEraserOperationsWithinBatchLimit(
-            operations,
+            directOperations,
             gesture.items,
             this.options.model.items.values(),
           );
-          if (fittedOperations.length < operations.length) {
+          if (fittedOperations.length < directOperations.length) {
             this.options.notify(
               `Some items were left unerased to keep this erase within ${MAX_BATCH_OPERATIONS} item and Section relationship changes.`,
               "warning",
             );
           }
-          if (fittedOperations.length === 0) return;
-          const expanded = expandPartialEraserSectionOperations(
-            fittedOperations,
-            gesture.items,
-            this.options.model.items.values(),
-            this.options.canModifyItem,
+          const fittedIds = new Set(
+            fittedOperations.flatMap((operation) =>
+              operation.kind === "item.delete" ? [operation.itemId] : [],
+            ),
           );
-          await this.commitOperation(
-            { kind: "items.batch", operations: expanded },
-            gesture.gestureId,
-          );
-        } catch (error) {
-          if (!(error instanceof GroupingError)) throw error;
-          this.options.notify(error.message, "warning");
+          const erasedItems = [...gesture.items.values()].filter((item) => fittedIds.has(item.id));
+          if (erasedItems.length === 0) return;
+          try {
+            await this.commitOperation(
+              buildFullEraserOperation(
+                erasedItems,
+                this.options.model.items.values(),
+                this.options.canModifyItem,
+              ),
+              gesture.gestureId,
+            );
+          } catch (error) {
+            if (!(error instanceof GroupingError)) throw error;
+            this.options.notify(error.message, "warning");
+          }
+          return;
         }
+        const operations: BatchItemOperation[] = [];
+        for (const [itemId, expectedVersion] of gesture.versions) {
+          const item = gesture.items.get(itemId);
+          if (!item) continue;
+          if (gesture.partial && isPartiallyErasableItem(item)) {
+            const result = eraseStrokeItem(item, gesture.points, gesture.radius);
+            if (!result) continue;
+            if (result.erased) {
+              operations.push({ kind: "item.delete", itemId, expectedVersion });
+            } else {
+              operations.push(
+                buildPartialEraserUpdateOperation(
+                  item,
+                  expectedVersion,
+                  result.visiblePaths,
+                  this.options.model.items.values(),
+                  this.options.canGroup(),
+                ),
+              );
+            }
+          } else {
+            operations.push({ kind: "item.delete", itemId, expectedVersion });
+          }
+          if (operations.length >= MAX_BATCH_OPERATIONS) break;
+        }
+        if (operations.length > 0) {
+          try {
+            const fittedOperations = fitEraserOperationsWithinBatchLimit(
+              operations,
+              gesture.items,
+              this.options.model.items.values(),
+            );
+            if (fittedOperations.length < operations.length) {
+              this.options.notify(
+                `Some items were left unerased to keep this erase within ${MAX_BATCH_OPERATIONS} item and Section relationship changes.`,
+                "warning",
+              );
+            }
+            if (fittedOperations.length === 0) return;
+            const expanded = expandPartialEraserSectionOperations(
+              fittedOperations,
+              gesture.items,
+              this.options.model.items.values(),
+              this.options.canModifyItem,
+            );
+            await this.commitOperation(
+              { kind: "items.batch", operations: expanded },
+              gesture.gestureId,
+            );
+          } catch (error) {
+            if (!(error instanceof GroupingError)) throw error;
+            this.options.notify(error.message, "warning");
+          }
+        }
+      } finally {
+        // Keep the preview while the durable outbox write is pending to avoid a flash of ink.
+        this.options.renderer.clearErasePreview(gesture.gestureId);
       }
     }
   }
@@ -2739,8 +2881,9 @@ export class ToolController {
       this.options.renderer.clearLocalPreview();
       return;
     }
-    if (gesture.kind === "pencil" && gesture.animationFrame !== null)
+    if ((gesture.kind === "pencil" || gesture.kind === "eraser") && gesture.animationFrame !== null)
       cancelAnimationFrame(gesture.animationFrame);
+    if (gesture.kind === "eraser") this.options.renderer.clearErasePreview(gesture.gestureId);
     this.options.preview(
       gesture.gestureId,
       "previewSeq" in gesture ? gesture.previewSeq + 1 : 1,

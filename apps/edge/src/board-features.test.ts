@@ -12,7 +12,7 @@ describe("normalizePersistedBoardFeatures", () => {
   it("fills only the additive feature defaults", () => {
     expect(
       normalizePersistedBoardFeatures({
-        ...withoutFeatures("objectTransforms", "grouping"),
+        ...withoutFeatures("objectTransforms", "grouping", "smartNote"),
         rectangle: false,
       }),
     ).toEqual({
@@ -20,6 +20,7 @@ describe("normalizePersistedBoardFeatures", () => {
       rectangle: false,
       objectTransforms: true,
       grouping: true,
+      smartNote: false,
     });
   });
 
@@ -41,6 +42,15 @@ describe("normalizePersistedBoardFeatures", () => {
     expect(
       normalizePersistedBoardFeatures({ ...DEFAULT_BOARD_FEATURES, grid: true }),
     ).toMatchObject({ grid: true });
+  });
+
+  it("preserves an explicitly enabled Smart Note flag", () => {
+    expect(
+      normalizePersistedBoardFeatures({ ...DEFAULT_BOARD_FEATURES, smartNote: true }).smartNote,
+    ).toBe(true);
+    expect(() =>
+      normalizePersistedBoardFeatures({ ...DEFAULT_BOARD_FEATURES, smartNote: "yes" }),
+    ).toThrow();
   });
 
   it("rejects a missing legacy feature", () => {
