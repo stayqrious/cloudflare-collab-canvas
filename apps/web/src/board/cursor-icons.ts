@@ -5,11 +5,11 @@ export const PEN_CURSOR_DETAIL = "M2-8 8-2M16-22 22-16";
 export const VIEWER_LOCK_PATH = "M20 4V1a3 3 0 0 1 6 0v3M19 4h8v7h-8ZM23 7v2";
 
 // Shared by the cursor outline and the controller's zoom-adjusted erase radius.
-export const ERASER_RADIUS_CSS_PX = 24;
+export const ERASER_RADIUS_CSS_PX = 12;
 export const ERASER_SIZES = [
-  { label: "Small", radius: 12 },
+  { label: "Small", radius: 6 },
   { label: "Medium", radius: ERASER_RADIUS_CSS_PX },
-  { label: "Large", radius: 40 },
+  { label: "Large", radius: 20 },
 ] as const;
 
 function cursorUrl(content: string, x: number, y: number, size = 32): string {
