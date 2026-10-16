@@ -830,7 +830,7 @@ button:disabled {
   cursor: crosshair;
 }
 .board-canvas[data-tool="eraser"] {
-  cursor: cell;
+  cursor: var(--eraser-cursor), default;
 }
 .board-canvas[data-tool="select"] {
   cursor: default;
@@ -974,11 +974,6 @@ button:disabled {
 
 .board-item-zone .zone-lock-badge {
   filter: drop-shadow(0 1px 1px rgb(31 41 55 / 18%));
-}
-
-.board-item.erase-target {
-  opacity: 0.26;
-  filter: drop-shadow(0 0 4px #e5484d);
 }
 
 .local-preview,

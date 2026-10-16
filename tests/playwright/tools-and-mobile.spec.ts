@@ -130,6 +130,45 @@ test("line, text, styles, constrained shapes, eraser, and pen input commit canon
   await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
 });
 
+test("eraser previews cut ink during a drag, cancels cleanly, and saves as one undo step", async ({
+  page,
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await createBoard(page, "Live eraser preview");
+  const start = await canvasPoint(page, 0.25, 0.35);
+  const line = await drawShape(page, "Straight line", start, { x: start.x + 240, y: start.y });
+  const id = await line.getAttribute("data-item-id");
+  const shaft = page.locator(`#drawing-area [data-item-id="${id}"] .connector-shaft`);
+  const originalOpacity = await shaft.getAttribute("stroke-opacity");
+  await page.getByTestId("tool-pencil").click();
+  await page.getByTestId("tool-eraser").click();
+
+  await page.mouse.move(start.x + 100, start.y);
+  await page.mouse.down();
+  await expect(shaft).toHaveAttribute("d", /M.*M/u);
+  await expect(shaft).toHaveAttribute("stroke-opacity", originalOpacity as string);
+  await expect(page.locator(".erase-target")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(shaft).not.toHaveAttribute("d");
+
+  await page.mouse.down();
+  await page.mouse.move(start.x + 150, start.y, { steps: 8 });
+  await expect(shaft).toHaveAttribute("d", /M.*M/u);
+  const preview = await shaft.getAttribute("d");
+  await page.screenshot({ path: testInfo.outputPath("live-erase.png") });
+  await page.mouse.up();
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+  await expect(shaft).toHaveAttribute("d", preview as string);
+
+  await openSettingsDrawer(page);
+  await page.getByTestId("undo-button").click();
+  await expect(shaft).not.toHaveAttribute("d");
+  await expect(page.getByTestId("save-status")).toHaveAttribute("data-state", "saved");
+  expect(errors).toEqual([]);
+});
+
 test("pencil survives consecutive mouse and pen strokes with delayed capture loss", async ({
   page,
 }) => {

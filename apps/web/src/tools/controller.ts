@@ -1,6 +1,7 @@
 import { findMoveCopyClosureLimitViolation } from "@collab/board-core";
 import { boundsContain, transformPoint } from "@collab/geometry";
 import { MAX_BATCH_OPERATIONS } from "@collab/protocol";
+import { ERASER_RADIUS_CSS_PX } from "../board/cursor-icons";
 import { videoEmbedFromText } from "../board/links";
 import type { BoardModel, Bounds, ConnectorAnchor } from "../board/model";
 import { itemBounds, translateMatrix } from "../board/model";
@@ -1070,6 +1071,8 @@ type Gesture =
       points: Point[];
       radius: number;
       partial: boolean;
+      previewItems: Set<string>;
+      animationFrame: number | null;
     }
   | {
       kind: "scale-object";
@@ -1633,8 +1636,10 @@ export class ToolController {
         versions: new Map(),
         items: new Map(),
         points: [],
-        radius: 8 / this.options.renderer.viewport.zoom,
+        radius: ERASER_RADIUS_CSS_PX / this.options.renderer.viewport.zoom,
         partial: this.options.usePartialEraser(),
+        previewItems: new Set(),
+        animationFrame: null,
       };
       this.gesture = gesture;
       this.collectEraser(point, gesture);
@@ -2530,10 +2535,12 @@ export class ToolController {
         gesture.radius,
         (candidate) => this.options.canModifyItem(candidate),
       )) {
-        if (gesture.versions.size >= MAX_BATCH_OPERATIONS) break;
-        if (gesture.versions.has(item.id)) continue;
-        gesture.versions.set(item.id, item.version);
-        gesture.items.set(item.id, structuredClone(item));
+        if (!gesture.versions.has(item.id)) {
+          if (gesture.versions.size >= MAX_BATCH_OPERATIONS) continue;
+          gesture.versions.set(item.id, item.version);
+          gesture.items.set(item.id, structuredClone(item));
+        }
+        gesture.previewItems.add(item.id);
       }
     }
     const hit = this.options.model.hitTest(point, gesture.radius);
@@ -2546,8 +2553,28 @@ export class ToolController {
     ) {
       gesture.versions.set(hit.id, hit.version);
       gesture.items.set(hit.id, structuredClone(hit));
+      gesture.previewItems.add(hit.id);
     }
-    this.options.renderer.highlightForErase(gesture.versions.keys());
+    if (gesture.previewItems.size > 0 && gesture.animationFrame === null) {
+      gesture.animationFrame = requestAnimationFrame(() => {
+        gesture.animationFrame = null;
+        this.renderEraserGesture(gesture);
+      });
+    }
+  }
+
+  private renderEraserGesture(gesture: Extract<Gesture, { kind: "eraser" }>): void {
+    this.options.renderer.showErasePreview(
+      gesture.gestureId,
+      [...gesture.previewItems].flatMap((id) => {
+        const item = gesture.items.get(id);
+        return item ? [item] : [];
+      }),
+      gesture.points,
+      gesture.radius,
+      gesture.partial,
+    );
+    gesture.previewItems.clear();
   }
 
   private async finishGesture(gesture: Gesture): Promise<void> {
@@ -2723,95 +2750,101 @@ export class ToolController {
       return;
     }
     if (gesture.kind === "eraser") {
-      this.options.renderer.clearLocalPreview();
-      if (!gesture.partial) {
-        const directOperations = buildCapturedDeleteOperations(gesture.versions);
-        const fittedOperations = fitEraserOperationsWithinBatchLimit(
-          directOperations,
-          gesture.items,
-          this.options.model.items.values(),
-        );
-        if (fittedOperations.length < directOperations.length) {
-          this.options.notify(
-            `Some items were left unerased to keep this erase within ${MAX_BATCH_OPERATIONS} item and Section relationship changes.`,
-            "warning",
-          );
-        }
-        const fittedIds = new Set(
-          fittedOperations.flatMap((operation) =>
-            operation.kind === "item.delete" ? [operation.itemId] : [],
-          ),
-        );
-        const erasedItems = [...gesture.items.values()].filter((item) => fittedIds.has(item.id));
-        if (erasedItems.length === 0) return;
-        try {
-          await this.commitOperation(
-            buildFullEraserOperation(
-              erasedItems,
-              this.options.model.items.values(),
-              this.options.canModifyItem,
-            ),
-            gesture.gestureId,
-          );
-        } catch (error) {
-          if (!(error instanceof GroupingError)) throw error;
-          this.options.notify(error.message, "warning");
-        }
-        return;
-      }
-      const operations: BatchItemOperation[] = [];
-      for (const [itemId, expectedVersion] of gesture.versions) {
-        const item = gesture.items.get(itemId);
-        if (!item) continue;
-        if (gesture.partial && isPartiallyErasableItem(item)) {
-          const result = eraseStrokeItem(item, gesture.points, gesture.radius);
-          if (!result) continue;
-          if (result.erased) {
-            operations.push({ kind: "item.delete", itemId, expectedVersion });
-          } else {
-            operations.push(
-              buildPartialEraserUpdateOperation(
-                item,
-                expectedVersion,
-                result.visiblePaths,
-                this.options.model.items.values(),
-                this.options.canGroup(),
-              ),
-            );
-          }
-        } else {
-          operations.push({ kind: "item.delete", itemId, expectedVersion });
-        }
-        if (operations.length >= 100) break;
-      }
-      if (operations.length > 0) {
-        try {
+      if (gesture.animationFrame !== null) cancelAnimationFrame(gesture.animationFrame);
+      this.renderEraserGesture(gesture);
+      try {
+        if (!gesture.partial) {
+          const directOperations = buildCapturedDeleteOperations(gesture.versions);
           const fittedOperations = fitEraserOperationsWithinBatchLimit(
-            operations,
+            directOperations,
             gesture.items,
             this.options.model.items.values(),
           );
-          if (fittedOperations.length < operations.length) {
+          if (fittedOperations.length < directOperations.length) {
             this.options.notify(
               `Some items were left unerased to keep this erase within ${MAX_BATCH_OPERATIONS} item and Section relationship changes.`,
               "warning",
             );
           }
-          if (fittedOperations.length === 0) return;
-          const expanded = expandPartialEraserSectionOperations(
-            fittedOperations,
-            gesture.items,
-            this.options.model.items.values(),
-            this.options.canModifyItem,
+          const fittedIds = new Set(
+            fittedOperations.flatMap((operation) =>
+              operation.kind === "item.delete" ? [operation.itemId] : [],
+            ),
           );
-          await this.commitOperation(
-            { kind: "items.batch", operations: expanded },
-            gesture.gestureId,
-          );
-        } catch (error) {
-          if (!(error instanceof GroupingError)) throw error;
-          this.options.notify(error.message, "warning");
+          const erasedItems = [...gesture.items.values()].filter((item) => fittedIds.has(item.id));
+          if (erasedItems.length === 0) return;
+          try {
+            await this.commitOperation(
+              buildFullEraserOperation(
+                erasedItems,
+                this.options.model.items.values(),
+                this.options.canModifyItem,
+              ),
+              gesture.gestureId,
+            );
+          } catch (error) {
+            if (!(error instanceof GroupingError)) throw error;
+            this.options.notify(error.message, "warning");
+          }
+          return;
         }
+        const operations: BatchItemOperation[] = [];
+        for (const [itemId, expectedVersion] of gesture.versions) {
+          const item = gesture.items.get(itemId);
+          if (!item) continue;
+          if (gesture.partial && isPartiallyErasableItem(item)) {
+            const result = eraseStrokeItem(item, gesture.points, gesture.radius);
+            if (!result) continue;
+            if (result.erased) {
+              operations.push({ kind: "item.delete", itemId, expectedVersion });
+            } else {
+              operations.push(
+                buildPartialEraserUpdateOperation(
+                  item,
+                  expectedVersion,
+                  result.visiblePaths,
+                  this.options.model.items.values(),
+                  this.options.canGroup(),
+                ),
+              );
+            }
+          } else {
+            operations.push({ kind: "item.delete", itemId, expectedVersion });
+          }
+          if (operations.length >= MAX_BATCH_OPERATIONS) break;
+        }
+        if (operations.length > 0) {
+          try {
+            const fittedOperations = fitEraserOperationsWithinBatchLimit(
+              operations,
+              gesture.items,
+              this.options.model.items.values(),
+            );
+            if (fittedOperations.length < operations.length) {
+              this.options.notify(
+                `Some items were left unerased to keep this erase within ${MAX_BATCH_OPERATIONS} item and Section relationship changes.`,
+                "warning",
+              );
+            }
+            if (fittedOperations.length === 0) return;
+            const expanded = expandPartialEraserSectionOperations(
+              fittedOperations,
+              gesture.items,
+              this.options.model.items.values(),
+              this.options.canModifyItem,
+            );
+            await this.commitOperation(
+              { kind: "items.batch", operations: expanded },
+              gesture.gestureId,
+            );
+          } catch (error) {
+            if (!(error instanceof GroupingError)) throw error;
+            this.options.notify(error.message, "warning");
+          }
+        }
+      } finally {
+        // Keep the preview while the durable outbox write is pending to avoid a flash of ink.
+        this.options.renderer.clearErasePreview(gesture.gestureId);
       }
     }
   }
@@ -2836,8 +2869,9 @@ export class ToolController {
       this.options.renderer.clearLocalPreview();
       return;
     }
-    if (gesture.kind === "pencil" && gesture.animationFrame !== null)
+    if ((gesture.kind === "pencil" || gesture.kind === "eraser") && gesture.animationFrame !== null)
       cancelAnimationFrame(gesture.animationFrame);
+    if (gesture.kind === "eraser") this.options.renderer.clearErasePreview(gesture.gestureId);
     this.options.preview(
       gesture.gestureId,
       "previewSeq" in gesture ? gesture.previewSeq + 1 : 1,

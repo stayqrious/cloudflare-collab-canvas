@@ -17,6 +17,7 @@ import {
 import { STAMP_SVG_PATHS } from "@collab/svg-export";
 import { summarizeBoardVotes, type VoteSummary } from "../activities/voting";
 import { clearTypesetMath, containsMathMarkup, splitMathMarkup, typesetMath } from "../mathjax";
+import { eraseStrokeItem, isPartiallyErasableItem } from "../tools/stroke-erase";
 import {
   isRotatableObjectItem,
   isScalableObjectItem,
@@ -58,6 +59,7 @@ import type {
   ZoneStyle,
 } from "../types";
 import {
+  ERASER_CURSOR,
   PEN_CURSOR,
   PEN_CURSOR_DETAIL,
   PEN_CURSOR_PATH,
@@ -342,6 +344,10 @@ export class BoardRenderer {
   private readonly cursorLayer: SVGGElement;
   private readonly participantColors = new Map<string, string>();
   private readonly itemNodes = new Map<string, SVGGraphicsElement>();
+  private readonly erasePreviews = new Map<
+    string,
+    { gestureId: string; version: number; item: BoardItem | null }
+  >();
   private readonly imageAssets: ImageAssetCache;
   private selectedIds = new Set<string>();
   private resizeHandlesEnabled = true;
@@ -427,6 +433,7 @@ export class BoardRenderer {
     );
     container.append(this.svg);
 
+    this.svg.style.setProperty("--eraser-cursor", ERASER_CURSOR);
     this.svg.style.setProperty("--pen-cursor", PEN_CURSOR);
     this.svg.style.setProperty("--viewer-cursor", VIEWER_CURSOR);
     this.viewport = new CanvasViewport(this.svg);
@@ -777,14 +784,46 @@ export class BoardRenderer {
     );
   }
 
-  highlightForErase(ids: Iterable<string>): void {
-    const erased = new Set(ids);
-    for (const [id, node] of this.itemNodes) node.classList.toggle("erase-target", erased.has(id));
+  showErasePreview(
+    gestureId: string,
+    items: Iterable<BoardItem>,
+    points: readonly Point[],
+    radius: number,
+    partial: boolean,
+  ): void {
+    const changed = new Set<string>();
+    for (const source of items) {
+      let item: BoardItem | null = null;
+      if (partial && isPartiallyErasableItem(source)) {
+        // Use the commit's clipping algorithm so the preview shows the exact surviving ink.
+        const result = eraseStrokeItem(source, points, radius);
+        if (!result) item = source;
+        else if (!result.erased) {
+          item = {
+            ...source,
+            geometry: { ...source.geometry, visiblePaths: result.visiblePaths },
+          } as BoardItem;
+        }
+      }
+      this.erasePreviews.set(source.id, { gestureId, version: source.version, item });
+      changed.add(source.id);
+    }
+    if (changed.size > 0) this.render(changed);
+  }
+
+  clearErasePreview(gestureId: string): void {
+    const changed = new Set<string>();
+    for (const [id, preview] of this.erasePreviews) {
+      // A previous commit finishing must not clear a newer drag's preview.
+      if (preview.gestureId !== gestureId) continue;
+      this.erasePreviews.delete(id);
+      changed.add(id);
+    }
+    if (changed.size > 0) this.render(changed);
   }
 
   clearLocalPreview(): void {
     this.clearLocalLayer();
-    this.highlightForErase([]);
     this.setSelection(this.selectedIds);
   }
 
@@ -945,7 +984,10 @@ export class BoardRenderer {
     const ids = changedIds ?? new Set([...this.itemNodes.keys(), ...this.model.items.keys()]);
     for (const id of ids) {
       const current = this.itemNodes.get(id);
-      const item = this.model.getItem(id);
+      let item = this.model.getItem(id);
+      const erasePreview = this.erasePreviews.get(id);
+      // Never mask a newer optimistic or remote edit with a captured older version.
+      if (item && erasePreview?.version === item.version) item = erasePreview.item ?? undefined;
       if (!item) {
         if (current) {
           clearTypesetMath(current);

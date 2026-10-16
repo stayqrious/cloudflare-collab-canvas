@@ -84,6 +84,80 @@ describe("canvas text rendering", () => {
   });
 });
 
+describe("live eraser previews", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", {
+      createElementNS: (_namespace: string, name: string) => fakeSvgNode(name),
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  function setup() {
+    const item: Extract<BoardItem, { kind: "line" }> = {
+      id: "line",
+      kind: "line",
+      z: 1,
+      version: 1,
+      createdBy: "owner",
+      transform: [1, 0, 0, 1, 0, 0],
+      style: { kind: "line", color: "#112233", width: 4, opacity: 0.7, arrowhead: "none" },
+      geometry: { x1: 0, y1: 0, x2: 100, y2: 0 },
+    };
+    const itemNodes = new Map<string, FakeSvgNode>();
+    const renderer = Object.assign(Object.create(BoardRenderer.prototype), {
+      itemNodes,
+      erasePreviews: new Map(),
+      model: { getItem: () => item, items: new Map([[item.id, item]]) },
+      imageAssets: { load: vi.fn(), retain: vi.fn() },
+      insertInPaintOrder: vi.fn(),
+      renderCommentMarkers: vi.fn(),
+      renderVoteCounts: vi.fn(),
+      participantColors: new Map(),
+      resolveCreatorName: () => "",
+      selectedIds: new Set(),
+      setSelection: vi.fn(),
+    }) as BoardRenderer;
+    return { item, itemNodes, renderer };
+  }
+
+  it("shows only surviving ink at its original opacity without mutating the board", () => {
+    const { item, itemNodes, renderer } = setup();
+    renderer.showErasePreview("drag", [item], [[50, 0]], 10, true);
+    const shaft = itemNodes.get(item.id)?.children[0];
+    expect(shaft?.attributes.get("d")).toBe("M 0 0 L 38 0 M 62 0 L 100 0");
+    expect(shaft?.attributes.get("stroke-opacity")).toBe("0.7");
+    expect(item.geometry.visiblePaths).toBeUndefined();
+
+    renderer.clearErasePreview("drag");
+    expect(itemNodes.get(item.id)?.children[0]?.name).toBe("line");
+  });
+
+  it("removes whole objects immediately and restores them when a drag is cancelled", () => {
+    const { item, itemNodes, renderer } = setup();
+    renderer.showErasePreview("drag", [item], [[50, 0]], 10, false);
+    expect(itemNodes.has(item.id)).toBe(false);
+    renderer.clearErasePreview("drag");
+    expect(itemNodes.has(item.id)).toBe(true);
+  });
+
+  it("keeps a newer drag visible when an earlier commit finishes and respects remote edits", () => {
+    const { item, itemNodes, renderer } = setup();
+    renderer.showErasePreview("first", [item], [[30, 0]], 10, true);
+    renderer.showErasePreview("second", [item], [[70, 0]], 10, true);
+    renderer.clearErasePreview("first");
+    expect(itemNodes.get(item.id)?.children[0]?.attributes.get("d")).toBe(
+      "M 0 0 L 58 0 M 82 0 L 100 0",
+    );
+
+    const captured = structuredClone(item);
+    item.version += 1;
+    item.geometry.x2 = 200;
+    renderer.showErasePreview("second", [captured], [[70, 0]], 10, true);
+    expect(itemNodes.get(item.id)?.children[0]?.attributes.get("x2")).toBe("200");
+  });
+});
+
 describe("lightweight movement previews", () => {
   beforeEach(() => {
     vi.stubGlobal("document", {
@@ -215,6 +289,7 @@ describe("lightweight movement previews", () => {
       imageAssets: { load: vi.fn(), retain: vi.fn() },
       insertInPaintOrder,
       itemNodes,
+      erasePreviews: new Map(),
       model: {
         getItem: (id: string) => (id === item.id ? item : undefined),
         items: new Map([[item.id, item]]),
@@ -296,6 +371,7 @@ describe("lightweight movement previews", () => {
       imageAssets: { load: vi.fn(), retain: vi.fn() },
       insertInPaintOrder: vi.fn((node: FakeSvgNode) => drawingArea.append(node)),
       itemNodes,
+      erasePreviews: new Map(),
       model: {
         getItem: (id: string) => (id === item.id ? item : undefined),
         items: new Map([[item.id, item]]),
@@ -588,6 +664,7 @@ describe("assistance marks", () => {
       imageAssets: { load: vi.fn(), retain: vi.fn() },
       insertInPaintOrder: vi.fn((node: FakeSvgNode) => drawingArea.append(node)),
       itemNodes,
+      erasePreviews: new Map(),
       model: {
         getItem: (id: string) => (id === item.id ? item : undefined),
         items: new Map([[item.id, item]]),
