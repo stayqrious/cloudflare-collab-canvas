@@ -1003,6 +1003,7 @@ type Gesture =
   | {
       kind: "pencil";
       pointerId: number;
+      pointerType: string;
       gestureId: string;
       itemId: string;
       points: Point[];
@@ -1556,6 +1557,7 @@ export class ToolController {
       this.gesture = {
         kind: "pencil",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         gestureId,
         itemId,
         points: [point],
@@ -1746,8 +1748,14 @@ export class ToolController {
 
   private readonly onPointerMove = (event: PointerEvent): void => {
     if (this.options.renderer.viewport.fixedPage && event.pointerType === "touch") return;
+    // A mouse/pen can resume hover without delivering pointerup to the canvas.
+    // Finish the collected ink before accepting a hover coordinate as a stroke point.
+    if (event.buttons === 0 && this.isMouseOrPenPencil(event.pointerId)) {
+      this.finishAtLastPoint(event.pointerId);
+      return;
+    }
     if (!this.insideFixedPage(event)) {
-      this.finishAtPageEdge(event.pointerId);
+      this.finishAtLastPoint(event.pointerId);
       return;
     }
     if (this.pointers.has(event.pointerId)) {
@@ -1807,7 +1815,7 @@ export class ToolController {
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
       for (const sample of [...events, event]) {
         if (!this.insideFixedPage(sample)) {
-          this.finishAtPageEdge(event.pointerId);
+          this.finishAtLastPoint(event.pointerId);
           return;
         }
         appendUniquePoint(gesture.points, boardPoint(sample, this.options.renderer));
@@ -1914,7 +1922,7 @@ export class ToolController {
         typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [event];
       for (const sample of [...events, event]) {
         if (!this.insideFixedPage(sample)) {
-          this.finishAtPageEdge(event.pointerId);
+          this.finishAtLastPoint(event.pointerId);
           return;
         }
         this.collectEraser(boardPoint(sample, this.options.renderer), gesture);
@@ -1929,7 +1937,7 @@ export class ToolController {
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
-    if (!this.insideFixedPage(event)) this.finishAtPageEdge(event.pointerId);
+    if (!this.insideFixedPage(event)) this.finishAtLastPoint(event.pointerId);
     // End the pinch while both finger positions are still known.
     if (this.pinch?.pointerIds.includes(event.pointerId)) {
       this.endPinch();
@@ -1952,7 +1960,7 @@ export class ToolController {
       return;
     }
     const tapPoint = boardPoint(event, this.options.renderer);
-    if (gesture.kind === "pencil" && this.options.renderer.viewport.fixedPage) {
+    if (gesture.kind === "pencil") {
       appendUniquePoint(gesture.points, tapPoint);
     }
     if (gesture.kind === "shape") {
@@ -2056,7 +2064,7 @@ export class ToolController {
     return x >= 0 && y >= 0 && x <= page.width && y <= page.height;
   }
 
-  private finishAtPageEdge(pointerId: number): void {
+  private finishAtLastPoint(pointerId: number): void {
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== pointerId) return;
     this.gesture = null;
@@ -2070,7 +2078,7 @@ export class ToolController {
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
     this.syncPointerActive();
-    if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
+    this.finishOrCancelInterruptedGesture(event.pointerId);
     this.releasePointerCapture(event.pointerId);
   };
 
@@ -2079,8 +2087,25 @@ export class ToolController {
     if (this.pinch?.pointerIds.includes(event.pointerId)) this.endPinch();
     this.pointers.delete(event.pointerId);
     this.syncPointerActive();
-    if (this.gesture?.pointerId === event.pointerId) this.cancelGesture();
+    this.finishOrCancelInterruptedGesture(event.pointerId);
   };
+
+  private isMouseOrPenPencil(pointerId: number): boolean {
+    const gesture = this.gesture;
+    return (
+      gesture?.pointerId === pointerId &&
+      gesture.kind === "pencil" &&
+      (gesture.pointerType === "mouse" || gesture.pointerType === "pen")
+    );
+  }
+
+  private finishOrCancelInterruptedGesture(pointerId: number): void {
+    // Browser/device interruption must not erase mouse or pen ink already drawn.
+    // Use only collected points: cancellation/capture-loss coordinates can be stale.
+    // Touch navigation, Escape, and tool changes still cancel through cancelGesture.
+    if (this.isMouseOrPenPencil(pointerId)) this.finishAtLastPoint(pointerId);
+    else if (this.gesture?.pointerId === pointerId) this.cancelGesture();
+  }
 
   /**
    * Marks the canvas while a pointer is down. Embedded players are cross-origin frames, and a
